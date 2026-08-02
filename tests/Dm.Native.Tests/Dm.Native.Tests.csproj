@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!--
+      Dm.Native is referenced as a managed assembly here. NativeLib/PublishAot only take effect on
+      publish, so the handle table and marshalling helpers are directly testable.
+    -->
+    <ProjectReference Include="..\..\src\Dm.Native\Dm.Native.csproj" />
+  </ItemGroup>
+
+</Project>
