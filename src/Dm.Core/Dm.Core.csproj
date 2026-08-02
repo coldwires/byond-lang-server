@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Dm.Core</RootNamespace>
+    <!--
+      Dm.Core is consumed by Dm.Native, which is a NativeAOT target. Enabling the AOT analyzers
+      here makes reflection and dynamic-codegen use a build error in the core rather than a
+      publish-time surprise. Dm.Lsp is exempt from AOT, but it shares this assembly, so the
+      constraint binds here.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>

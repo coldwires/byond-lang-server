@@ -1,0 +1,600 @@
+# DM Analysis Library + Language Server — Design
+
+> **Live document.** Updated as the project progresses. Milestone status, decisions, and
+> open questions are kept current here. See `ROADMAP.txt` for the short version.
+>
+> Status: **M0 complete except CI** · Last updated: 2026-08-02
+
+---
+
+## 1. Context
+
+BYOND has no general-purpose DM tooling. SpacemanDMM is the only mature option: Rust, oriented
+toward SS13, and built as a language server rather than an embeddable library.
+
+The immediate driver is a three-person team on one game codebase. Two are writing custom IDEs —
+one in a proprietary FNA/C# window, one in Qt C++, a third in an undecided language. None can use
+an existing editor's DM support.
+
+The broader goal is to be the general DM language server BYOND lacks, with the team's IDEs as the
+first consumers.
+
+One analysis core, two shells:
+
+- **C ABI** (`dm_core.dll`) — custom IDEs embed the analyzer in-process with direct object-tree access.
+- **LSP server** (`Dm.Lsp`) — VS Code / Neovim / Helix users get DM support without adopting an IDE.
+
+The core is roughly 85% of the work and is shared by both. The C ABI ships first because it
+unblocks the team.
+
+**Acceptance target:** `mob.` lists `/mob`'s procs and vars including inherited and BYOND builtins.
+`var/mob/test/t` followed by `t.` lists `/mob/test`'s members. Plus syntax highlighting, document
+and workspace symbols, browsable object tree, `.dmi` icon-state enumeration, syntax diagnostics.
+
+---
+
+## 2. Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Core language | C# | Primary author's language. NativeAOT gives native consumers a C ABI. |
+| Native distribution | NativeAOT shared library | `dm_core.dll` / `.so`, consumable from any language with FFI. |
+| Boundary style | Hybrid | Opaque handles on hot paths, serialized JSON for bulk queries. |
+| Parser depth | Full AST | Unblocks diagnostics, references, and inference without a rewrite. |
+| Shells | Both, C ABI first | LSP added at M10 once the core is proven. |
+| Audience | Public | Team IDEs are first consumers, not the only ones. |
+| Concurrency (v1) | Single-threaded per workspace handle | Documented contract. Background analysis deferred. |
+| Path ambiguity | Match the compiler, then warn | See §4a. Disagreeing with `dm.exe` is worse than being unhelpful. |
+
+---
+
+## 3. Architecture
+
+```
+  Dm.Core  (managed C#, NativeAOT-clean)
+      |                                    <-- FNA/C# IDE references this directly
+      +-- Dm.Assets  (.dmi icon-state reader)
+      |
+      +-- Dm.Native  (NativeAOT, [UnmanagedCallersOnly])   [v1]
+      |       |
+      |       v  dm_core.dll / libdm_core.so  +  abi/dm_core.h
+      |       +-- Qt C++ IDE      (extern "C", or dm_core.hpp RAII wrapper)
+      |       +-- IDE #3          (any language with C FFI)
+      |
+      +-- Dm.Lsp  (stdio/TCP JSON-RPC server)              [M10]
+              +-- VS Code (+ extension & TextMate grammar), Neovim, Helix
+```
+
+`Dm.Lsp` is a normal .NET app and carries no NativeAOT constraints, so it can use a
+reflection-based library such as OmniSharp.Extensions.LanguageServer. Only `Dm.Native` is an AOT
+target. `Dm.Core` is shared by both, so the AOT constraints bind the core.
+
+Whether to AOT `Dm.Lsp` anyway for startup latency — which would force hand-rolled JSON-RPC over
+`System.Text.Json` source generators — is an M10 decision.
+
+**Sync rule:** any capability the C# IDE uses in-process must have an ABI equivalent and an LSP
+equivalent (standard method or custom `dm/*`), tracked in `docs/capability-matrix.md`. Otherwise
+the direct-reference path outgrows the other two shells.
+
+### Pipeline
+
+```
+SourceText  ->  Lexer  ->  Preprocessor  ->  Parser   ->  TypeTreeBuilder  ->  Binder
+(disk +        (tokens,   (expanded        (SyntaxTree   (merged            (SemanticModel,
+ in-memory      indent/    tokens +         per file,     ObjectTree +       scope chains,
+ overlay)       dedent)    source map)      full AST)     builtins)          type resolution)
+      |             |                            |              |                 |
+      |             v                            v              v                 v
+      |        Classification              Document        Workspace          Completion
+      |        (M2, needs only             symbols,        symbols,           Hover
+      |         the lexer)                 syntax diags    object tree        Definition
+```
+
+Classification is deliberately fed straight off the lexer. Highlighting is the first thing visible
+in an editor and it needs nothing downstream.
+
+---
+
+## 4. LSP-readiness constraints
+
+Locked in at M0. These are the cost of deferring the LSP shell to M10; each is cheap now and
+expensive to retrofit.
+
+- **Position encoding.** LSP defaults to UTF-16 code units; the C ABI wants UTF-8 byte offsets.
+  `SourceText` exposes both. Services take an explicit encoding parameter. Retrofitting touches
+  every service signature.
+- **URI normalization.** `file://` vs `file:///`, Windows drive-letter casing, percent-encoding.
+  Normalize at the boundary to a canonical internal path type.
+- **Cancellation.** Thread a cancellation token through every service entry point even while v1 is
+  synchronous. LSP requires `$/cancelRequest`; clients without it hang their UI.
+- **Value-shaped service results.** A service that returns a live `SyntaxNode` cannot be serialized
+  over LSP. Services return value types; the C# IDE can reach past them into `Dm.Core` directly.
+- **Pushed buffers are authoritative.** When a client has pushed text for a file via
+  `dm_set_buffer` (or LSP `didOpen`/`didChange`), that text is the only source for that file until
+  the client releases it. Never mix a pushed buffer with disk content for the same path. This is
+  what makes editor-side line-ending normalization harmless — see §4b.
+
+---
+
+## 4a. DM path semantics
+
+Derived from a compiler-tested writeup against BYOND 516.1666 (see §8). These rules drive the
+lexer, the parser, and the binder, and several of them are not what a reader would guess.
+
+`/` and `.` are used in three separate contexts with **different rules in each**. Most confusion is
+one context's rules being applied in another.
+
+### The one universal rule
+
+Mid-path, `/` and `.` are the same token. These four produce identical values, comparing equal:
+
+```dm
+/obj/item/sword    /obj/item.sword    /obj.item/sword    /obj.item.sword
+```
+
+They can be mixed inside a single path. The lexer must fold both into one path-separator token.
+
+### Context 1 — the static type tree
+
+Separators are fully interchangeable. `proc` and `verb` are **ordinary names in the tree**, not
+keywords with special punctuation, so `mob/proc/attack()` and `mob.proc.attack()` declare the same
+proc. Nesting is by indentation and needs no leading separator.
+
+The trap here is unrelated to separators: **`proc/` means declare-new, and omitting it means
+override.** Declaring `mob/proc/operator<<(B)` and then `mob/client/proc/operator<<(B)` is a
+duplicate-definition error; the override is `mob/client/operator<<(B)`. This is an M11 diagnostic.
+
+Note `/mob/client` is a subtype of `/mob` that happens to be named `client`. It is unrelated to the
+built-in `/client`. Name resolution must be path-keyed, never name-keyed.
+
+### Context 2 — a var declaration
+
+The slot after `var` is not a path slot. It accepts **three** separators: `/`, `.`, and a space.
+
+```dm
+var/list/L = new
+var list.L = new
+var.list.L = new
+```
+
+The space form is legal as a statement but rejected inside a `for` header, so the parser cannot
+treat the two positions identically.
+
+### Context 3 — an expression
+
+The only context where a leading `/` and a leading `.` differ.
+
+- Leading `/` is absolute from root.
+- Leading `.` is a **search, not a traversal**: check the current type, then its parent, then up to
+  and including root. First hit wins.
+- **No leading separator means it is not a path at all** — `obj.item.sword` is ordinary member
+  access and resolves as a var lookup.
+
+The search behaviour is proximity-sensitive, so adding a nearer type silently changes what an
+untouched line means. Given `/obj/item/sword` and `/obj/item/sword/magic`, a `.sword` inside
+`magic` resolves to `/obj/item/sword` — until someone adds `/obj/item/sword/magic/sword`, at which
+point the same line resolves somewhere else. Worth an M11 lint.
+
+### The context-2/context-3 collision
+
+`var.thing.T = new` compiles or fails depending on whether `/thing` was already declared **at that
+point in include order**. If the type exists, the parser reads `.thing` as a context-3 relative
+path and takes it as the declaration's type, shifting every slot left and leaving `var` in the name
+slot — hence the misleading error `var: invalid variable name: reserved word`. If the type does not
+exist yet, that reading is unavailable, the dot stays a separator, and it parses as `var/thing/T`.
+
+Swapping two `#include` lines flips the result on an otherwise identical program.
+
+**Decision:** match the compiler. Resolve using the same single-pass, include-order-dependent rule
+so our answers agree with `dm.exe`, and emit an M11 warning on any construct whose meaning depends
+on it. Diverging here would mean reporting errors the compiler does not, or missing ones it does.
+
+### Lexer edge cases
+
+- `//` inside a path starts a comment. `var x = /obj//item` evaluates to `/obj`, because the rest
+  of the line is commented out. Comment detection wins over path separation.
+- Doubled and trailing separators collapse: `/obj./item`, `/obj/.item`, and `/obj/item/` all mean
+  `/obj/item`.
+
+---
+
+## 4b. Line endings
+
+DM files are commonly CRLF on Windows. Editors normalize aggressively — Qt's `QTextDocument` and
+`QPlainTextEdit::toPlainText()` always yield `\n` regardless of what was on disk, and
+`QIODevice::Text` translates on read.
+
+**Our requirements:**
+
+- `SourceText` treats `\r\n`, bare `\n`, and lone `\r` as line terminators.
+- `\r` never appears inside token text.
+- Line/column positions are unaffected by ending style, since `\r` is a terminator and never sits
+  inside a line. This is why all positions crossing the ABI are line/column rather than offsets.
+- Combined with the pushed-buffer rule in §4, a client that normalizes its buffer to LF is
+  analysing exactly what it displays, and nothing drifts.
+
+**Client guidance** (belongs in `docs/abi.md`): detect the dominant line ending on load, normalize
+to LF internally, store the original, and re-apply on save. Round-tripping is the client's job; no
+editor framework does it automatically. Failing to do so rewrites every line of a file on save,
+which destroys `git blame` for the rest of the team. Note also that DM's `{" ... "}` multiline
+strings carry their newlines as content, so converting endings inside one changes program data,
+not just formatting.
+
+---
+
+## 5. Repository layout
+
+```
+byond-lang-server/
+  PLAN.md          this document
+  ROADMAP.txt      short-form status
+  src/
+    Dm.Core/
+      Text/        SourceText, FileStore, LinePositions, TextSpan, SourceMap, DocumentUri
+      Syntax/      Lexer, Preprocessor, Parser, SyntaxNode/SyntaxTree, TokenKind
+      Symbols/     ObjectTree, TypeSymbol, ProcSymbol, VarSymbol, TypePath
+      Binding/     Binder, SemanticModel, Scope, TypeResolver
+      Services/    ClassificationService, CompletionService, SymbolService, HoverService,
+                   DefinitionService, DiagnosticService
+      Resources/   builtins.json  (BYOND stdlib type tree)
+    Dm.Assets/     DmiReader (PNG zTXt -> icon states)
+    Dm.Native/     Exports.cs, HandleTable.cs, marshal helpers -> dm_core.dll
+    Dm.Lsp/        JSON-RPC server over Dm.Core                          [M10]
+    Dm.Cli/        dev driver: dump-tokens / dump-ast / dump-tree / classify / complete / check
+  abi/
+    dm_core.h      hand-written C header, source of truth for the ABI
+    dm_core.hpp    optional C++ RAII wrapper for the Qt client
+    schema/        JSON schemas for bulk query requests/responses
+  editors/
+    vscode/        extension + TextMate grammar                          [M10]
+  tools/
+    builtins-gen/  builds builtins.json from stddef.dm + reference HTML
+  tests/
+    Dm.Core.Tests/    unit + snapshot tests
+    Dm.Native.Tests/  handle table, marshalling
+    corpus/           real .dme projects used as snapshot fixtures
+    abi-smoke/        CMake C++ program that links dm_core
+  docs/
+    abi.md  api.md  lsp.md  capability-matrix.md  dm-language-notes.md
+    internal/      working notes, gitignored
+```
+
+---
+
+## 6. Milestones
+
+Restructured 2026-08-02. Syntax highlighting moved from M9/M10 to M2: it needs only the lexer, and
+it is the first thing a user sees. Document symbols moved to the parser milestone for the same
+reason — a per-file outline needs the AST, not the object tree.
+
+### M0 — Boundary and project setup ✅ *(CI outstanding)*
+
+The ABI is the riskiest infrastructure. Proven before any compiler code.
+
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.02 MB, 6 exports) via NativeAOT.
+- ✅ `tests/abi-smoke` — CMake C++ program, 14 checks. Reference integration for the Qt client.
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests. Handle validation, UTF-8 marshalling, snapshot
+  helper.
+- ✅ Local git repo, MIT license, `.gitattributes`.
+- ⬜ CI matrix. NativeAOT produces per-RID binaries: `win-x64`, `linux-x64`, `linux-arm64`,
+  `osx-x64`, `osx-arm64`. **Note the vswhere quirk** — the publish fails with a misleading
+  MSB3073 linker error unless `vswhere.exe`'s directory is on PATH.
+
+### M1 — Text layer and lexer
+
+- `SourceText` with an in-memory overlay shadowing disk. Editor buffers are always ahead of the
+  filesystem. UTF-8 internally, both UTF-8 and UTF-16 offsets exposed.
+- Line-ending handling per §4b: `\r\n`, `\n`, and lone `\r` all terminate; `\r` never enters token
+  text.
+- Lexer producing tokens plus `Indent`/`Dedent`. DM block structure is indentation-significant, and
+  brace blocks `{ }` coexist with it.
+- DM-specific lexer requirements:
+  - `{" ... "}` multiline strings
+  - String interpolation `"text[expr]more"` — the lexer re-enters expression mode recursively.
+    Represent as an interpolated-string token carrying embedded token runs.
+  - `\` line continuation
+  - Nesting `/* */` block comments (differs from C)
+  - Path separators per §4a: `/` and `.` fold to one token mid-path; `//` inside a path is a comment
+  - `operator` followed by an operator token is a single proc-name unit, including `operator:=`
+    which contains a colon
+  - Contextual, non-reserved keywords: `in`, `to`, `step`, `as`, `set`, and note `proc` and `verb`
+    are ordinary path segments
+- `Dm.Cli dump-tokens`, plus snapshot fixtures.
+
+### M2 — Lexical classification → first visible feature
+
+Syntax highlighting for both custom IDEs. Needs the lexer and nothing else.
+
+- `ClassificationService.Classify(file, span)` returning `(offset, length, kind)` spans.
+  Kinds: keyword, identifier, type path, string, interpolation hole, number, comment, operator,
+  preprocessor directive, macro name.
+- ABI: `dm_classify_range`, using the handle/accessor pattern rather than JSON — this is called on
+  every visible-range change.
+- Re-classification of a changed range only, so a keystroke does not re-lex the file.
+- **Known limits, to be refined at M6 and M11:** lexical classification cannot distinguish a user
+  type from a builtin, cannot resolve identifiers introduced by macros, and cannot tell a proc name
+  from a var name. That is what most editors ship, and it looks correct.
+
+### M3 — Preprocessor and include graph
+
+- Resolve the `.dme` root; build the `#include` graph as an ordered tree. Include order determines
+  override resolution in DM, and determines the §4a path ambiguity.
+- Directives: `#define` (object-like and function-like), `#undef`, `#if` / `#ifdef` / `#ifndef` /
+  `#elif` / `#else` / `#endif`, `#include`, `#warn`, `#error`, `defined()`.
+- Seed BYOND's predefined macros (`DM_VERSION`, `DM_BUILD`) and `__FILE__` / `__LINE__`.
+- **Stringification (`#arg`) exists** and must be implemented. Confirmed by `stddef.dm`:
+  `#define ASSERT(c) if(!(c)) {CRASH("[__FILE__]:[__LINE__]:Assertion Failed: [#c]"); }`.
+  It appears *inside* a string interpolation, so the two features interact. Token-pasting (`##`)
+  is unconfirmed.
+- **Source mapping is required.** Every expanded token carries its origin file, original span, and
+  macro expansion chain. Without it, classification, completion, diagnostics, and go-to-definition
+  all land on the wrong line in macro-heavy code, which is most real DM.
+- Snapshot the preprocessor's exit state (define-table hash) at each file boundary. M9 depends on it.
+
+### M4 — Parser, syntax diagnostics, document symbols
+
+- Declarations: type-path declarations, `var/` blocks with modifiers (`const`, `tmp`, `global`,
+  `static`), `proc/` and `verb/` blocks, overrides, `set` statements, `parent_type`.
+- Statements: `if`/`else`, all three `for` forms, `while`, `do while`, `switch` with `if(a to b)`
+  range cases, `spawn`, `return`, `break`, `continue`, `del`, `try`/`catch`/`throw`.
+  - C-style `for` separates clauses with **commas**: `for(var/i = 1, i <= 5, i++)`.
+  - The other two are `for(var/x in list)` and `for(var/i = 1 to 10 step 2)`.
+- Expressions: full precedence table, `new /path(args)`, `locate()`, `input(...) as ...`,
+  `list(a, b, c = d)` with associative entries, indexing, ternary, `..()` parent call, the bare `.`
+  return-value variable, `src` / `usr` / `world` / `global.`. `.` and `:` member access are distinct
+  AST nodes.
+- Declaration forms confirmed from `stddef.dm` (§8), all needing coverage:
+  - Comma-separated var lists: `var/a=1,b=0,c=0` and `var/x, y, size, offset`
+  - Semicolon statement separators on one line: `x = 0; y = 0; z = 0`
+  - Single-line proc bodies: `Multiply(m) return matrix(src, m, ...)`
+  - Default parameter values: `MapColors(a, b, c, j=0, k=0, l=0)`
+  - Bare inherited-var assignment with no `var/`: `_dm_interface = _DM_datum|_DM_sound`
+  - Nested indentation building paths: `database` → `query` declares `/database/query`
+  - Empty-bodied overrides
+- Operator overloading: `operator+`, `operator-`, `operator*`, `operator/`, `operator+=`,
+  `operator:=`, `operator_turn`, `operator<<`.
+- **Error recovery is a hard requirement.** Editor buffers break on every keystroke. Use
+  indentation-anchored resync: on error, discard to the next line at or below the enclosing block's
+  indent level.
+- **Syntax diagnostics** fall out of recovery; surface them through `DiagnosticService`.
+- **Document symbols** — a per-file outline needs the AST only, not the object tree. Ship here.
+
+### M5 — Object tree and builtins
+
+- `TypePath` as an interned, comparable value type. The hottest key in the system.
+- One `TypeSymbol` per path node, merging declarations across files in include order. Each type
+  records: parent link (implicit by path or explicit via `parent_type`), declared vars, procs with
+  override chains, and all declaration sites — a type is legitimately declared in N files.
+- **Builtins.** `mob` has `Move()`, `Login()`, `loc`, `client`, `verbs`; none appear in user code.
+  `Resources/builtins.json` is assembled from **two sources**, because neither is complete:
+
+  | Source | Provides | Method |
+  |---|---|---|
+  | `stddef.dm` (generated by Dream Maker, see §8) | All `#define` constants and `var/const` globals; the wrapper datums `sound`, `icon`, `matrix`, `database`, `database/query`, `exception`, `regex`, `dm_filter`, `generator`, `particles`; the macros `ASSERT`, `EXCEPTION`, `REGEX_QUOTE` | Parse with our own parser — it is valid DM |
+  | `help/ref/info.html` (DM Reference) | Everything compiled into `byondcore.dll`: `/datum`, `/atom`, `/atom/movable`, `/mob`, `/obj`, `/turf`, `/area`, `/client`, `/world`, `/list`, `/savefile`, `/image`, `/mutable_appearance`, and the global procs (`istype`, `locate`, `view`, `text2num`, …) | Scrape with `tools/builtins-gen` |
+
+  Parsing `stddef.dm` with our own parser doubles as a self-test: it is real BYOND-authored DM that
+  exercises brace blocks, operator overloads, comma var lists, and stringification.
+
+  `stddef.dm` is version-stamped (the sample on hand reads `516.1666`) and is regenerated by
+  creating a file named `stddef.dm` in a project and compiling. `builtins.json` records the BYOND
+  version it was built from.
+
+  Do not vendor `stddef.dm` into the repo — it is BYOND-generated output and this repo is public.
+  `tools/builtins-gen` locates or regenerates it from the local install.
+
+### M6 — Binder, semantic model, completion
+
+- Scope chain: locals → proc parameters → `src` type members (walking the inheritance chain) → globals.
+- `var/mob/test/t` → split path into type `/mob/test` and name `t`. Modifier keywords sit inside the
+  path (`var/const/X`, `var/list/L`, `var/obj/item/I as obj`), and per §4a the separator may be `/`,
+  `.`, or a space. Path splitting gets its own test file.
+- With the M4 AST available, also infer through `new /path`, `as` casts, and assignment from a typed
+  source. Return-type inference stays out of v1.
+- Leading-`.` relative path resolution per §4a: upward search from the current type to root, first
+  hit wins.
+- `CompletionService.CompleteAt(file, line, col)` classifying context:
+  - after `/` or `.` mid-path → type paths
+  - after `.` on a value → members filtered by receiver type
+  - after `:` → all known members, unfiltered. That operator bypasses type checking by design;
+    filtering it is a bug.
+  - bare identifier → locals + params + `src` members + globals + macros
+- **Semantic classification refinement** — with the object tree available, upgrade M2's lexical
+  spans to distinguish user types from builtins, procs from vars, and macro-introduced identifiers.
+
+### M7 — Workspace symbols, navigation, bulk queries → team v1
+
+- Workspace symbol search, go-to-definition on type paths and proc names, hover rendering the
+  declaration plus preceding `///` doc comment.
+- Bulk `dm_query_json` operations: full object tree, subtypes of a path, all symbols in a file.
+  These back the IDEs' tree-browser panels.
+- Freeze JSON schemas in `abi/schema/`, versioned separately from the binary.
+
+### M8 — `.dmi` icon states *(independent; schedule anytime)*
+
+- Parse the PNG `zTXt` chunk. BYOND stores a plaintext metadata block enumerating every
+  `state = "..."` with dirs and frame counts.
+- No dependency on the compiler pipeline. Roughly an afternoon, and it parallelizes cleanly to
+  another team member during M4.
+
+### M9 — Incrementality and performance
+
+- Reparse only the edited file. Preprocessor state flows sequentially through include order, so
+  editing a file containing `#define`s invalidates everything downstream — mitigate via the M3
+  boundary snapshots: re-run downstream files only if the exit-state hash changed.
+- Cache the object tree per-file, rebuilding affected subtrees only.
+- Target: warm completion under 30ms on the team's game. Complete before M10 — public users will
+  arrive with larger codebases.
+
+### M10 — LSP shell → community v1
+
+- `Dm.Lsp` as a .NET console app referencing `Dm.Core`. Stdio primary, TCP as a small option.
+- Spec 3.17. Honor `positionEncoding` negotiation. Implement `$/progress` and `$/cancelRequest`.
+- Standard methods over existing services: completion, hover, definition, document/workspace
+  symbols, publishDiagnostics, semanticTokens (backed by the M2/M6 classification service).
+- Custom methods for what LSP cannot express: `dm/objectTree`, `dm/subtypesOf`, `dm/iconStates`,
+  mirroring the bulk query schemas so both shells stay aligned.
+- TextMate grammar + VS Code extension in `editors/vscode/`.
+
+### M11 — Semantic analysis
+
+Semantic diagnostics, find-references, rename. All unblocked by the M4 AST.
+
+Diagnostics of note, drawn from §4a: `proc/` declare-vs-override duplicate definitions; constructs
+whose meaning depends on include order; leading-`.` relative paths that a nearer type could
+silently re-target.
+
+Find-references and rename cannot be fully sound in DM because of `:` and string-based dispatch
+(`call()`, `text2path()`). Decide whether rename is safe-subset-only or best-effort-with-warning.
+
+### Deferred
+
+`.dmm` map support, formatter, debug adapter. DAP requires auxtools-style injection into Dream
+Daemon and is effectively a separate project.
+
+---
+
+## 7. ABI contract
+
+`abi/dm_core.h` is the source of truth. Implemented so far: version, workspace open/close/root,
+last error, free.
+
+**Hot path — handles and accessors:**
+```c
+int32_t     dm_abi_version(void);
+dm_status   dm_workspace_open(const char* dme_path, dm_workspace** out);
+void        dm_workspace_close(dm_workspace*);
+dm_status   dm_workspace_root(dm_workspace*, char** out_root);
+dm_status   dm_set_buffer(dm_workspace*, const char* file, const char* utf8, int32_t len);
+dm_status   dm_classify_range(dm_workspace*, const char* file, int32_t start_line,
+                              int32_t end_line, dm_span_list** out);          /* M2 */
+dm_status   dm_complete_at(dm_workspace*, const char* file, int32_t line, int32_t col,
+                           dm_completion_list** out);                          /* M6 */
+```
+
+**Bulk path — serialized:**
+```c
+dm_status   dm_query_json(dm_workspace*, const char* request_utf8, char** out_response);
+void        dm_free(void* ptr);
+char*       dm_last_error(void);
+```
+
+### NativeAOT rules, enforced from M0
+
+- **No exception crosses the boundary.** Every export catches and returns a `dm_status`; the message
+  is retrievable via `dm_last_error`.
+- **Handles are validated.** `(generation << 32) | (index + 1)` through a slot table with a free
+  list. Index 0 is never issued, so null is always invalid. Generation increments on release, so a
+  use-after-close returns `DM_ERR_INVALID_HANDLE` rather than resolving to a recycled object.
+  Malformed handles are rejected in `Unpack` before any indexing.
+- **Never return a pointer into managed memory.** Strings are copied to `NativeMemory.Alloc`'d UTF-8
+  and freed by the caller via `dm_free`. Ownership is documented per function in the header.
+- **`Dm.Core` stays AOT-clean:** no reflection, no `dynamic`, no runtime codegen, no reflection-based
+  serialization. Enforced by `IsAotCompatible`. `Dm.Lsp` is exempt; `Dm.Core` is not, because both
+  share it.
+- `dm_abi_version()` is checked by every client at startup. Additive changes bump minor; breaking
+  changes bump major and cost downstream consumers real work.
+
+---
+
+## 8. Environment findings
+
+Recorded 2026-08-02 on the primary dev machine.
+
+- .NET SDK 9.0.308, git 2.47.0, VS 2022 Community with MSVC 14.44.35207 and Windows SDK 10.0.26100.
+  NativeAOT verified working.
+- **NativeAOT publish requires `vswhere.exe` on PATH.** Without it the ILCompiler targets splice a
+  `'vswhere.exe' is not recognized` error string into the link command and fail with MSB3073 exit
+  123 — while reporting a `link.exe` failure, even though `link.exe` was found. Prepend
+  `C:\Program Files (x86)\Microsoft Visual Studio\Installer`.
+- CMake is not on PATH; VS bundles a copy under `Common7\IDE\CommonExtensions\Microsoft\CMake`.
+- BYOND installed at `C:\Program Files (x86)\BYOND`. No `stddef.dm` ships in the install directory.
+- **`stddef.dm` is generated on demand.** Creating a file named `stddef.dm` in a project and
+  compiling causes Dream Maker to emit the code it auto-compiles at the start of every project.
+  A generated copy is at `C:\Users\Anonymous\Desktop\world\stddef.dm` (529 lines, version 516.1666).
+- **`stddef.dm` covers only part of the standard library** — constants and wrapper datums, not
+  `/datum`, `/atom`, `/mob`, `/obj`, `/turf`, `/area`, `/client`, `/world`, `/list`, or the global
+  procs. Those are compiled into `byondcore.dll`.
+- `help/ref/info.html` (1.3 MB) is the DM Reference in structured HTML. It supplies the other half.
+- `byondapi/` ships `byondapi.h` and `byondapi.lib` — relevant only to a future debug adapter.
+
+### Language facts confirmed from `stddef.dm`
+
+- `#` stringification exists in function-like macros, and appears inside string interpolation.
+- `__FILE__` and `__LINE__` exist.
+- Brace blocks `{ ... }` coexist with significant indentation.
+- Operators are declarable as procs (`operator+`, `operator:=`, `operator_turn`, …).
+- `;` separates statements on a single line.
+- One `var/` can declare a comma-separated list of names, with or without initializers.
+- A proc body can sit on the same line as its signature.
+- Parameters take default values.
+- Inherited vars are overridden by bare assignment at type level, with no `var/` keyword.
+- Path literals appear as ordinary expression arguments: `istype(file, /list)`.
+- `new/generator(...)` — `new` immediately followed by a path with no space.
+
+### Path semantics source
+
+`C:\Users\Anonymous\Desktop\world\dot-and-slash.md` — a work-in-progress writeup by the project
+author, testing `/` and `.` behaviour against BYOND 516.1666 by compiling cases rather than
+reasoning about them. Every claim in §4a comes from it.
+
+The same directory holds the DM files those tests were run from (`proof.dm`, `check.dm`,
+`routing.dm`, `two.dm`, `world.dm`, `anothertest.dm`). They are compiler-verified cases covering
+exactly the constructs §4a describes, which makes them the natural first fixtures for
+`tests/corpus`. Not copied in; ask first.
+
+---
+
+## 9. Verification
+
+- **Unit and snapshot tests** — `dotnet test`. Separate fixture sets for lexer, classification,
+  preprocessor (including macro-expansion source maps), parser error recovery, path splitting,
+  object tree merging. Snapshot helper is `tests/Dm.Core.Tests/Snapshot.cs`;
+  `DM_UPDATE_SNAPSHOTS=1` rewrites expected files.
+- **Cross-codebase corpus.** `tests/corpus` must not contain only the team's game. Add open BYOND
+  codebases including an SS13 fork such as /tg/station; it is the harshest available preprocessor
+  stress test and free to obtain.
+- **CLI driver** — `Dm.Cli dump-tokens|classify|dump-ast|dump-tree|complete|check game.dme`.
+  Fastest debug loop, and the arbiter when an IDE reports a bug: if the CLI reproduces it, the bug
+  is in the core.
+- **ABI smoke test** — `tests/abi-smoke` builds via CMake, links `dm_core`, exercises the boundary.
+  Runs in CI across the RID matrix.
+- **LSP conformance (M10)** — drive `Dm.Lsp` from the VS Code extension and at least one
+  non-VS-Code client to catch spec assumptions VS Code tolerates.
+- **Acceptance** — point the CLI at the team's `.dme`: `mob.` lists custom and builtin members;
+  `var/mob/test/t` then `t.` resolves; object tree dump matches DreamMaker; `.dmi` states enumerate.
+- **Performance** — warm completion latency and cold full-parse time on both the team game and the
+  large corpus project, tracked as a regression metric.
+
+---
+
+## 10. Open questions
+
+| # | Question | Blocks | Status |
+|---|---|---|---|
+| 1 | License | — | **Resolved** — MIT |
+| 2 | Preprocessor stringification | M3 | **Resolved** — `#arg` exists. Token-pasting `##` unconfirmed. |
+| 3 | Where builtins come from | M5 | **Resolved** — `stddef.dm` + `info.html`. |
+| 4 | MSVC tooling for NativeAOT | M0 | **Resolved** — present and verified. |
+| 5 | Third IDE's language | Nothing; may justify a prebuilt binding package | Open |
+| 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | Deferred |
+| 7 | Can a brace block contain indented sub-blocks? | M1, M4 | Open — needs a compiler experiment |
+| 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | Open — see §9 |
+
+---
+
+## Changelog
+
+- **2026-08-02** — Initial design. Core language, ABI style, parser depth, and shell strategy
+  settled. Environment surveyed.
+- **2026-08-02** — Read a generated `stddef.dm` (516.1666). Resolved open questions 2 and 3. Added
+  brace blocks, operator overloading, comma var lists, semicolon separators, single-line proc
+  bodies, default parameters, and bare inherited-var assignment to the parser scope.
+- **2026-08-02** — M0 boundary proven: `dm_core.dll` publishes with 6 exports, C++ smoke test
+  passes 14 checks, 38 unit tests. Repo initialised locally, MIT licensed.
+- **2026-08-02** — Added §4a from the author's compiler-tested path-semantics writeup. Corrected
+  the C-style `for` separator from semicolons to commas.
+- **2026-08-02** — **Milestones restructured.** Syntax highlighting moved from M9/M10 to M2; it
+  needs only the lexer and is the first thing visible in an editor. Document symbols moved into the
+  parser milestone. Everything from the old M2 onward shifted by one. Added §4b on line endings and
+  the pushed-buffer rule in §4.

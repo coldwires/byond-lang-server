@@ -1,0 +1,31 @@
+# Normalize to LF in the repository. Working copies get native endings.
+# Matters here because CI builds on five platforms and the client IDEs are developed
+# on different OSes.
+* text=auto eol=lf
+
+# Visual Studio rewrites these with CRLF regardless; declaring it avoids churn.
+*.sln       text eol=crlf
+*.csproj    text eol=crlf
+*.props     text eol=crlf
+*.vcxproj   text eol=crlf
+
+# DM sources and BYOND assets.
+*.dm        text
+*.dme       text
+*.dmf       text
+*.dmm       text
+*.dmi       binary
+*.dmb       binary
+*.rsc       binary
+
+# Snapshot fixtures must compare byte-for-byte across platforms.
+*.tokens.txt text eol=lf
+*.ast.txt    text eol=lf
+*.tree.txt   text eol=lf
+
+# Build output that should never be diffed.
+*.lib       binary
+*.dll       binary
+*.so        binary
+*.dylib     binary
+*.pdb       binary

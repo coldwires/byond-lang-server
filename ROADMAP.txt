@@ -1,0 +1,191 @@
+================================================================================
+ BYOND DM LANGUAGE TOOLING - ROADMAP
+ Live doc. Updated as we go. Full detail in PLAN.md.
+ Last updated: 2026-08-02
+================================================================================
+
+WHERE WE ARE
+--------------------------------------------------------------------------------
+  - M0 boundary is PROVEN. C# -> NativeAOT -> C ABI -> C++ round trip works.
+      dm_core.dll builds at 1.02 MB with 6 exports.
+      tests/abi-smoke passes 14 checks from C++, including use-after-close.
+  - Local git repo initialised. MIT licensed.
+  - dotnet test works: 38 tests, all passing.
+      Dm.Core.Tests   - Workspace, snapshot helper, repo-root locator
+      Dm.Native.Tests - handle table, UTF-8 marshalling
+    Writing them found a real bug: a garbage handle produced a negative slot
+    index and crashed instead of returning DM_ERR_INVALID_HANDLE.
+  - Environment checked: .NET SDK 9.0.308, git 2.47.0, BYOND installed,
+    VS 2022 with MSVC. NativeAOT confirmed working.
+  - Builtins come from TWO places, neither is complete on its own:
+      stddef.dm  - constants + wrapper datums (sound, icon, matrix, regex...)
+      info.html  - /datum /atom /mob /obj /turf /client /world + global procs
+  - Read a real stddef.dm. It changed the parser scope, see CHALLENGES.
+
+WHAT WE ARE BUILDING
+--------------------------------------------------------------------------------
+  - Dm.Core       - C# library that parses and understands DM code.
+  - Dm.Native     - NativeAOT wrapper -> dm_core.dll, C ABI for Qt C++ / IDE #3.
+  - Dm.Lsp        - LSP server for VS Code / Neovim / everyone else. Later.
+  - Dm.Cli        - dev tool for dumping tokens/AST/tree, and for debugging.
+  - Dm.Assets     - .dmi icon state reader.
+
+  Core is ~85% of the work and is shared by all shells.
+
+WHAT'S NEXT
+--------------------------------------------------------------------------------
+  1. M1: SourceText, then the lexer. Read PLAN.md 4a first - the dot/slash
+     rules land directly in the lexer.
+  2. M2 right behind it: classification API, so there is something on screen.
+  3. Dm.Cli, needed to eyeball lexer output.
+  4. Send tests/abi-smoke to the Qt dev. It is the reference integration.
+  5. CI with the 5-platform build matrix.
+
+  Gotcha for anyone building this: NativeAOT publish fails with a misleading
+  linker error unless vswhere.exe's folder is on PATH:
+    $env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\Installer;$env:PATH"
+
+  Needed from you eventually: the team's real .dme. Synthetic tests stop being
+  enough at M3 (preprocessor) and the M6 acceptance check is "mob. is correct
+  on YOUR codebase", which nothing else can verify.
+
+MILESTONES                                    (restructured 2026-08-02)
+--------------------------------------------------------------------------------
+  [~] M0   Boundary + project setup       <- done except CI
+  [ ] M1   Text layer + lexer
+  [ ] M2   Lexical classification         <- SYNTAX HIGHLIGHTING. first thing
+                                             you can actually see on screen.
+  [ ] M3   Preprocessor + include graph
+  [ ] M4   Parser + syntax errors + document symbols (file outline)
+  [ ] M5   Object tree + BYOND builtins
+  [ ] M6   Binder + completion            <- "mob." and "t." work
+  [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1
+  [ ] M8   .dmi icon states  (independent, do anytime)
+  [ ] M9   Incremental reparse + performance
+  [ ] M10  LSP server + VS Code extension <- community v1
+  [ ] M11  Semantic diagnostics, find-refs, rename
+
+  WHAT CHANGED AND WHY
+    Syntax highlighting was at M9/M10. That was wrong for us: the TextMate
+    grammar only helps VS Code, and LSP semantic tokens only help LSP clients.
+    Neither does anything for an FNA/C# window or a Qt IDE.
+    What those need is a classify-this-range call returning coloured spans,
+    and that needs the LEXER ONLY. So it moved to M2.
+    Document symbols moved to M4 for the same reason - a per-file outline
+    needs the AST, not the object tree.
+
+  Visible payoff now lands at M2 instead of M6.
+
+LINE ENDINGS (for the Qt dev)
+--------------------------------------------------------------------------------
+  Qt normalises CRLF to LF. QPlainTextEdit::toPlainText() always returns \n,
+  and QIODevice::Text translates on read. That is FINE for us as long as the
+  client pushes its buffer via dm_set_buffer - we then analyse exactly what the
+  editor displays, and all our positions are line/column, which \r cannot shift.
+
+  It is NOT fine for him, for three reasons:
+    1. Reading with translation and writing without it silently rewrites every
+       line on save. Whole-file diffs, dead git blame.
+    2. DM's {" multiline "} strings carry their newlines as CONTENT. Converting
+       endings inside one changes program data, not just formatting.
+    3. Offsets computed from his buffer won't match disk offsets.
+
+  Fix - do what every editor does, Qt won't do it for you:
+    - open with QFile::ReadOnly WITHOUT QIODevice::Text so bytes arrive raw
+    - sniff the dominant ending, store it per document
+    - normalise to LF internally (correct, and what our library wants)
+    - re-apply the stored ending on save
+    - put "*.dm text" in the game repo's .gitattributes so git normalises too
+
+HOW IT WORKS
+--------------------------------------------------------------------------------
+  Pipeline, in order:
+    SourceText     - file contents, disk + unsaved editor buffers on top
+    Lexer          - text -> tokens, emits Indent/Dedent (DM uses indentation)
+    Preprocessor   - expands #define, follows #include, keeps a source map
+    Parser         - tokens -> AST per file, recovers from broken code
+    TypeTreeBuilder- merges all files into one object tree, adds builtins
+    Binder         - resolves names and types, answers questions about a cursor
+    Services       - completion / symbols / hover / definition / diagnostics
+
+  Two ways to consume it:
+    In-process  - C# IDE references Dm.Core, gets real objects (Roslyn style).
+    C ABI       - everyone else calls dm_core.dll. Handles for fast paths,
+                  JSON for bulk queries like "dump the whole object tree".
+
+  Why the object tree matters:
+    "mob." needs every proc/var on /mob plus everything inherited plus BYOND
+    builtins. "var/mob/test/t" then "t." reads the type straight out of the
+    declaration. Both are object tree lookups, not type inference.
+
+CHALLENGES
+--------------------------------------------------------------------------------
+  - Builtins. mob.Move(), .loc, .client exist nowhere in user code. Without a
+    bundled definition file, "mob." only shows what we wrote. Must scrape the
+    BYOND reference HTML. Unglamorous and easy to underestimate.
+  - Preprocessor source maps. If expanded tokens don't remember where they came
+    from, every completion and error lands on the wrong line. Most real DM is
+    macro-heavy, so this is not optional.
+  - Parser error recovery. Editor buffers are broken on every keystroke. A
+    parser that stops at the first error is useless here.
+  - Include order is semantic. DM resolves overrides by .dme include order, so
+    the include graph must stay ordered, and editing a #define invalidates
+    everything downstream.
+  - String interpolation. "text[expr]more" means the lexer re-enters expression
+    mode recursively.
+  - The ":" operator deliberately skips type checking. Completion after ":"
+    must show everything. Filtering it is a bug.
+  - Nesting block comments. DM nests /* */, unlike C.
+  - Dots and slashes. See PLAN.md section 4a. The short version:
+      Mid-path, "." and "/" are the SAME token. /obj/item.sword == /obj/item/sword
+      "proc" and "verb" are ordinary path segments, not keywords.
+      "proc/" means declare-new. Leaving it off means override.
+      var declarations also accept a SPACE as a separator (but not in for-headers).
+      In expressions, leading "/" is absolute and leading "." is an upward
+        SEARCH from the current type to root, first hit wins.
+      No leading separator at all means it was never a path - it's member access.
+      "//" inside a path is a comment. /obj//item evaluates to /obj.
+      C-style for uses COMMAS: for(var/i = 1, i <= 5, i++)
+  - Worst one: "var.thing.T" parses differently depending on whether /thing was
+    already declared at that point in include order. Swapping two #include lines
+    flips it. We match the compiler and warn, rather than diverging.
+  - DM has BOTH brace blocks and significant indentation, mixed in one file.
+  - Operator overloading: operator+, operator:=, operator_turn. Note that
+    "operator:=" contains a colon, so naive ":" lexing splits it wrongly.
+  - Stringification (#arg) exists, and shows up inside string interpolation:
+      #define ASSERT(c) if(!(c)) { CRASH("...Assertion Failed: [#c]"); }
+  - Odd but legal declaration forms we must handle:
+      var/a=1,b=0,c=0           comma-separated var lists
+      x = 0; y = 0; z = 0       semicolons separate statements on one line
+      Multiply(m) return ...    proc body on the signature line
+      MapColors(a, j=0, k=0)    default parameter values
+      _dm_interface = FLAGS     inherited var override, no var/ keyword
+  - Position encoding. LSP wants UTF-16 offsets, the C ABI wants UTF-8 bytes.
+    Support both from day one or retrofit every service signature later.
+  - NativeAOT constraints. No reflection or dynamic in Dm.Core. Exceptions must
+    never cross the C boundary. Per-platform binaries mean a CI build matrix.
+  - We become the platform. Two IDEs depend on our ABI, so breaking changes
+    cost other people real work.
+
+OPEN QUESTIONS
+--------------------------------------------------------------------------------
+  - License? Also: what are SpacemanDMM's terms, if we ever borrow from it?
+  - Is MSVC C++ build tooling installed? NativeAOT needs it. Blocks M0.
+  - Does DM have token pasting (##)? Stringification (#) is confirmed yes.
+  - Can a brace block contain indented sub-blocks? Needs a compiler experiment.
+  - What language is the third IDE in?
+  - Should Dm.Lsp be AOT compiled for startup speed, or keep the reflection-
+    based LSP library? Decide at M9.
+
+  ANSWERED
+  - Stringification exists. Confirmed in stddef.dm ASSERT macro.
+  - Builtins source: stddef.dm + info.html. Neither alone is enough.
+  - stddef.dm is regenerated by making a file named stddef.dm and compiling.
+    It is version stamped, so builtins.json must record the BYOND version.
+
+CONVENTIONS
+--------------------------------------------------------------------------------
+  - docs/internal/ is Claude's working notes. Gitignored. Not team-facing.
+  - PLAN.md and ROADMAP.txt are both live docs, updated as work lands.
+  - Commits: concise and factual. Group related changes; don't split per line,
+    don't lump unrelated work together.

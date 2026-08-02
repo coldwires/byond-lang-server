@@ -1,0 +1,41 @@
+# Claude's working notes. Not team-facing.
+docs/internal/
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+
+# NativeAOT / native build output
+*.dll
+*.so
+*.dylib
+*.pdb
+*.lib
+*.exp
+*.obj
+!abi/**/*.lib
+
+# CMake (tests/abi-smoke)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+build/
+
+# Test corpus is large and externally sourced; fetched by script
+tests/corpus/external/
+
+# Editors
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

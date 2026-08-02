@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Dm.Native</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Produces dm_core.dll / libdm_core.so with a plain C ABI. -->
+    <PublishAot>true</PublishAot>
+    <NativeLib>Shared</NativeLib>
+    <AssemblyName>dm_core</AssemblyName>
+
+    <!-- Exports are only reachable from native code, so the trimmer cannot see the roots. -->
+    <TrimMode>partial</TrimMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dm.Core\Dm.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The handle table and marshalling helpers are internal but need direct unit tests. -->
+    <InternalsVisibleTo Include="Dm.Native.Tests" />
+  </ItemGroup>
+
+</Project>
