@@ -7,17 +7,17 @@
 WHERE WE ARE
 --------------------------------------------------------------------------------
   - M0 boundary is PROVEN. C# -> NativeAOT -> C ABI -> C++ round trip works.
-      dm_core.dll builds at 1.02 MB with 6 exports.
-      tests/abi-smoke passes 52 checks from C++, including use-after-close
-      plus dm_document_symbols and dm_complete_at. Reports ABI 0.4.
+      dm_core.dll builds at 1.49 MB with 14 exports.
+      tests/abi-smoke passes from C++, covering use-after-close, both
+      encodings, dm_document_symbols and dm_complete_at. Reports ABI 0.4.
   - M1, M2 and M3 are DONE: lexer, syntax highlighting through the ABI, and the
     preprocessor with its include graph and macro source maps.
   - M4 is DONE. Declarations, expressions and statements all parse, proc
     bodies are real syntax trees, and the outline ships through the ABI at
     version 0.3. Every DM file in the corpus parses clean.
   - Local git repo initialised. MIT licensed.
-  - dotnet test works: 506 tests, all passing.
-      Dm.Core.Tests   - 473, text layer through completion
+  - dotnet test works: 523 tests, all passing.
+      Dm.Core.Tests   - 491, text layer through completion
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
@@ -45,10 +45,11 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
      through the ABI. He can wire it up today - it does not need anything else
      from us. The CMakeLists include/link lines are meant to be copied.
-  2. Finish M6: type inference through new/as/assignment, macros in the
-     completion list, then semantic highlighting (colour IDs 12-15).
+  2. Finish M6: macros in the completion list, leading-"." relative paths,
+     then semantic highlighting (colour IDs 12-15). Type inference is DONE.
   3. Point the parser at the preprocessed token stream instead of raw per-file
-     tokens. DeclarationParser takes a LexResult today.
+     tokens. DeclarationParser takes a LexResult today. Fold in -D support
+     while we are there - see INJECTED DEFINES below.
   4. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
   5. Test dm.exe for whether a brace block can hold indentation-structured
      sub-blocks. Still a guess. Mixed tabs and spaces is now answered - see
@@ -184,9 +185,162 @@ VERIFIED AGAINST dm.exe 516.1666
       empty parens forwards the current arguments, and names may contain \
       escapes. full table in PLAN.md 8, runnable proofs in
       docs/dm-language-notes.md
+    DM has NO local type inference. "var/x = new /obj/item" then "x.hp" is
+      "undefined var" - the right member of the type on the line above.
+      only a WRITTEN type is checked. not new, not as, not assignment from
+      a typed var. we infer anyway; see WHERE WE DISAGREE below.
+    "." on an untyped var rejects EVERY member. ":" on an untyped var
+      accepts any name that exists on some type somewhere. untyped is not
+      unchecked, and the two need different lists.
+    "mk().elsewhere" compiles but "var/x = mk()" then "x.elsewhere" does
+      not. same unknowable type; a variable in the way flips the answer.
+    dm.exe -DNAME / -DNAME=value / -DFN(x)=... all work. bare -DNAME
+      defines it EMPTY, not 1.
+    a var's declared type is resolved AT THE USE SITE. "mob/var/clothing/slot"
+      with no /clothing anywhere compiles with 0 errors and -o lists slot as a
+      real var. the first line that reads or writes it fails with "slot:
+      undefined type: /clothing", ON THE USE LINE. clean build, broken var.
+    separators in a var declaration create NO types. mob/var/clothing/feet is
+      one var "feet" on /mob and nothing else - /clothing, /clothing/feet and
+      /mob/clothing are all "undefined type path". checked with -o, not
+      guessed from a clean compile.
+    leading "." follows the PATH ancestry, not parent_type. it validates the
+      WHOLE relative path and backtracks, and the nearest ancestor where all
+      of it resolves wins. see PLAN 4a - the old "first hit wins" wording
+      would have been built against the inheritance chain, which is wrong.
+
+  HOW WE TEST - "IT COMPILED" IS NOT A RESULT
+    A construct being accepted only means the parser allowed it. Three things
+    in docs/dm-language-notes.md compile with 0 errors and do not mean what
+    they look like. So:
+      - ask whether the thing EXISTS. reference the type as a path, assign to
+        the var, call the proc.
+      - read the tree with -o instead of inferring it.
+      - always include a negative control. a probe that cannot fail proves
+        nothing.
+      - watch for probes that collide. "name" is a builtin on /mob, x/y/z are
+        builtins on /turf and /mob - a bad probe name reports a duplicate
+        definition that has nothing to do with your question.
+      - check the error's LINE NUMBER. it is evidence.
 
   Still untested, still guesses:
     whether a brace block can hold indentation-structured sub-blocks
+
+WHERE WE DISAGREE WITH dm.exe - ON PURPOSE, EXACTLY ONCE
+--------------------------------------------------------------------------------
+  Completion infers a type for an untyped local from "new", "as" and
+  assignment. The compiler does not, and will reject the members we offer.
+
+  We do it because "var/x = new /obj/item" is nearly always a half-written
+  declaration, and those are the members the author is reaching for.
+
+  The cost: a user can accept our completion and get code that does not
+  build. That is written down for integrators in INTEGRATION.txt section 4,
+  and the matching M11 warning ("x is untyped, `.` cannot compile here") is
+  on the list. Nothing else in the library pretends the var has a type -
+  the object tree and the diagnostics both agree with dm.exe.
+
+INJECTED DEFINES - dm.exe -D
+--------------------------------------------------------------------------------
+  A project built with "dm.exe -DDEBUG game.dme" compiles a DIFFERENT
+  program from the one we analyse, because we never see the -D. Anything
+  behind "#ifdef DEBUG" is invisible to us, or visible when it should not be.
+
+  What we need: an optional set of defines on Workspace.Open, seeded into the
+  MacroTable before the include walk, plus "dmc --define NAME=value" and an
+  ABI parameter. Scheduled with the preprocessed-stream work.
+
+  For the IDE devs: pass the same -D set to us and to dm.exe, or the
+  highlighting and the build will disagree. Pre/post-compile hooks are yours
+  to own - we have no build step to hang them off.
+
+dm.exe FLAGS - THE FULL SET FOR 516.1666
+--------------------------------------------------------------------------------
+  Three of these are ORACLES. They make the compiler answer something we also
+  answer, so we can diff instead of eyeballing.
+
+    -o             object tree as XML.  already our oracle - three declaration
+                   bugs and the proc/var matching came out of it
+    -l             every source file the .dme reaches. prints "Source Files:"
+                   then the .dme and each file IN COMPILE ORDER, relative,
+                   backslash separated. stddef.dm is not listed. still writes
+                   a .dmb, so it is a build with a report, not a dry run.
+                   ORACLE FOR OUR INCLUDE GRAPH - cheapest one left to wire up
+    -code_tree     code tree. an oracle for declarations, but noisy: dumps all
+                   of stddef ahead of your project
+
+    -clean         full rebuild, ignore incremental state
+    -D<name>[=v]   define a macro. see INJECTED DEFINES above
+    -verbose       verbose progress
+    -max_errors N  cap reported errors. default 10000, 0 = unlimited
+    -full_paths    full paths in messages. TELL THE IDE DEVS - relative paths
+                   are ambiguous once two files share a name
+    -ignore        set a warning's level. comma separated for several.
+    -warn          -error promotes one to a hard failure
+    -error
+
+  No output-path flag. The .dmb and .rsc names always derive from the .dme.
+
+WARNING NAMES - A SHARED VOCABULARY, AND IT BINDS M11
+--------------------------------------------------------------------------------
+  The names -ignore/-warn/-error take are THE SAME IDENTIFIERS as
+  #pragma ignore|warn|error. The compiler prints the name inline:
+
+    lint.dm:2:warning (init_proc): stuff: var will be initialized in a hidden
+    lint.dm:3:warning (frequent_call): New: this proc will be called very ...
+
+  So you can enumerate them off any build log. The reference does not list them.
+
+  Two ship OFF BY DEFAULT and are meant for linting:
+    init_proc       a var whose initializer is NOT a compile-time constant,
+                    so it needs a hidden per-instance init proc
+    frequent_call   New() or Del() overridden
+
+    dm.exe -DCBT -warn init_proc,frequent_call tgstation.dme
+
+  BOTH FIRE ON THE SAME SET, and its shape is easy to get wrong:
+    /datum /atom /turf  ... the EXACT types                        WARN
+    /turf/sub, /turf/a/b/c ... any turf subtype at any depth       WARN
+    /datum/sub, /atom/sub                                          silent
+    /atom/movable /obj /obj/sub /mob /area /client /image          silent
+
+  So it is the three exact types PLUS the whole /turf subtree - the union,
+  not either rule alone. Inheritance is not the rule: /obj descends from
+  /atom and is silent. The reference names "/turf or /atom or /datum", which
+  is right about the exact types and silent about the turf subtree.
+
+  Matches the intent: a var or New() on /datum or /atom EXACTLY is inherited
+  by every object in the game, and the map creates turfs per tile for every
+  turf subtype. Everything else is made on demand.
+
+  PRACTICAL CONSEQUENCE: neither lint fires on /obj/item or /mob/living,
+  which is where a big codebase's per-instance cost actually is. Much weaker
+  as a whole-codebase audit than the names suggest - an argument for doing
+  our own at M11 rather than shelling out to dm.exe.
+
+  init_proc is about CONSTANT vs NOT, not about lists:
+    warns:  = list(1,2,3)  = list()  = new /obj  = newlist(/obj)
+    silent: = 5  = "text"  = 1+2  = /obj  = null  no initializer  const
+  frequent_call is New and Del only - proc/whatever() and Enter() are silent.
+
+  THE PRAGMA BEATS THE FLAG, both ways:
+    -warn X   + #pragma ignore X  -> silent
+    -ignore X + #pragma warn X    -> warns
+  So the flag sets the starting level and the pragma overrides from there.
+  push/pop scopes it. -error and #pragma error both produce a REAL error,
+  printed as "error (name):" not "warning (name):".
+
+  WHAT THIS MEANS FOR US: a project can already write "#pragma ignore
+  init_proc" to silence a diagnostic, with push/pop to scope it. If our
+  diagnostics live in a private DM0200 ID space, none of that reaches them and
+  we will report things the author explicitly silenced - which reads as our
+  bug, not as their setting. So where we report the same thing the compiler
+  names, USE THE COMPILER'S NAME. Private IDs are for what dm.exe has no name
+  for, like the discarded-proc warning.
+
+  Both lints are also worth implementing ourselves. They are off by default,
+  so most projects have never seen them, and we can show them continuously
+  instead of once per build.
 
 WHAT M3 HAS TO HANDLE (learned from spies.dme, 102 includes)
 --------------------------------------------------------------------------------
@@ -235,8 +389,8 @@ NOTED IN YOUR PROJECT (mlaas) - not our bug, might be yours
 MILESTONES                                    (restructured 2026-08-02)
 --------------------------------------------------------------------------------
   [~] M0   Boundary + project setup       <- done except CI
-  [x] M1   Text layer + lexer             <- DONE. clean across 261 files /
-                                             286,311 tokens of real DM.
+  [x] M1   Text layer + lexer             <- DONE. clean across 279 files /
+                                             303,015 tokens of real DM.
   [x] M2   Lexical classification         <- DONE. syntax highlighting works
                                              end to end, C# -> C ABI -> C++.
   [x] M3   Preprocessor + include graph   <- DONE. include graph, encoding,
@@ -257,8 +411,10 @@ MILESTONES                                    (restructured 2026-08-02)
   [~] M6   Binder + completion
              "mob." and "t." WORK and ship through dm_complete_at (ABI 0.4).
              try: dmc complete <dme> <file> <line> <col>
-             still needed: inference through new/as/assignment, macros in
-             the list, and semantic highlighting.
+             type inference through new/as/assignment is DONE, and is the
+             one place we knowingly disagree with dm.exe - see below.
+             still needed: macros in the list, leading-"." relative paths,
+             and semantic highlighting.
   [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1
   [ ] M8   .dmi icon states  (independent, do anytime)
   [ ] M9   Incremental reparse + performance
@@ -384,7 +540,7 @@ OPEN QUESTIONS
     follows includes while the conditional stack is active.
   - Builtins source: stddef.dm + info.html. Neither alone is enough.
   - stddef.dm is regenerated by making a file named stddef.dm and compiling.
-    It is version stamped, so builtins.json must record the BYOND version.
+    It is version stamped, so builtins.txt must record the BYOND version.
 
 CONVENTIONS
 --------------------------------------------------------------------------------

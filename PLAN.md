@@ -73,8 +73,9 @@ Whether to AOT `Dm.Lsp` anyway for startup latency — which would force hand-ro
 `System.Text.Json` source generators — is an M10 decision.
 
 **Sync rule:** any capability the C# IDE uses in-process must have an ABI equivalent and an LSP
-equivalent (standard method or custom `dm/*`), tracked in `docs/capability-matrix.md`. Otherwise
-the direct-reference path outgrows the other two shells.
+equivalent (standard method or custom `dm/*`). Otherwise the direct-reference path outgrows the
+other two shells. Tracked in `docs/capability-matrix.md` from M10, when there is a second shell for
+the first one to drift away from.
 
 ### Pipeline
 
@@ -184,10 +185,37 @@ exactly what the object tree did until it was fixed.
 The only context where a leading `/` and a leading `.` differ.
 
 - Leading `/` is absolute from root.
-- Leading `.` is a **search, not a traversal**: check the current type, then its parent, then up to
-  and including root. First hit wins.
+- Leading `.` is a **search, not a traversal**. The exact rule is below; it is not what the earlier
+  wording here ("check the current type, then its parent, first hit wins") implied.
 - **No leading separator means it is not a path at all** — `obj.item.sword` is ordinary member
   access and resolves as a var lookup.
+
+### The leading-`.` search rule, exactly
+
+Compiler-verified against 516.1666 in every particular, because three plausible readings of "search
+upward" give different answers and two of them are wrong.
+
+- **The anchor is the enclosing type's path in the code tree — not its inheritance chain.** A type
+  with `parent_type = /a/inh` does *not* see `/a/inh`'s children through a leading `.`; the search
+  climbs `/b/thing` → `/b` → `/` regardless of what `parent_type` says. Resolving this with
+  `ObjectTree.InheritanceChain` would be wrong; it needs `TypePath.Parent`.
+- **The walk includes root**, so a root-level type is reachable from arbitrarily deep.
+- **A global proc anchors at root**, and therefore reaches only root's own children.
+- **The whole remaining path must resolve, and the search backtracks until it does.** Given
+  `/x/sword/deep` and `/x/magic/sword`, a `.sword/deep` written inside `/x/magic` resolves — even
+  though the *nearer* `sword` has no `deep` under it. So it is not "first matching first segment
+  wins"; the nearer candidate is abandoned and the walk continues.
+- **Trailing segments are validated.** `.sword/nonexistent` is *"undefined type path"* when no
+  reachable `sword` has that child, so the backtracking above is a real search rather than the
+  compiler ignoring what follows.
+- **Among ancestors where the whole path resolves, the nearest wins.** With both `/x/sword` and
+  `/x/magic/sword` complete, `.sword` inside `/x/magic` binds to `/x/magic/sword`. Verified through
+  `parent_type = .sword` and then reaching a var declared on only one of the two.
+
+Put together: *walk the enclosing type's path ancestors nearest-first, including root, and take the
+first one under which the entire relative path resolves.*
+
+It works in type-level var initialisers, inside proc bodies, and as a `parent_type` value.
 
 ### `.` versus `:` on a member access — neither is unchecked
 
@@ -213,7 +241,8 @@ disappears exactly where it would be most useful — which is why procs have `as
 The search behaviour is proximity-sensitive, so adding a nearer type silently changes what an
 untouched line means. Given `/obj/item/sword` and `/obj/item/sword/magic`, a `.sword` inside
 `magic` resolves to `/obj/item/sword` — until someone adds `/obj/item/sword/magic/sword`, at which
-point the same line resolves somewhere else. Worth an M11 lint.
+point the same line resolves somewhere else. Worth an M11 lint, though the backtracking above
+narrows it: a nearer type only steals the reference if the *whole* relative path resolves under it.
 
 ### The context-2/context-3 collision
 
@@ -235,8 +264,15 @@ The rules above come from compiler testing. The DM Reference describes the *lead
 behaviour differently, and both are true — position is what distinguishes them:
 
 - **Leading `.` is an upward search** through the code tree (reference: "search **up** in the code
-  tree"). Confirmed. The reference does not state that it reaches root or that first-hit-wins; those
-  are our empirical refinements.
+  tree"). Confirmed, and its phrase "code tree" turns out to be exact rather than loose — the search
+  follows the path ancestry and ignores `parent_type` entirely. Everything else in the rule above is
+  our own: that it reaches root, that it validates the whole path and backtracks, and that the
+  nearest complete match wins.
+- **"Otherwise, a path is relative"** (the `/` entry) is about the **code tree**, not about
+  expressions. In declaration position it is plainly true — `mob/player` written at top level
+  declares `/mob/player`. Read as a statement about expressions it is false, and that misreading is
+  the whole of Context 3's trap: a bare `obj.item` in an expression is member access, not a relative
+  path. The reference never distinguishes the two positions, which is why §4a does.
 - **Leading `:` as a downward path search does not work in 516.1666.** The reference documents
   `mob = :player` as shorthand for `/mob/player`, but every form was rejected with
   `:player: undefined type path` — in a proc local, a typed var initialiser, a type-level var, and
@@ -275,7 +311,7 @@ DM files are commonly CRLF on Windows. Editors normalize aggressively — Qt's `
 - Combined with the pushed-buffer rule in §4, a client that normalizes its buffer to LF is
   analysing exactly what it displays, and nothing drifts.
 
-**Client guidance** (belongs in `docs/abi.md`): detect the dominant line ending on load, normalize
+**Client guidance** (in `INTEGRATION.txt`): detect the dominant line ending on load, normalize
 to LF internally, store the original, and re-apply on save. Round-tripping is the client's job; no
 editor framework does it automatically. Failing to do so rewrites every line of a file on save,
 which destroys `git blame` for the rest of the team. Note also that DM's `{" ... "}` multiline
@@ -334,40 +370,53 @@ Not overloadable: `=` `!` `&&` `||` `&&=` `||=` `?` `==` `!=` `.` `:` `?[]`.
 
 ## 5. Repository layout
 
+The target layout. A milestone in brackets marks something that does not exist yet.
+
 ```
 byond-lang-server/
   PLAN.md          this document
   ROADMAP.txt      short-form status
+  INTEGRATION.txt  the client-facing ABI guide
   src/
     Dm.Core/
-      Text/        SourceText, FileStore, LinePositions, TextSpan, SourceMap, DocumentUri
-      Syntax/      Lexer, Preprocessor, Parser, SyntaxNode/SyntaxTree, TokenKind
-      Symbols/     ObjectTree, TypeSymbol, ProcSymbol, VarSymbol, TypePath
-      Binding/     Binder, SemanticModel, Scope, TypeResolver
-      Services/    ClassificationService, CompletionService, SymbolService, HoverService,
-                   DefinitionService, DiagnosticService
-      Resources/   builtins.json  (BYOND stdlib type tree)
-    Dm.Assets/     DmiReader (PNG zTXt -> icon states)
+      Text/        SourceText, SourceFileReader, LinePosition, TextSpan
+      Syntax/      Lexer, DeclarationParser, ExpressionParser, StatementParser, TokenKind
+      Preprocessing/  Preprocessor, MacroTable, MacroExpander, ConditionalEvaluator
+      Includes/    IncludeGraph, IncludeDirective
+      Symbols/     ObjectTree, TypeSymbol, ProcSymbol, VarSymbol, TypePath, Builtins
+      Binding/     Binder, SemanticModel, Scope, TypeResolver                [M6/M7]
+      Services/    ClassificationService, CompletionService, DocumentSymbolService,
+                   HoverService [M7], DefinitionService [M7], DiagnosticService [M11]
+      Resources/   builtins.txt   (BYOND stdlib type tree)
+    Dm.Assets/     DmiReader (PNG zTXt -> icon states)                       [M8]
     Dm.Native/     Exports.cs, HandleTable.cs, marshal helpers -> dm_core.dll
-    Dm.Lsp/        JSON-RPC server over Dm.Core                          [M10]
-    Dm.Cli/        dev driver: dump-tokens / dump-ast / dump-tree / classify / complete / check
+    Dm.Lsp/        JSON-RPC server over Dm.Core                              [M10]
+    Dm.Cli/        dev driver: scan / dump-tokens / classify / includes / preprocess /
+                   outline / symbols / tree / complete
   abi/
     dm_core.h      hand-written C header, source of truth for the ABI
-    dm_core.hpp    optional C++ RAII wrapper for the Qt client
-    schema/        JSON schemas for bulk query requests/responses
+    dm_core.hpp    optional C++ RAII wrapper for the Qt client               [M7]
+    schema/        JSON schemas for bulk query requests/responses            [M7]
   editors/
-    vscode/        extension + TextMate grammar                          [M10]
+    vscode/        extension + TextMate grammar                              [M10]
   tools/
-    builtins-gen/  builds builtins.json from stddef.dm + reference HTML
+    builtins-gen/  builds builtins.txt from stddef.dm + reference HTML
   tests/
     Dm.Core.Tests/    unit + snapshot tests
     Dm.Native.Tests/  handle table, marshalling
-    corpus/           real .dme projects used as snapshot fixtures
+    corpus/           real .dme projects used as snapshot fixtures           [M9]
     abi-smoke/        CMake C++ program that links dm_core
   docs/
-    abi.md  api.md  lsp.md  capability-matrix.md  dm-language-notes.md
-    internal/      working notes, gitignored
+    dm-language-notes.md   compiler-verified DM edge cases
+    api.md                 the in-process C# surface                         [M7]
+    lsp.md                 LSP methods and custom dm/* extensions            [M10]
+    capability-matrix.md   in-process vs ABI vs LSP parity                   [M10]
+    internal/              working notes, gitignored
 ```
+
+There is no `docs/abi.md`: `INTEGRATION.txt` is that document, and `abi/dm_core.h` is the contract
+it describes. The capability matrix is worth writing only once a second shell exists to fall out of
+sync with, so it lands with `Dm.Lsp`.
 
 ---
 
@@ -381,11 +430,11 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.02 MB, 6 exports) via NativeAOT.
-- ✅ `tests/abi-smoke` — CMake C++ program, 42 checks as of ABI 0.3. Reference integration for the
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.49 MB, 14 exports) via NativeAOT.
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.4. Reference integration for the
   Qt client, and the only thing that proves the published binary links and runs from C++ rather
   than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 350 today. Handle validation, UTF-8
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 523 today. Handle validation, UTF-8
   marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ⬜ CI matrix. NativeAOT produces per-RID binaries: `win-x64`, `linux-x64`, `linux-arm64`,
@@ -550,7 +599,7 @@ order — the same ordering that decides override resolution and the §4a path a
   all land on the wrong line in macro-heavy code, which is most real DM.
 - Snapshot the preprocessor's exit state (define-table hash) at each file boundary. M9 depends on it.
 
-### M4 — Parser, syntax diagnostics, document symbols ✅ *(ABI export outstanding)*
+### M4 — Parser, syntax diagnostics, document symbols ✅
 
 - ✅ `DeclarationParser` — types, vars and proc signatures, with line-oriented recovery. Handles the
   DM-specific shapes: `var`/`proc` as ordinary path segments, bare `var`/`proc`/`var/const` block
@@ -572,9 +621,16 @@ order — the same ordering that decides override resolution and the §4a path a
   change how it parsed.
 - ⬜ Parameter defaults still come from the range scan in `ReadParameter`, not the expression parser.
 - ⬜ Parse the preprocessed stream rather than raw per-file tokens.
+- ⬜ Accept injected defines. `dm.exe -DNAME`, `-DNAME=value` and `-DFN(x)=...` all work, and bare
+  `-DNAME` defines it empty rather than `1` (§8). A project whose build passes `-D` flags compiles a
+  different program from the one we analyse without them, so `Workspace.Open` needs an optional
+  define set seeded into the `MacroTable` before the include walk, with a `dmc --define` flag and an
+  ABI parameter to match. Belongs with the preprocessed-stream work above, since both change what
+  the parser is fed.
 - ✅ `DocumentSymbolService`, value-shaped and taking an explicit position encoding, with a
   selection range covering the name alone so an outline can navigate and a rename knows what to
-  replace. `dmc symbols` drives it. No ABI export yet.
+  replace. `dmc symbols` drives it, and it ships through `dm_document_symbols` at ABI 0.3 with the
+  file's syntax diagnostics in the same document.
 - ✅ Two modelling fixes the outline exposed. A bare `var`/`proc` block header is marked
   `IsGroupHeader` and contributes no symbol of its own — it says what kind its children are, and
   left in it produced an entry called `var`. A bare assignment at type level (`world/maxx = 3`,
@@ -684,7 +740,7 @@ completion list after `mob.`.
   records: parent link (implicit by path or explicit via `parent_type`), declared vars, procs with
   override chains, and all declaration sites — a type is legitimately declared in N files.
 - **Builtins.** `mob` has `Move()`, `Login()`, `loc`, `client`, `verbs`; none appear in user code.
-  `Resources/builtins.json` is assembled from **two sources**, because neither is complete:
+  `Resources/builtins.txt` is assembled from **two sources**, because neither is complete:
 
   | Source | Provides | Method |
   |---|---|---|
@@ -695,7 +751,7 @@ completion list after `mob.`.
   exercises brace blocks, operator overloads, comma var lists, and stringification.
 
   `stddef.dm` is version-stamped (the sample on hand reads `516.1666`) and is regenerated by
-  creating a file named `stddef.dm` in a project and compiling. `builtins.json` records the BYOND
+  creating a file named `stddef.dm` in a project and compiling. `builtins.txt` records the BYOND
   version it was built from.
 
   Do not vendor `stddef.dm` into the repo — it is BYOND-generated output and this repo is public.
@@ -713,7 +769,10 @@ completion list after `mob.`.
 - ✅ Builtins marked in the list, so a client can style them differently.
 - ✅ `dmc complete <dme> <file> <line> <col>`. On mlaas, `other.` for a `/mob/pc` local returns 361
   items mixing the project's procs with inherited builtins.
-- ⬜ Inference through `new /path`, `as` casts, and assignment from a typed source.
+- ✅ Inference through `new /path`, `as` clauses, and assignment from a typed source, in
+  `Binding/TypeInference`. A declared type always wins; inference only fills a slot the author left
+  empty. Where a name is assigned more than once, the nearest assignment *before the cursor* wins,
+  since that is what it holds at the position being asked about.
 - ⬜ Leading-`.` relative path resolution (§4a).
 - ⬜ Macros in the bare-identifier list.
 - ⬜ Semantic classification refinement — M2's reserved kinds 12–15.
@@ -724,6 +783,24 @@ completion list after `mob.`.
 **Globals are offered for a bare identifier but never after `.`.** They live on the root, and the
 root is deliberately outside the inheritance chain: `istype(x)` is a call, `mob.istype()` is not
 valid DM.
+
+**Inference is the one place we knowingly disagree with `dm.exe`.** The compiler does no local type
+inference whatsoever — `var/x = new /obj/item` then `x.hp` is *"undefined var"*, for the correct
+member of the type on the previous line. Only a written type is checked. See §8; the full matrix is
+in `docs/dm-language-notes.md`.
+
+That was measured after this milestone was written, and it makes the item above a product decision
+rather than a compiler-matching one. Two options were on the table: return the empty list the
+compiler implies, or infer anyway and offer members the build will reject. **Decision: infer
+anyway**, on the reasoning that an untyped `var/x = new /obj/item` is almost always a declaration
+mid-edit rather than a finished one, and the members offered are the ones the author is reaching
+for. The cost is real and is stated plainly in `INTEGRATION.txt`: accepting one of these completions
+can produce code that does not compile.
+
+This is the exception to §2's "match the compiler, then warn", and the only one. It is confined to
+completion — nothing in the object tree or the diagnostics pretends the variable has a type. The
+warning half of that rule is still owed, and belongs with the other M11 diagnostics: *"`x` is
+untyped, so `.` cannot compile here — write `var/obj/item/x`"*.
 
 
 - Scope chain: locals → proc parameters → `src` type members (walking the inheritance chain) → globals.
@@ -785,6 +862,31 @@ Diagnostics of note, drawn from §4a: `proc/` declare-vs-override duplicate defi
 whose meaning depends on include order; leading-`.` relative paths that a nearer type could
 silently re-target.
 
+**Declarations the compiler discards without a word** are the highest-value diagnostics here,
+because nothing else in a DM toolchain reports them. The parser has to model these to match
+`dm.exe`, and once it does it knows something the build output never tells the author:
+
+| Construct | What DM does | Warning to raise |
+|---|---|---|
+| `proc` block indented inside a `var` block (§8) | accepts it, declares nothing; calling it is a runtime error | *"this proc is discarded — the `proc` block is inside a `var` block"* |
+| A var name colliding with a builtin (`x`/`y` on an atom) | duplicate-definition **error** | already fatal; surface it early |
+| `proc/` declared twice on one type | duplicate-definition error | `ProcSymbol.DeclaringCount > 1` |
+| A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
+| `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | *"`x` is untyped, so `.` cannot compile here — write `var/obj/item/x`"*. This is the warning half of the M6 completion trade, and the fix is a quick-edit rather than prose. |
+
+The first one is worth ranking above the rest. It was found in a shipped game where four mission
+procs were declared that way and one is called from another file — a runtime error sitting on a code
+path, with a clean build. Our tree *saw* those four while the compiler reported nothing, so the
+information exists the moment the parser is correct; it must become a warning rather than being
+discarded to match.
+
+**Diagnostics must join the compiler's warning vocabulary, not run beside it.** `#pragma
+ignore|warn|error <names>` and `-ignore/-warn/-error` share one set of identifiers, and a project
+that silences `init_proc` in source expects it to stay silenced. Reusing the compiler's name
+wherever we report the same thing is what makes that work; see §8. `init_proc` and `frequent_call`
+are both off by default in `dm.exe`, so implementing them here surfaces lints most projects have
+never seen.
+
 Find-references and rename cannot be fully sound in DM because of `:` and string-based dispatch
 (`call()`, `text2path()`). Decide whether rename is safe-subset-only or best-effort-with-warning.
 
@@ -797,8 +899,10 @@ Daemon and is effectively a separate project.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. Implemented so far: version, workspace open/close/root,
-last error, free.
+`abi/dm_core.h` is the source of truth. ABI 0.4, 14 exports: version, last error, free, workspace
+open/close/root, buffer set/close, classify plus its three accessors, document symbols, and
+completion. Everything listed below is implemented; `dm_query_json` is the one entry still ahead of
+the code, and lands at M7.
 
 **Hot path — handles and accessors:**
 ```c
@@ -866,6 +970,105 @@ Recorded 2026-08-02 on the primary dev machine.
 - `help/ref/info.html` (1.3 MB) is the DM Reference in structured HTML. It supplies the other half.
 - `byondapi/` ships `byondapi.h` and `byondapi.lib` — relevant only to a future debug adapter.
 
+### `dm.exe` command-line flags, and what each is worth to us
+
+The complete set for 516.1666. Three of these are **oracles** — they make the compiler answer a
+question we also answer, so we can diff against it instead of hand-checking.
+
+| Flag | Does | Worth to us |
+|---|---|---|
+| `-o` | dumps the **resolved** object tree as XML | Already our oracle for `ObjectTree`; three declaration bugs and the proc/var matching came out of it. Lists types, vars and constant values. It does **not** record a var's declared type, so it can confirm that `feet` is a var on `/mob` but not that it is a `/clothing`. A bare override appears as a second `<var>` entry rather than replacing the first. |
+| `-l` | lists every source file the `.dme` reaches | **Oracle for `IncludeGraph`.** Prints a `Source Files:` block — the `.dme` first, then each file in compile order, relative to the `.dme` directory with `\` separators. `stddef.dm` is not listed. It still writes a `.dmb`, so it is a build with a report rather than a dry run. |
+| `-code_tree` | dumps the **syntactic** tree, before resolution | An oracle for the *parser*, not for the type tree — it shows `mob / var / clothing / feet` as literal nested nodes exactly as written, including nesting that resolution later discards. Noisy: it emits the whole of `stddef.dm` ahead of the project and renders each initialiser as an indented `=` node. |
+| `-D<name>[=value]` | defines a macro | See §8's table. Bare `-DNAME` defines it empty, not `1`. |
+| `-clean` | full rebuild, ignoring incremental state | Only relevant if we ever shell out to the compiler. |
+| `-verbose` | verbose progress | — |
+| `-max_errors N` | caps reported errors, default 10000, `0` unlimited | Worth matching in spirit: our own diagnostics need a cap for the same reason. |
+| `-full_paths` | full paths in messages rather than relative | Recommend it to any IDE that parses build output — relative paths are ambiguous once a project has two files of the same name. |
+| `-ignore` / `-warn` / `-error <names,...>` | sets a warning's level; `-error` promotes it to a hard failure | See below. |
+
+There is no output-path flag; the `.dmb` and `.rsc` names always derive from the `.dme`.
+
+### Warning names are a shared vocabulary, and that constrains M11
+
+The names taken by `-ignore` / `-warn` / `-error` are **the same identifiers as
+`#pragma ignore|warn|error`**, and the compiler prints the name inline when one fires:
+
+```
+lint.dm:2:warning (init_proc): stuff: var will be initialized in a hidden init proc; ...
+lint.dm:3:warning (frequent_call): New: this proc will be called very frequently
+```
+
+So the vocabulary is discoverable from any build log, which is how to enumerate it — the reference
+does not list them.
+
+Two ship **off by default** and exist for linting rather than for correctness. `dm.exe -warn
+init_proc,frequent_call game.dme` turns them on.
+
+Both are narrower than their descriptions suggest, and the shape of the restriction is unusual
+enough that two plausible readings of it are both wrong. Measured on 516.1666:
+
+| Name | Fires on |
+|---|---|
+| `init_proc` | a var whose initialiser is not a compile-time constant |
+| `frequent_call` | `New()` or `Del()` overridden |
+
+**Both share one trigger set: `/datum`, `/atom` and `/turf` *exactly*, plus the whole `/turf`
+subtree.** The full matrix, identical for the two warnings:
+
+| Type | Warns |
+|---|---|
+| `/datum`, `/atom`, `/turf` — the exact types | yes |
+| `/turf/sub`, `/turf/a/b/c` — any turf subtype, at any depth | **yes** |
+| `/datum/sub`, `/atom/sub` — subtypes of the other two | **no** |
+| `/atom/movable`, `/obj`, `/obj/sub`, `/mob`, `/area`, `/client`, `/image` | no |
+
+Neither "the three exact types" nor "`/turf` and its subtree" describes it on its own; it is the
+union. Inheritance is not the rule either — `/obj` descends from `/atom`, which is in the set, and
+stays silent.
+
+The union does match what the two warnings are *for*. A var or a `New()` on `/datum` or `/atom`
+exactly is inherited by every object in the game, so it is hot wherever it sits; and the map creates
+turfs per tile for every turf subtype, so the whole turf branch is hot. Anything else is
+instantiated on demand.
+
+**The practical consequence is that neither lint sees the code where this usually costs.** A
+`New()` override or a list var on `/obj/item` or `/mob/living` — which is where a large codebase
+actually spends the time — is silent. They are much weaker as a codebase-wide audit than the names
+suggest, which is an argument for implementing our own version at M11 rather than shelling out.
+
+The trigger for `init_proc` is **whether the initialiser needs runtime evaluation**, not whether it
+is a list. `= list(1,2,3)`, `= list()`, `= new /obj` and `= newlist(/obj)` all warn; `= 5`,
+`= "text"`, `= 1+2`, `= /obj` (a path literal), `= null`, no initialiser at all, and anything
+`const` do not. A constant is folded into the type and needs no per-instance work.
+
+`frequent_call` is specific to `New` and `Del`. Neither an ordinary `proc/whatever()` nor an
+override of `Enter()` triggers it.
+
+The reference names "`/turf` or `/atom` or `/datum`" for both, which reads as three literal types
+and does not mention the turf subtree — accurate as far as it goes, and incomplete in the one place
+that matters for a real codebase.
+
+**The pragma beats the flag, in both directions.** `-warn init_proc` with `#pragma ignore init_proc`
+in the file is silent; `-ignore init_proc` with `#pragma warn init_proc` warns. So the flag sets the
+starting level and the pragma overrides it from that point onward, which is the only sane reading
+for us to copy. `#pragma push` / `#pragma pop` scope it to a region: with a `push`/`ignore`/`pop`
+around one declaration, that declaration is silent and the next one still warns. `-error` and
+`#pragma error` both promote to a genuine error, reported as `error (name):` rather than
+`warning (name):` — worth noting, since the two formats differ by more than the word.
+
+**The constraint this puts on M11:** a project can already write `#pragma ignore init_proc` to
+silence a diagnostic, and `#pragma push`/`pop` to scope it. If our diagnostics live in a private
+`DM0200`-style ID space, none of that reaches them, and we will report things the author has
+explicitly silenced in source — which reads as our bug, not as a setting. So where a diagnostic of
+ours is the same diagnostic the compiler has a name for, **it should carry the compiler's name** and
+obey the pragma; a private ID is for the things `dm.exe` has no name for, such as the discarded-proc
+warning in the M11 table. Decide the exact scheme at M11, but the pragma plumbing belongs with the
+preprocessor work, since that is where `push`/`pop` state already lives.
+
+The lints are also worth implementing ourselves. They are off by default, so most projects never see
+them, and we can surface them continuously instead of once per build.
+
 ### Language facts verified against `dm.exe` 516.1666
 
 Established by compiling discriminating cases, not by reading documentation. Each test was built so
@@ -878,7 +1081,7 @@ that the two candidate behaviours produce different compiler output.
 | **Quotes do not protect `*/` inside a block comment.** | `/*` then `"*/"` → *"unterminated text (expecting \")"*. The `*/` closed the comment and left a stray quote. |
 | **A duplicate `#include` of the same file is ignored.** | The same file included twice compiles clean. Without a guard it would be a duplicate definition. |
 | **`#include` accepts forward slashes as well as backslashes.** | `#include "sub/b.dm"` loads; the compiler then reports the file as `sub\b.dm`. |
-| **`/mob` has built-in `x`, `y`, `z`.** | Declaring `var/x` on a `/mob` subtype → *"x: duplicate definition (conflicts with built-in variable)"*. Found by accident, and a reminder of why `builtins.json` (M5) is load-bearing. |
+| **`/mob` has built-in `x`, `y`, `z`.** | Declaring `var/x` on a `/mob` subtype → *"x: duplicate definition (conflicts with built-in variable)"*. Found by accident, and a reminder of why `builtins.txt` (M5) is load-bearing. |
 | **`#warn` and `#error` bodies are free text, not tokens.** | `#warn this won't work and "unbalanced` compiles with 0 errors and prints verbatim. Apostrophes and unbalanced quotes are legal there. |
 | **`in` binds looser than assignment.** | `var/r = (has = 2 in L)` leaves `has == 2` and the whole expression `== 1`. It parses as `(has = 2) in L`, not `has = (2 in L)`. |
 | **`..()` with empty parens forwards the current arguments.** | A child override calling `..()` with no args reached the parent with the original `'hello'` intact. It does not pass zero arguments. |
@@ -894,6 +1097,9 @@ that the two candidate behaviours produce different compiler output.
 | **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
 | **A conditional's `:` is member access only when tight against a bare identifier.** | With `b:c` a valid member access, `1 ? b : c` and `1 ? b :c` compile, while `1 ? b:c` and `1 ? b: c` fail with *"expected ':'"*. Changing what precedes the tight colon instead: `1 ? "0":"1"`, `1 ? f():g()`, `1 ? L[1]:z`, `1 ? 1:2` and `1 ? (y):z` all compile. So both halves matter — the space before it, and whether a member access is possible there at all. The one place in DM where spacing changes a parse. |
 | **`/client`, `/list` and `/savefile` have no parent type.** | Printing `initial(T:parent_type)` for each builtin gives `/datum` for `/sound`, `/icon`, `/image`, `/matrix`, `/regex`, `/database` and `/exception`, `/atom` for `/turf` and `/area`, `/atom/movable` for `/mob` and `/obj`, and `/image` for `/mutable_appearance` — but nothing at all for `/client`, `/list`, `/savefile` and `/datum` itself. Assuming everything descends from `/datum` is wrong. |
+| **A `proc` block inside a `var` block declares nothing, silently.** | `/datum/x` / `var` / `kept = 1` / `proc` / `vanished()` compiles with 0 errors and 0 warnings. `vanished` is then not a proc, not a var and absent from `vars`; calling it is a runtime *"undefined proc or verb"*. Give it a body and the file stops compiling with *"missing ="*, because everything under the misplaced header is read as var declarations. Found in a shipped game, where one such proc is called from another file. |
+| **A var's declared type is resolved at the use site, not at the declaration.** | `mob` / `var` / `clothing/slot` with no `/clothing` anywhere compiles with **0 errors**, and `-o` lists `slot` as a real var. The first line that reads or writes `slot` then fails with *"slot: undefined type: /clothing"*, reported on the **use** line rather than the declaration. Any number of type segments behaves the same. Same shape as the discarded-proc trap: a clean build hiding a declaration the compiler cannot honour, so it earns an M11 warning. |
+| **Separators in a var declaration create no types at all.** | For `mob/var/clothing/feet`, the entire object tree is `<mob>mob<var>feet</var></mob>` — one var on `/mob`, nothing named `clothing`. All three candidates are rejected as paths: `/clothing`, `/clothing/feet` and `/mob/clothing` each give *"undefined type path"*. The one-line form and the indented `var` block form produce identical trees. Checked against `-o` rather than inferred from a clean compile, which matters — the declaration compiles either way. |
 | **A typed var in a `var` block does not create a type.** | `mob` / `var` / `atom/movable/locker` declares `locker` on `/mob` with type `/atom/movable`. Verified by assigning `locker` in a proc on `/mob`, and by declaring `/mob/atom/movable/unrelated` in the same file without a duplicate error. Without a `var`, the same shape is a bare override and the leading segments *are* the owning type. |
 | **`?[]` guards a null list, not the index.** | `L?[i]` is `isnull(L) ? null : L[i]`, so an out-of-range numeric index still raises *"list index out of bounds"* — it is **not** the `L?.len >= i ? L[i] : null` bounds check it is sometimes described as. Verified across in-range, out-of-range, zero, negative and null-list cases. `L[?i]`, with the `?` inside the bracket, does not compile at all. On an assoc list a missing key is already null, which is where the operator earns its keep. |
 | **`1#INF` and `1#IND` are number literals.** | Found in ter13's HudLib as `showing.tick_lag<1#INF`. A lexer that stops the number at `#` produces a number, a directive and a name, and the parse then fails. Undocumented in the reference. |
@@ -901,6 +1107,10 @@ that the two candidate behaviours produce different compiler output.
 | **`**` is left-associative, and unary minus binds tighter than it.** | `2 ** 3 ** 2` is 64, not 512. `-2 ** 2` is 4, not -4, which matches §4c putting unary at level 4 and `**` at level 5. |
 | **Preprocessor directives carry no indentation of their own.** | Inside a one-tab proc body, `#ifdef` at column 0, at one tab, and at three tabs all compile clean. A directive between a header and its body therefore emits no `Indent`, and the parser must look past it for the one the next code line emits. |
 | **A bare `;` at file scope is legal.** | A lone `;` at column 0 between two proc declarations compiles with 0 errors, with a `#warn` after it printing. |
+| **DM performs no local type inference.** | `var/x = new /obj/item` then `x.hp` is *"x.hp: undefined var"* — the correct member of the type written on the line above. Only a declared type is ever checked: `var/obj/item/x` compiles. Tested across `new /path`, `new /path()`, `new /path{...}`, a later `x = new /path`, initialising from an already-typed local, a parameter's `as` clause, and `input(...) as mob`. None of them types the variable. |
+| **`.` and `:` on an untyped receiver are checked differently.** | With `var/x` and no type: `x.hp` fails and so does `x.nowhere_at_all`, but `x:hp` compiles while `x:nowhere_at_all` fails. `.` rejects everything; `:` asks whether the name exists as a member of *any* type in the program. Untyped is not unchecked, and the correct completion list after `x.` is empty while after `x:` it is every member name in the program. |
+| **The degradation to `:` is a property of the expression, not of the unknown type.** | `mk().elsewhere` compiles, but `var/x = mk()` then `x.elsewhere` does not. Both have an equally unknowable type; putting a variable in the way flips the answer. |
+| **`dm.exe -D` injects preprocessor defines.** | `-DNAME`, `-DNAME=value` and `-DFN(x)=((x)*2)` all compile. Bare `-DNAME` defines it **empty**, not `1`: `#if NAME == 1` then fails with *"unexpected token: =="*, matching `#define NAME` with no body. A project built with `-D` flags is a different program from the one we analyse without them. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -932,6 +1142,31 @@ comment would otherwise nest and swallow the remainder of the file. Found in rea
 - Inherited vars are overridden by bare assignment at type level, with no `var/` keyword.
 - Path literals appear as ordinary expression arguments: `istype(file, /list)`.
 - `new/generator(...)` — `new` immediately followed by a path with no space.
+
+### A clean compile proves almost nothing
+
+The standard for everything in the table above: **do not stop at "it compiled".** A construct being
+accepted says only that the parser allowed it, not that it produced what you expected. Three cases
+in this document compile with zero errors and mean something other than they look like — a `proc`
+block inside a `var` block declares nothing, a var with an undefined declared type is fine until
+used, and `var/x = new /obj/item` gives `x` no type at all.
+
+So a test has to make the two candidate readings produce *different output*, and the reading has to
+be checked at the point where it becomes observable:
+
+- **Ask whether the thing exists**, rather than whether the file compiled. Reference the type as a
+  path, assign to the var, call the proc. `mob/var/clothing/feet` compiles under every hypothesis;
+  what separates them is that `/clothing/feet` is *"undefined type path"*.
+- **Read the tree, do not infer it.** `-o` prints what the compiler actually built. That is how the
+  `clothing` question was settled, and it is stronger than any number of probes.
+- **Include a negative control.** A probe that cannot fail proves nothing. Every accuracy test here
+  is paired with one — a var that exists nowhere, an absolute-path equivalent, or the same construct
+  with the missing type supplied.
+- **Watch for probes that collide.** An early version of the var test used the name `name`, which is
+  a builtin on `/mob`, and reported a duplicate-definition error that had nothing to do with the
+  question. `x`, `y` and `z` on a `/turf` or `/mob` are the same trap.
+- **Check the error's line number.** It is evidence. The undefined-declared-type error lands on the
+  use, not on the declaration, which is the entire finding.
 
 ### Grades of evidence
 
@@ -972,6 +1207,12 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
 - **Cross-codebase corpus.** `tests/corpus` must not contain only the team's game. Add open BYOND
   codebases including an SS13 fork such as /tg/station; it is the harshest available preprocessor
   stress test and free to obtain.
+- **Differential testing against `dm.exe`.** Three flags make the compiler answer a question we also
+  answer, so the check is a diff rather than a judgement call: `-o` for the object tree, `-l` for the
+  include graph, `-code_tree` for declarations. `-o` already found three declaration bugs. Wiring
+  `dmc includes` against `-l` over the corpus is the cheapest one left and needs no new machinery —
+  both produce an ordered file list. Worth doing before M9 makes the include walk incremental, since
+  that is exactly the change most likely to reorder it silently.
 - **CLI driver** — `Dm.Cli dump-tokens|classify|dump-ast|dump-tree|complete|check game.dme`.
   Fastest debug loop, and the arbiter when an IDE reports a bug: if the CLI reproduces it, the bug
   is in the core.
@@ -1032,3 +1273,29 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
 - **2026-08-03** — M4 statements landed: `StatementParser` with both `switch` grammars, all four
   `for` shapes, and `#pragma syntax` mode tracking through `SyntaxModes`. Proc bodies are parsed
   rather than skipped. Nine parser gaps and one lexer gap came out of running it over the corpus.
+- **2026-08-03** — Pinned the leading-`.` search rule exactly (§4a): it follows path ancestry and
+  ignores `parent_type`, validates the whole relative path with backtracking, and takes the nearest
+  ancestor under which all of it resolves. The previous "first hit wins" wording would have been
+  implemented against the inheritance chain, which is wrong. Also established that a var's declared
+  type is resolved at the **use** site — a missing type compiles clean and fails wherever the var is
+  read — and that separators in a var declaration create no types, checked against `-o` rather than
+  inferred from a clean compile. Added the evidence standard behind all of it to §8, and corrected
+  the lint descriptions: `init_proc` keys on a non-constant initialiser, and both fire on `/datum`,
+  `/atom` and `/turf` exactly **plus the whole `/turf` subtree**. Two readings of that set —
+  "`/turf` only" and "the three exact types, no subtree" — are each wrong in a different direction,
+  so the matrix is recorded in full.
+- **2026-08-03** — Recorded the full `dm.exe` flag set in §8, with `-l` and `-code_tree` identified
+  as oracles alongside the `-o` we already use, and differential testing added to §9. Warning names
+  turn out to be shared with `#pragma ignore|warn|error`, which constrains how M11 identifies its
+  diagnostics — noted there and in §8.
+- **2026-08-03** — M6 type inference landed: `Binding/TypeInference`, wired into
+  `CompletionService`. Testing the milestone's own premise against `dm.exe` found that DM has **no
+  local type inference at all** and that `.` on an untyped var rejects every member, which turned
+  the item from compiler-matching into a deliberate divergence — recorded in §6 and §8, and stated
+  for integrators in `INTEGRATION.txt`. Also verified `dm.exe -D` and added injected defines to the
+  M4 remainder.
+- **2026-08-03** — Doc accuracy pass across `PLAN.md`, `ROADMAP.txt` and `INTEGRATION.txt`. Export
+  count, binary size, test count and ABI version brought to the numbers the tree actually produces;
+  §5 relabelled as the target layout with the unbuilt parts marked; `builtins.json` corrected to
+  `builtins.txt` throughout. `INTEGRATION.txt` had listed M5 and M6 twice and still described
+  syntax diagnostics as unshipped.

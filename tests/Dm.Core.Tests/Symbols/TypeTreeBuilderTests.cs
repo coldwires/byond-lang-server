@@ -162,6 +162,80 @@ public class TypeTreeBuilderTests
         Assert.Null(tree.Find("/obj/item/hp"));
     }
 
+    /// <summary>
+    /// <c>mob/proc</c> heads a block of procs on <c>/mob</c>: only the trailing keyword is the
+    /// grouping marker, and the segments before it are a type path. Passing the enclosing path
+    /// through unchanged put 34 of mlaas's procs on the root, found by diffing <c>dm.exe -o</c>.
+    /// </summary>
+    [Fact]
+    public void A_prefixed_group_header_owns_its_children()
+    {
+        ObjectTree tree = Build("mob/proc\n\tadd_verbs()\n\t\treturn\n");
+
+        Assert.NotNull(tree.Find("/mob")!.FindProc("add_verbs"));
+        Assert.Null(tree.Find("/")!.FindProc("add_verbs"));
+    }
+
+    /// <summary>
+    /// A <c>var</c> block nests: a child can head a deeper block, contributing a type or modifier
+    /// rather than being a variable itself. Reading the header as a variable loses it and every
+    /// child beneath it.
+    /// </summary>
+    [Fact]
+    public void A_nested_var_block_declares_its_children_not_its_headers()
+    {
+        ObjectTree tree = Build("obj/thing\n\tvar\n\t\tlist\n\t\t\tchains\n\t\ttmp\n\t\t\tobj\n\t\t\t\tgrapled\n");
+
+        TypeSymbol thing = tree.Find("/obj/thing")!;
+
+        Assert.NotNull(thing.FindVar("chains"));
+        Assert.NotNull(thing.FindVar("grapled"));
+
+        // The headers are not variables, and they are not types either.
+        Assert.Null(thing.FindVar("list"));
+        Assert.Null(thing.FindVar("tmp"));
+        Assert.Null(tree.Find("/obj/thing/list"));
+    }
+
+    /// <summary><c>var/list</c> on its own line heads a block; <c>var/hp</c> declares a variable.</summary>
+    [Fact]
+    public void A_typed_var_header_is_told_apart_by_the_indent_that_follows()
+    {
+        ObjectTree headed = Build("var/list\n\tticking_mobs = list()\n\tticking_areas = list()\n");
+        Assert.NotNull(headed.Root.FindVar("ticking_mobs"));
+        Assert.NotNull(headed.Root.FindVar("ticking_areas"));
+        Assert.Null(headed.Root.FindVar("list"));
+
+        // With nothing indented under it, the same shape is one variable.
+        Assert.NotNull(Build("var/hp\n").Root.FindVar("hp"));
+    }
+
+    /// <summary>
+    /// The slot after <c>var</c> takes a space as well as <c>/</c> and <c>.</c> (PLAN.md §4a). Read
+    /// as a bare header, the name on the same line is discarded — mlaas declares
+    /// <c>obj</c> / <c>var min_rank</c> that way.
+    /// </summary>
+    [Fact]
+    public void A_space_separated_var_declares_a_variable()
+    {
+        Assert.NotNull(Build("obj\n\tvar min_rank\n").Find("/obj")!.FindVar("min_rank"));
+    }
+
+    /// <summary>
+    /// A trailing separator collapses, so <c>tmp/</c> still heads a block. Leaving the separator
+    /// unconsumed turns the header into a variable called <c>tmp</c> and loses every child.
+    /// </summary>
+    [Fact]
+    public void A_block_header_may_carry_a_trailing_separator()
+    {
+        ObjectTree tree = Build("obj/small\n\tvar\n\t\ttmp/\n\t\t\tmob/last_owner\n\t\t\tunique_lock = 0\n");
+        TypeSymbol small = tree.Find("/obj/small")!;
+
+        Assert.NotNull(small.FindVar("last_owner"));
+        Assert.NotNull(small.FindVar("unique_lock"));
+        Assert.Null(small.FindVar("tmp"));
+    }
+
     // -- inheritance --------------------------------------------------------
 
     [Fact]
@@ -188,8 +262,9 @@ public class TypeTreeBuilderTests
         Assert.Equal("/datum/base", child.ParentType!.Value.Text);
         Assert.NotNull(tree.ResolveVar(child, "from_base"));
 
-        // It is a link, not a variable.
-        Assert.Null(child.FindVar("parent_type"));
+        // It is a link AND a variable: DM declares it as a real var, and `dm.exe -o` lists it as
+        // one, so dropping it would leave the tree short of something the compiler reports.
+        Assert.NotNull(child.FindVar("parent_type"));
     }
 
     /// <summary>

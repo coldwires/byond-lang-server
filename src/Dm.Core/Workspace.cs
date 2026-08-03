@@ -12,8 +12,9 @@ namespace Dm.Core;
 /// A loaded DM project, rooted at a <c>.dme</c> file, plus the documents open against it.
 /// </summary>
 /// <remarks>
-/// The include graph, preprocessor and object tree arrive in M3 and M5. What exists now is the
-/// document store: clients push editor buffers, and everything downstream reads from here.
+/// Two things live here: the document store, which clients push editor buffers into and everything
+/// downstream reads from, and the project's object tree, built on demand from the include graph and
+/// cached until a buffer changes.
 ///
 /// Thread contract for v1: one workspace is used from one thread at a time. Not enforced.
 /// </remarks>

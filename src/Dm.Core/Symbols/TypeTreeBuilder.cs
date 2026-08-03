@@ -72,13 +72,21 @@ public static class TypeTreeBuilder
 
         switch (declaration)
         {
-            // A bare `var` or `proc` header declares nothing itself; its children belong to the
-            // enclosing type, and giving it a node would create a type literally named `var`.
+            // A `var` or `proc` header declares nothing itself; it says what kind its children are,
+            // and giving it a node would create a type literally named `var`.
+            //
+            // It can still carry a type path in front of the keyword. `mob/proc` heads a block of
+            // procs on /mob, so only the trailing keyword is the marker — passing the enclosing path
+            // through unchanged puts every child on the root instead.
             case TypeDeclarationSyntax { IsGroupHeader: true } group:
+            {
+                TypePath owner = GroupOwner(enclosing, group.Path);
+
                 foreach (DeclarationSyntax member in group.Members)
-                    Walk(tree, file, member, enclosing, cancellationToken);
+                    Walk(tree, file, member, owner, cancellationToken);
 
                 break;
+            }
 
             case TypeDeclarationSyntax type:
             {
@@ -120,8 +128,8 @@ public static class TypeTreeBuilder
         {
             if (variable.Initializer is PathExpressionSyntax path)
             {
+                // It is a real var as well as an inheritance link, and `dm.exe -o` lists it as one.
                 tree.GetOrAdd(owner).ParentType = TypePath.Parse(path.Path.Text);
-                return;
             }
         }
 
@@ -197,6 +205,30 @@ public static class TypeTreeBuilder
         }
 
         return Owner(enclosing, path, take);
+    }
+
+    /// <summary>
+    /// The type whose members a <c>var</c>/<c>proc</c> block header introduces.
+    /// </summary>
+    /// <remarks>
+    /// Everything before the keyword. A bare <c>var</c> or <c>proc</c> has nothing before it and so
+    /// leaves the enclosing type alone, but <c>mob/proc</c> owns its children on <c>/mob</c>.
+    /// Found by diffing against <c>dm.exe -o</c> on mlaas: 34 procs were landing on the root.
+    /// </remarks>
+    private static TypePath GroupOwner(TypePath enclosing, PathSyntax path)
+    {
+        IReadOnlyList<string> segments = path.Segments;
+
+        for (int i = 0; i < segments.Count; i++)
+        {
+            if (segments[i] is "var" or "proc" or "verb")
+                return Owner(enclosing, path, i);
+        }
+
+        // No keyword means this is a header nested inside a `var` block, where the segments are a
+        // type prefix for the children rather than a path to them. `UI/Stats/Child` under
+        // `/UI/Stats/Frame` declares members of Frame, not of `/UI/Stats/Frame/UI/Stats`.
+        return enclosing;
     }
 
     /// <summary>The type a bare assignment overrides a var on: everything before the name.</summary>

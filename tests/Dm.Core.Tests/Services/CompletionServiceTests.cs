@@ -228,4 +228,138 @@ public class CompletionServiceTests
             Directory.Delete(dir, true);
         }
     }
+
+    // -- inference ----------------------------------------------------------
+    //
+    // Everything below offers more than dm.exe accepts. The compiler has no local type inference:
+    // `var/x = new /obj/item` then `x.hp` is "x.hp: undefined var", verified against 516.1666 and
+    // recorded in PLAN.md §8. These are a deliberate editor affordance, not a compiler claim.
+
+    [Fact]
+    public void An_untyped_local_infers_from_new()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = new /obj/item\n\tx.|\n");
+
+        Assert.Contains("hp", Names(result));
+    }
+
+    [Fact]
+    public void Inference_through_new_survives_arguments_and_a_modified_type()
+    {
+        Assert.Contains("hp", Names(Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = new /obj/item(src)\n\tx.|\n")));
+
+        Assert.Contains("hp", Names(Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = new /obj/item{hp = 2}\n\tx.|\n")));
+    }
+
+    /// <summary>A bare <c>new</c> names no type, so there is nothing to infer from it.</summary>
+    [Fact]
+    public void A_bare_new_infers_nothing()
+    {
+        CompletionResult result = Complete("/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = new\n\tx.|\n");
+
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public void An_untyped_local_infers_from_a_later_assignment()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x\n\tx = new /obj/item\n\tx.|\n");
+
+        Assert.Contains("hp", Names(result));
+    }
+
+    /// <summary>
+    /// The nearest assignment before the cursor wins, so a name pointed at a second type reports
+    /// the second one rather than whatever it held first.
+    /// </summary>
+    [Fact]
+    public void Reassignment_reports_the_most_recent_type()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/datum/other\n\tvar/elsewhere = 2\n"
+            + "/proc/f()\n\tvar/x = new /obj/item\n\tx = new /datum/other\n\tx.|\n");
+
+        string[] names = Names(result);
+        Assert.Contains("elsewhere", names);
+        Assert.DoesNotContain("hp", names);
+    }
+
+    /// <summary>An assignment below the cursor has not happened yet at the position being asked about.</summary>
+    [Fact]
+    public void An_assignment_after_the_cursor_is_ignored()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x\n\tx.|\n\tx = new /obj/item\n");
+
+        Assert.Empty(result.Items);
+    }
+
+    [Fact]
+    public void An_untyped_local_infers_from_another_typed_local()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/obj/item/a = new\n\tvar/x = a\n\tx.|\n");
+
+        Assert.Contains("hp", Names(result));
+    }
+
+    [Fact]
+    public void A_parameter_infers_from_its_as_clause()
+    {
+        CompletionResult result = Complete(
+            "/proc/f(M as mob)\n\tM.|\n", withBuiltins: true);
+
+        Assert.Contains("Login", Names(result));
+    }
+
+    /// <summary>
+    /// <c>as text</c> describes a value rather than an object, so there is no type to resolve
+    /// members against and the list stays empty rather than guessing.
+    /// </summary>
+    [Fact]
+    public void A_value_shaped_as_clause_infers_nothing()
+    {
+        CompletionResult result = Complete("/proc/f(T as text)\n\tT.|\n", withBuiltins: true);
+
+        Assert.Empty(result.Items);
+    }
+
+    /// <summary>A written type always wins; inference only fills a slot the author left empty.</summary>
+    [Fact]
+    public void A_declared_type_beats_a_conflicting_initialiser()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/datum/other\n\tvar/elsewhere = 2\n"
+            + "/proc/f()\n\tvar/obj/item/x = new /datum/other\n\tx.|\n");
+
+        string[] names = Names(result);
+        Assert.Contains("hp", names);
+        Assert.DoesNotContain("elsewhere", names);
+    }
+
+    /// <summary>A name initialised from itself must not send the resolver into a loop.</summary>
+    [Fact]
+    public void Self_reference_terminates()
+    {
+        CompletionResult result = Complete("/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = x\n\tx.|\n");
+
+        Assert.Empty(result.Items);
+    }
+
+    /// <summary>
+    /// A call result still resolves to nothing. That is the one place DM itself gives up, letting
+    /// <c>.</c> behave like <c>:</c>, so there is no single type to offer.
+    /// </summary>
+    [Fact]
+    public void A_call_result_still_infers_nothing()
+    {
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/mk()\n\treturn new /obj/item\n/proc/f()\n\tvar/x = mk()\n\tx.|\n");
+
+        Assert.Empty(result.Items);
+    }
 }
