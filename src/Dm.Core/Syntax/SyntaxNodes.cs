@@ -86,11 +86,27 @@ public abstract class DeclarationSyntax : SyntaxNode
 /// <summary>A type node such as <c>/obj/item</c>, possibly with members indented beneath it.</summary>
 public sealed class TypeDeclarationSyntax : DeclarationSyntax
 {
-    public TypeDeclarationSyntax(PathSyntax path, IReadOnlyList<DeclarationSyntax> members, TextSpan span)
+    public TypeDeclarationSyntax(
+        PathSyntax path,
+        IReadOnlyList<DeclarationSyntax> members,
+        TextSpan span,
+        bool isGroupHeader = false)
         : base(path, span)
-        => Members = members;
+    {
+        Members = members;
+        IsGroupHeader = isGroupHeader;
+    }
 
     public IReadOnlyList<DeclarationSyntax> Members { get; }
+
+    /// <summary>
+    /// True for a bare <c>var</c>, <c>proc</c> or <c>var/const</c> line that only heads a block.
+    /// </summary>
+    /// <remarks>
+    /// It declares no type of its own — it says what kind its children are. An outline lifts the
+    /// children past it, and the object tree must not create a type node named <c>var</c>.
+    /// </remarks>
+    public bool IsGroupHeader { get; }
 }
 
 /// <summary>A <c>var</c> declaration, or a group of them under one <c>var/</c>.</summary>
@@ -143,13 +159,18 @@ public sealed class ProcDeclarationSyntax : DeclarationSyntax
         IReadOnlyList<ParameterSyntax> parameters,
         bool isVerb,
         bool isNewDeclaration,
+        BlockStatementSyntax? body,
         TextSpan span)
         : base(path, span)
     {
         Parameters = parameters;
         IsVerb = isVerb;
         IsNewDeclaration = isNewDeclaration;
+        Body = body;
     }
+
+    /// <summary>The proc's statements, or null for an empty-bodied override.</summary>
+    public BlockStatementSyntax? Body { get; }
 
     public IReadOnlyList<ParameterSyntax> Parameters { get; }
 

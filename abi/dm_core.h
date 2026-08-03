@@ -166,6 +166,61 @@ const int32_t *dm_classification_data(dm_classification classification);
 
 void dm_classification_free(dm_classification classification);
 
+/* -- document symbols ---------------------------------------------------- */
+
+/*
+ * The file's outline plus its syntax diagnostics, as a UTF-8 JSON document.
+ * Added in ABI 0.3.
+ *
+ * You own the buffer. Release it with dm_free.
+ *
+ * Serialized rather than handle-based because symbols carry names, which a packed
+ * int32 block cannot express without a string table on both sides. An outline is
+ * rebuilt per edit, not per scroll, so this is the cheaper trade here - unlike
+ * dm_classify_range, which is on the paint path.
+ *
+ * Shape:
+ *
+ *   {
+ *     "symbols": [
+ *       {
+ *         "name": "item",
+ *         "detail": "/obj/item",     annotation for the outline; may be ""
+ *         "kind": 0,                 see dm_symbol_kind below
+ *         "startLine": 0, "startChar": 5,    whole declaration, members included
+ *         "endLine": 3,   "endChar": 0,
+ *         "selStartLine": 0, "selStartChar": 5,   the NAME alone
+ *         "selEndLine": 0,   "selEndChar": 9,
+ *         "children": [ ... ]
+ *       }
+ *     ],
+ *     "diagnostics": [
+ *       { "id": "DM0200", "message": "expected a declaration",
+ *         "startLine": 4, "startChar": 0, "endLine": 4, "endChar": 3 }
+ *     ]
+ *   }
+ *
+ * Use the sel* range to highlight or navigate: it covers the name, so clicking an
+ * outline entry puts the caret on the identifier rather than on the whole block.
+ *
+ * Lines and characters are ZERO-BASED, and characters follow the encoding you pass,
+ * exactly as in dm_classify_range.
+ */
+dm_status dm_document_symbols(dm_workspace workspace, const char *file,
+                              dm_position_encoding encoding, char **out_json);
+
+/*
+ * Values are a permanent contract and are never reused. Handle an unknown kind by
+ * falling back to a neutral icon, so a library update cannot break your outline.
+ */
+typedef int32_t dm_symbol_kind;
+
+#define DM_SYMBOL_TYPE      0   /* a node in the type tree, /obj/item          */
+#define DM_SYMBOL_VARIABLE  1   /* a var, at type level or global              */
+#define DM_SYMBOL_PROC      2   /* a proc                                      */
+#define DM_SYMBOL_VERB      3   /* a verb - a player can invoke it directly    */
+#define DM_SYMBOL_PARAMETER 4   /* a proc parameter                            */
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

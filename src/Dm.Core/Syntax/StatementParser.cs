@@ -1,0 +1,1211 @@
+using System;
+using System.Collections.Generic;
+using Dm.Core.Diagnostics;
+using Dm.Core.Text;
+
+namespace Dm.Core.Syntax;
+
+/// <summary>
+/// Parses the statements of a proc body.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Two of DM's statement grammars are <b>position-dependent</b>, not per-file constants.
+/// <c>#pragma syntax C for</c> and <c>#pragma syntax C switch</c> change the grammar from the line
+/// they appear on, and <c>#pragma push</c> / <c>#pragma pop</c> scope them. So the mode is tracked
+/// as a stack while walking, and a body parsed before the pragma uses the older grammar.
+/// </para>
+/// <para>
+/// What the <c>for</c> pragma does is <b>swap what the comma means</b>: by default a comma separates
+/// clauses, and with the pragma it chains statements within one clause. Semicolons separate clauses
+/// in both modes, which is why the pragma cannot be described as "enabling semicolons" —
+/// compiler-verified, PLAN.md §8.
+/// </para>
+/// <para>
+/// Recovery is line-oriented, matching <see cref="DeclarationParser"/>: an unparseable statement
+/// costs its line and nothing more.
+/// </para>
+/// </remarks>
+public sealed class StatementParser
+{
+    private static readonly HashSet<string> VarModifiers =
+        new(StringComparer.Ordinal) { "const", "tmp", "global", "static", "final" };
+
+    private readonly IReadOnlyList<Token> _tokens;
+    private readonly SourceText _text;
+    private readonly List<Diagnostic> _diagnostics;
+
+    /// <summary>Shared with the declaration parser, since the pragma lives outside proc bodies.</summary>
+    private readonly SyntaxModes _modes;
+
+    private int _position;
+
+    private StatementParser(
+        IReadOnlyList<Token> tokens,
+        SourceText text,
+        List<Diagnostic> diagnostics,
+        int position,
+        SyntaxModes modes)
+    {
+        _tokens = tokens;
+        _text = text;
+        _diagnostics = diagnostics;
+        _position = position;
+        _modes = modes;
+    }
+
+    /// <summary>
+    /// Parses a proc body, starting immediately after the signature's closing parenthesis.
+    /// </summary>
+    /// <remarks>
+    /// Handles both shapes: an indented block on the following lines, and a body written on the
+    /// signature line itself, as <c>stddef.dm</c>'s <c>Multiply(m) return matrix(src, m)</c> does.
+    /// </remarks>
+    public static (BlockStatementSyntax? Body, int Position) ParseProcBody(
+        IReadOnlyList<Token> tokens,
+        SourceText text,
+        List<Diagnostic> diagnostics,
+        int position,
+        SyntaxModes modes)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(modes);
+
+        StatementParser parser = new(tokens, text, diagnostics, position, modes);
+        BlockStatementSyntax? body = parser.ParseBody();
+        return (body, parser._position);
+    }
+
+    // -- token access ------------------------------------------------------
+
+    private TokenKind Current => _position < _tokens.Count ? _tokens[_position].Kind : TokenKind.EndOfFile;
+
+    private TokenKind Peek(int offset = 1)
+        => _position + offset < _tokens.Count ? _tokens[_position + offset].Kind : TokenKind.EndOfFile;
+
+    private bool AtEnd => _position >= _tokens.Count || Current == TokenKind.EndOfFile;
+
+    private TextSpan CurrentSpan
+        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_text.Length, 0);
+
+    private string TextOf(int index) => _text.ToString(_tokens[index].Span);
+
+    private string CurrentText => _position < _tokens.Count ? TextOf(_position) : string.Empty;
+
+    private TextSpan SpanFrom(int startToken)
+    {
+        if (startToken >= _tokens.Count)
+            return CurrentSpan;
+
+        int endToken = Math.Min(Math.Max(startToken, _position - 1), _tokens.Count - 1);
+        return TextSpan.FromBounds(_tokens[startToken].Span.Start, _tokens[endToken].Span.End);
+    }
+
+    private static bool IsNameLike(TokenKind kind) => kind
+        is TokenKind.Identifier
+        or TokenKind.KeywordSrc
+        or TokenKind.KeywordUsr
+        or TokenKind.KeywordWorld
+        or TokenKind.KeywordGlobal;
+
+    private void Report(TextSpan span, string message)
+        => _diagnostics.Add(Diagnostic.Error("DM0202", span, message));
+
+    private ExpressionSyntax ParseExpression(bool colonTerminates = false)
+    {
+        (ExpressionSyntax expression, int next) =
+            ExpressionParser.Parse(_tokens, _text, _diagnostics, _position, colonTerminates);
+
+        _position = next > _position ? next : _position + 1;
+        return expression;
+    }
+
+    // -- layout ------------------------------------------------------------
+
+    private void SkipNewlines()
+    {
+        while (Current == TokenKind.Newline)
+            _position++;
+    }
+
+    /// <summary>
+    /// Skips blank lines and directive lines while looking for the token that opens a block.
+    /// </summary>
+    /// <remarks>
+    /// A directive emits no Indent, so one between a header and its body would otherwise hide the
+    /// Indent the next code line does emit, and the body would be lost. Consuming it here also keeps
+    /// the <c>#pragma</c> state current, which is what makes the mode position-dependent.
+    /// </remarks>
+    private void SkipNewlinesAndDirectives()
+    {
+        while (true)
+        {
+            if (Current == TokenKind.Newline)
+                _position++;
+            else if (Current == TokenKind.Hash)
+                ConsumeDirective();
+            else
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Consumes a directive line and applies it if it is a <c>#pragma</c> that changes the grammar.
+    /// </summary>
+    /// <remarks>
+    /// Directives carry no indentation of their own, so one inside a body is simply skipped rather
+    /// than treated as a line of the block — compiler-verified, PLAN.md §8.
+    /// </remarks>
+    private void ConsumeDirective()
+    {
+        int start = _position;
+        _position++;
+
+        List<string> words = new();
+
+        while (!AtEnd && Current is not (TokenKind.Newline or TokenKind.Dedent))
+        {
+            words.Add(TextOf(_position));
+            _position++;
+        }
+
+        if (Current == TokenKind.Newline)
+            _position++;
+
+        _modes.Apply(words);
+
+        if (_modes.PopWithoutPush)
+            Report(SpanFrom(start), "'#pragma pop' without a matching '#pragma push'");
+    }
+
+    // -- blocks ------------------------------------------------------------
+
+    /// <summary>Parses a body in any of its three shapes: inline, brace block, or indented block.</summary>
+    private BlockStatementSyntax? ParseBody()
+    {
+        int start = _position;
+
+        // A body written on the header's own line, as in `Multiply(m) return matrix(src, m)`.
+        // A directive is not an inline body, so it is excluded here and handled below.
+        if (Current is not (TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent
+            or TokenKind.EndOfFile or TokenKind.OpenBrace or TokenKind.Hash))
+        {
+            List<StatementSyntax> inline = ParseInlineStatements();
+
+            if (Current == TokenKind.Newline)
+                _position++;
+
+            BlockStatementSyntax inlineBlock = new(inline, SpanFrom(start));
+
+            // An inline body can still be followed by an indented block, as `if(x) return` never is
+            // but a type header with members is.
+            return inlineBlock;
+        }
+
+        if (Current == TokenKind.Newline)
+            _position++;
+
+        SkipNewlinesAndDirectives();
+
+        if (Current == TokenKind.OpenBrace)
+            return ParseBraceBlock();
+
+        if (Current != TokenKind.Indent)
+            return null;
+
+        _position++;
+        List<StatementSyntax> statements = ParseStatementsUntilDedent();
+
+        if (Current == TokenKind.Dedent)
+            _position++;
+
+        return new BlockStatementSyntax(statements, SpanFrom(start));
+    }
+
+    private BlockStatementSyntax ParseBraceBlock()
+    {
+        int start = _position;
+        _position++;
+
+        List<StatementSyntax> statements = new();
+
+        while (!AtEnd && Current != TokenKind.CloseBrace)
+        {
+            if (Current is TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent or TokenKind.Semicolon)
+            {
+                _position++;
+                continue;
+            }
+
+            if (Current == TokenKind.Hash)
+            {
+                ConsumeDirective();
+                continue;
+            }
+
+            int before = _position;
+            statements.Add(ParseStatement());
+
+            if (_position == before)
+                _position++;
+        }
+
+        if (Current == TokenKind.CloseBrace)
+            _position++;
+        else
+            Report(CurrentSpan, "expected '}'");
+
+        return new BlockStatementSyntax(statements, SpanFrom(start));
+    }
+
+    private List<StatementSyntax> ParseStatementsUntilDedent()
+    {
+        List<StatementSyntax> statements = new();
+
+        while (true)
+        {
+            SkipNewlines();
+
+            if (AtEnd || Current == TokenKind.Dedent)
+                break;
+
+            if (Current == TokenKind.Hash)
+            {
+                ConsumeDirective();
+                continue;
+            }
+
+            if (Current == TokenKind.Semicolon)
+            {
+                _position++;
+                continue;
+            }
+
+            // A stray Indent means the previous line opened a block we did not consume. Take it as a
+            // nested block rather than losing everything under it.
+            if (Current == TokenKind.Indent)
+            {
+                _position++;
+                statements.AddRange(ParseStatementsUntilDedent());
+
+                if (Current == TokenKind.Dedent)
+                    _position++;
+
+                continue;
+            }
+
+            int before = _position;
+            statements.AddRange(ParseInlineStatements());
+
+            if (Current == TokenKind.Newline)
+                _position++;
+
+            if (_position == before)
+                _position++;
+        }
+
+        return statements;
+    }
+
+    /// <summary>Parses the statements on one line, which <c>;</c> may separate.</summary>
+    private List<StatementSyntax> ParseInlineStatements()
+    {
+        List<StatementSyntax> statements = new();
+
+        while (!AtEnd && Current is not (TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent))
+        {
+            if (Current == TokenKind.Semicolon)
+            {
+                _position++;
+                continue;
+            }
+
+            if (Current == TokenKind.CloseBrace)
+                break;
+
+            int before = _position;
+            statements.Add(ParseStatement());
+
+            if (_position == before)
+            {
+                _position++;
+                break;
+            }
+        }
+
+        return statements;
+    }
+
+    // -- statements --------------------------------------------------------
+
+    private StatementSyntax ParseStatement()
+    {
+        int start = _position;
+
+        switch (Current)
+        {
+            case TokenKind.KeywordVar:
+                return ParseLocalVar();
+
+            case TokenKind.KeywordIf:
+                return ParseIf();
+
+            case TokenKind.KeywordFor:
+                return ParseFor();
+
+            case TokenKind.KeywordWhile:
+                return ParseWhile();
+
+            case TokenKind.KeywordDo:
+                return ParseDoWhile();
+
+            case TokenKind.KeywordSwitch:
+                return ParseSwitch();
+
+            case TokenKind.KeywordSpawn:
+                return ParseSpawn();
+
+            case TokenKind.KeywordTry:
+                return ParseTry();
+
+            case TokenKind.KeywordSet:
+                return ParseSet();
+
+            case TokenKind.KeywordReturn:
+            {
+                _position++;
+                ExpressionSyntax? value = IsStatementEnd() ? null : ParseExpression();
+                return new ReturnStatementSyntax(value, SpanFrom(start));
+            }
+
+            case TokenKind.KeywordBreak:
+            case TokenKind.KeywordContinue:
+            {
+                bool isContinue = Current == TokenKind.KeywordContinue;
+                _position++;
+
+                // Both take an optional loop label.
+                string? label = null;
+                if (IsNameLike(Current))
+                {
+                    label = CurrentText;
+                    _position++;
+                }
+
+                return new BreakStatementSyntax(isContinue, label, SpanFrom(start));
+            }
+
+            case TokenKind.KeywordGoto:
+            {
+                _position++;
+                string? label = null;
+
+                if (IsNameLike(Current))
+                {
+                    label = CurrentText;
+                    _position++;
+                }
+
+                return new GotoStatementSyntax(label, SpanFrom(start));
+            }
+
+            // `del x` and `throw x` take a bare operand with no parentheses.
+            case TokenKind.KeywordDel:
+            case TokenKind.KeywordThrow:
+            {
+                TokenKind keyword = Current;
+                _position++;
+                ExpressionSyntax? operand = IsStatementEnd() ? null : ParseExpression();
+                return new UnaryStatementSyntax(keyword, operand, SpanFrom(start));
+            }
+
+            case TokenKind.OpenBrace:
+                return ParseBraceBlock();
+
+            default:
+            {
+                // A loop label is `name:` alone on its line.
+                if (IsNameLike(Current) && Peek() == TokenKind.Colon && IsLineEnd(_position + 2))
+                {
+                    string name = CurrentText;
+                    _position += 2;
+                    StatementSyntax? body = ParseBody();
+                    return new LabelStatementSyntax(name, body, SpanFrom(start));
+                }
+
+                ExpressionSyntax expression = ParseExpression();
+                return new ExpressionStatementSyntax(expression, SpanFrom(start));
+            }
+        }
+    }
+
+    private bool IsStatementEnd() => AtEnd || Current is TokenKind.Newline or TokenKind.Indent
+        or TokenKind.Dedent or TokenKind.Semicolon or TokenKind.CloseBrace or TokenKind.CloseParen;
+
+    private bool IsLineEnd(int index)
+    {
+        TokenKind kind = index < _tokens.Count ? _tokens[index].Kind : TokenKind.EndOfFile;
+        return kind is TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent or TokenKind.EndOfFile;
+    }
+
+    /// <summary>Consumes a parenthesised expression, as every control-flow header has.</summary>
+    private ExpressionSyntax ParseParenthesised()
+    {
+        if (Current != TokenKind.OpenParen)
+        {
+            Report(CurrentSpan, "expected '('");
+            return new ErrorExpressionSyntax(CurrentSpan);
+        }
+
+        _position++;
+        ExpressionSyntax expression = ParseExpression();
+
+        if (Current == TokenKind.CloseParen)
+            _position++;
+        else
+            Report(CurrentSpan, "expected ')'");
+
+        return expression;
+    }
+
+    private StatementSyntax ParseIf()
+    {
+        int start = _position;
+        _position++;
+
+        ExpressionSyntax condition = ParseParenthesised();
+        StatementSyntax? then = ParseBody();
+
+        StatementSyntax? otherwise = null;
+        int save = _position;
+        SkipNewlines();
+
+        if (Current == TokenKind.KeywordElse)
+        {
+            _position++;
+
+            // `else if` continues the chain on the same line.
+            otherwise = Current == TokenKind.KeywordIf ? ParseIf() : ParseBody();
+        }
+        else
+        {
+            _position = save;
+        }
+
+        return new IfStatementSyntax(condition, then, otherwise, SpanFrom(start));
+    }
+
+    private StatementSyntax ParseWhile()
+    {
+        int start = _position;
+        _position++;
+
+        ExpressionSyntax condition = ParseParenthesised();
+        StatementSyntax? body = ParseBody();
+
+        return new WhileStatementSyntax(condition, body, SpanFrom(start));
+    }
+
+    private StatementSyntax ParseDoWhile()
+    {
+        int start = _position;
+        _position++;
+
+        StatementSyntax? body = ParseBody();
+
+        SkipNewlines();
+
+        ExpressionSyntax? condition = null;
+        if (Current == TokenKind.KeywordWhile)
+        {
+            _position++;
+            condition = ParseParenthesised();
+        }
+        else
+        {
+            Report(CurrentSpan, "expected 'while' to close a 'do' loop");
+        }
+
+        return new DoWhileStatementSyntax(body, condition, SpanFrom(start));
+    }
+
+    private StatementSyntax ParseSpawn()
+    {
+        int start = _position;
+        _position++;
+
+        // `spawn()` with empty parentheses is common and means no delay.
+        ExpressionSyntax? delay = null;
+
+        if (Current == TokenKind.OpenParen && Peek() == TokenKind.CloseParen)
+            _position += 2;
+        else if (Current == TokenKind.OpenParen)
+            delay = ParseParenthesised();
+
+        StatementSyntax? body = ParseBody();
+
+        return new SpawnStatementSyntax(delay, body, SpanFrom(start));
+    }
+
+    private StatementSyntax ParseTry()
+    {
+        int start = _position;
+        _position++;
+
+        StatementSyntax? body = ParseBody();
+        SkipNewlines();
+
+        LocalVarStatementSyntax? exception = null;
+        StatementSyntax? catchBody = null;
+
+        if (Current == TokenKind.KeywordCatch)
+        {
+            _position++;
+
+            if (Current == TokenKind.OpenParen)
+            {
+                _position++;
+
+                if (Current == TokenKind.KeywordVar)
+                    exception = ParseLocalVar() as LocalVarStatementSyntax;
+
+                while (!AtEnd && Current != TokenKind.CloseParen)
+                    _position++;
+
+                if (Current == TokenKind.CloseParen)
+                    _position++;
+            }
+
+            catchBody = ParseBody();
+        }
+
+        return new TryStatementSyntax(body, exception, catchBody, SpanFrom(start));
+    }
+
+    /// <summary><c>set name = value</c>, or the <c>set src in view()</c> form.</summary>
+    private StatementSyntax ParseSet()
+    {
+        int start = _position;
+        _position++;
+
+        // `set` alone on a line heads an indented block of settings.
+        if (IsLineEnd(_position))
+        {
+            StatementSyntax? block = ParseBody();
+            return block ?? new BlockStatementSyntax(Array.Empty<StatementSyntax>(), SpanFrom(start));
+        }
+
+        string name = IsNameLike(Current) ? CurrentText : string.Empty;
+
+        if (IsNameLike(Current))
+            _position++;
+        else
+            Report(CurrentSpan, "expected a setting name after 'set'");
+
+        ExpressionSyntax? value = null;
+
+        if (Current == TokenKind.Assign || Current == TokenKind.KeywordIn)
+        {
+            _position++;
+            value = ParseExpression();
+        }
+
+        return new SetStatementSyntax(name, value, SpanFrom(start));
+    }
+
+    // -- local variables ---------------------------------------------------
+
+    private StatementSyntax ParseLocalVar()
+    {
+        int start = _position;
+        _position++;
+
+        // A `var` line carrying nothing but modifiers heads an indented block, and every child
+        // inherits them:  var/tmp
+        //                     mystats = new/list(10)
+        //                     myabilities[]
+        int probe = _position;
+        List<string> blockModifiers = new();
+
+        while (probe + 1 < _tokens.Count
+               && _tokens[probe].Kind is TokenKind.Slash or TokenKind.Dot
+               && IsNameLike(_tokens[probe + 1].Kind)
+               && VarModifiers.Contains(TextOf(probe + 1)))
+        {
+            blockModifiers.Add(TextOf(probe + 1));
+            probe += 2;
+        }
+
+        if (IsLineEnd(probe))
+        {
+            _position = probe;
+            return ParseVarBlock(start, blockModifiers);
+        }
+
+        // The brace-group form, `var{html = X; extra = Y}`.
+        if (_tokens[probe].Kind == TokenKind.OpenBrace)
+        {
+            _position = probe;
+            return ParseBraceBlock();
+        }
+
+        if (Current is TokenKind.Slash or TokenKind.Dot)
+            _position++;
+
+        return ParseLocalVarNames(start);
+    }
+
+    /// <summary>Parses the indented children of a bare <c>var</c> block, each one a declaration.</summary>
+    private StatementSyntax ParseVarBlock(int start, List<string> modifiers)
+    {
+        if (Current == TokenKind.Newline)
+            _position++;
+
+        SkipNewlinesAndDirectives();
+
+        if (Current != TokenKind.Indent)
+            return new BlockStatementSyntax(Array.Empty<StatementSyntax>(), SpanFrom(start));
+
+        _position++;
+        List<StatementSyntax> children = ParseVarBlockChildren(modifiers);
+
+        if (Current == TokenKind.Dedent)
+            _position++;
+
+        return new BlockStatementSyntax(children, SpanFrom(start));
+    }
+
+    private StatementSyntax ParseLocalVarNames(int start, List<string>? inherited = null, bool allowSiblings = true)
+    {
+        List<string> modifiers = inherited is null ? new() : new(inherited);
+        List<string> segments = new();
+        List<TextSpan> spans = new();
+
+        while (IsNameLike(Current))
+        {
+            string word = CurrentText;
+
+            if (VarModifiers.Contains(word) && segments.Count == 0)
+            {
+                modifiers.Add(word);
+                _position++;
+            }
+            else
+            {
+                segments.Add(word);
+                spans.Add(CurrentSpan);
+                _position++;
+            }
+
+            if (Current is TokenKind.Slash or TokenKind.Dot && IsNameLike(Peek()))
+            {
+                _position++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (segments.Count == 0)
+        {
+            Report(CurrentSpan, "expected a variable name");
+            return new ExpressionStatementSyntax(new ErrorExpressionSyntax(CurrentSpan), SpanFrom(start));
+        }
+
+        // The last segment is the name; anything before it is the declared type.
+        string name = segments[^1];
+        TextSpan nameSpan = spans[^1];
+
+        PathSyntax? declaredType = segments.Count == 1
+            ? null
+            : new PathSyntax(
+                PathAnchor.Absolute,
+                segments.GetRange(0, segments.Count - 1),
+                TextSpan.FromBounds(spans[0].Start, spans[^2].End),
+                spans.GetRange(0, spans.Count - 1));
+
+        // `var/L[]` and `var/M[10]` are declaration brackets, not indexing.
+        while (Current == TokenKind.OpenBracket)
+        {
+            int depth = 0;
+
+            do
+            {
+                if (Current == TokenKind.OpenBracket)
+                    depth++;
+                else if (Current == TokenKind.CloseBracket)
+                    depth--;
+
+                _position++;
+            }
+            while (depth > 0 && !AtEnd);
+        }
+
+        ExpressionSyntax? initializer = null;
+
+        if (Current == TokenKind.Assign)
+        {
+            _position++;
+            initializer = ParseExpression();
+        }
+
+        // `as` constrains a declaration too, as in `var/t as text`.
+        if (Current == TokenKind.KeywordAs)
+        {
+            _position++;
+
+            while (IsNameLike(Current) || Current == TokenKind.KeywordNull)
+            {
+                _position++;
+
+                if (Current != TokenKind.Pipe)
+                    break;
+
+                _position++;
+            }
+        }
+
+        List<LocalVarStatementSyntax> siblings = new();
+
+        while (allowSiblings && Current == TokenKind.Comma && IsNameLike(Peek()))
+        {
+            _position++;
+            int siblingStart = _position;
+
+            if (ParseLocalVarNames(siblingStart, inherited) is LocalVarStatementSyntax sibling)
+                siblings.Add(sibling);
+            else
+                break;
+        }
+
+        return new LocalVarStatementSyntax(
+            name, nameSpan, declaredType, modifiers, initializer, siblings, SpanFrom(start));
+    }
+
+    /// <summary>
+    /// Reads the names in a <c>var</c> block, including nested groups.
+    /// </summary>
+    /// <remarks>
+    /// A child can head its own indented group, where it acts as a type prefix for the names beneath
+    /// it — <c>var</c> / <c>obj/small/egg</c> / <c>E</c> declares <c>E</c> of that type. Consuming
+    /// the Indent without recursing leaves the block structure unbalanced, which costs every
+    /// declaration after the enclosing proc rather than just this one.
+    /// </remarks>
+    private List<StatementSyntax> ParseVarBlockChildren(List<string> modifiers)
+    {
+        List<StatementSyntax> children = new();
+
+        while (true)
+        {
+            SkipNewlines();
+
+            if (AtEnd || Current == TokenKind.Dedent)
+                break;
+
+            if (Current == TokenKind.Hash)
+            {
+                ConsumeDirective();
+                continue;
+            }
+
+            // `mask_chance; see_chance` declares two names on one line.
+            if (Current == TokenKind.Semicolon)
+            {
+                _position++;
+                continue;
+            }
+
+            if (Current == TokenKind.Indent)
+            {
+                _position++;
+                children.AddRange(ParseVarBlockChildren(modifiers));
+
+                if (Current == TokenKind.Dedent)
+                    _position++;
+
+                continue;
+            }
+
+            int before = _position;
+            children.Add(ParseLocalVarNames(_position, modifiers));
+
+            if (Current == TokenKind.Newline)
+                _position++;
+
+            if (_position == before)
+                _position++;
+        }
+
+        return children;
+    }
+
+    // -- for ---------------------------------------------------------------
+
+    private StatementSyntax ParseFor()
+    {
+        int start = _position;
+        _position++;
+
+        if (Current != TokenKind.OpenParen)
+        {
+            Report(CurrentSpan, "expected '(' after 'for'");
+            return new ExpressionStatementSyntax(new ErrorExpressionSyntax(CurrentSpan), SpanFrom(start));
+        }
+
+        _position++;
+
+        List<StatementSyntax> initializers = new();
+        List<StatementSyntax> increments = new();
+        ExpressionSyntax? condition = null;
+        ExpressionSyntax? sequence = null;
+        ExpressionSyntax? rangeEnd = null;
+        ExpressionSyntax? step = null;
+        ForKind kind = ForKind.Bare;
+
+        if (Current != TokenKind.CloseParen)
+        {
+            initializers.Add(ParseForClause());
+
+            switch (Current)
+            {
+                // `for(var/x in L)`, and the 516 `for(var/k, v in assoc)` form.
+                case TokenKind.KeywordIn:
+                    kind = ForKind.In;
+                    _position++;
+                    sequence = ParseExpression();
+
+                    // `for(var/j in 1 to L.len)` combines the two forms.
+                    if (Current == TokenKind.KeywordTo)
+                    {
+                        _position++;
+                        rangeEnd = ParseExpression();
+
+                        if (Current == TokenKind.KeywordStep)
+                        {
+                            _position++;
+                            step = ParseExpression();
+                        }
+                    }
+
+                    break;
+
+                // `for(var/i = 1 to 10 step 2)`.
+                case TokenKind.KeywordTo:
+                    kind = ForKind.Range;
+                    _position++;
+                    rangeEnd = ParseExpression();
+
+                    if (Current == TokenKind.KeywordStep)
+                    {
+                        _position++;
+                        step = ParseExpression();
+                    }
+
+                    break;
+
+                case TokenKind.Comma:
+                case TokenKind.Semicolon:
+                    kind = ForKind.Clauses;
+                    ParseForClauses(initializers, ref condition, increments);
+                    break;
+            }
+        }
+
+        if (Current == TokenKind.CloseParen)
+            _position++;
+        else
+            Report(CurrentSpan, "expected ')'");
+
+        StatementSyntax? body = ParseBody();
+
+        return new ForStatementSyntax(
+            kind, initializers, condition, increments, sequence, rangeEnd, step, body, SpanFrom(start));
+    }
+
+    /// <summary>
+    /// Reads the clause list of a C-shaped <c>for</c>, honouring the current comma mode.
+    /// </summary>
+    /// <remarks>
+    /// By default a comma separates clauses, so <c>for(i=0, i&lt;3, i++)</c> has three of them.
+    /// Under <c>#pragma syntax C for</c> the comma instead chains statements inside one clause and
+    /// only <c>;</c> separates, so <c>for(i=0, j=0; i&lt;3; i++, j+=1)</c> has two initialisers.
+    /// Semicolons work in both modes.
+    /// </remarks>
+    private void ParseForClauses(
+        List<StatementSyntax> initializers,
+        ref ExpressionSyntax? condition,
+        List<StatementSyntax> increments)
+    {
+        int clause = 0;
+
+        while (!AtEnd && Current != TokenKind.CloseParen)
+        {
+            bool chaining = Current == TokenKind.Comma && _modes.CFor;
+            bool separating = Current == TokenKind.Semicolon || (Current == TokenKind.Comma && !_modes.CFor);
+
+            if (!chaining && !separating)
+                break;
+
+            _position++;
+
+            if (separating)
+                clause++;
+
+            if (Current is TokenKind.CloseParen or TokenKind.Comma or TokenKind.Semicolon)
+                continue;
+
+            switch (clause)
+            {
+                case 0:
+                    initializers.Add(ParseForClause());
+                    break;
+
+                case 1:
+                    condition = ParseExpression();
+                    break;
+
+                default:
+                    increments.Add(ParseForClause());
+                    break;
+            }
+        }
+    }
+
+    private StatementSyntax ParseForClause()
+    {
+        int start = _position;
+
+        if (Current == TokenKind.KeywordVar)
+        {
+            _position++;
+
+            // The space-separated form is legal as a statement but rejected in a for header, so only
+            // `/` and `.` are accepted here — PLAN.md §4a.
+            if (Current is TokenKind.Slash or TokenKind.Dot)
+                _position++;
+
+            // In a header a comma separates clauses, so `for(var/i = 1, i < n, i++)` must not read
+            // `i < n` as a second declaration. The one exception is 516's `for(var/k, v in assoc)`.
+            return ParseLocalVarNames(start, null, IsAssociativeForHeader());
+        }
+
+        return new ExpressionStatementSyntax(ParseExpression(), SpanFrom(start));
+    }
+
+    /// <summary>
+    /// True for 516's <c>for(var/key, value in assoc)</c>, where the comma introduces a second name
+    /// rather than the next clause.
+    /// </summary>
+    private bool IsAssociativeForHeader()
+    {
+        int depth = 0;
+
+        for (int i = _position; i < _tokens.Count; i++)
+        {
+            switch (_tokens[i].Kind)
+            {
+                case TokenKind.OpenParen or TokenKind.OpenBracket:
+                    depth++;
+                    break;
+
+                case TokenKind.CloseBracket:
+                    depth--;
+                    break;
+
+                case TokenKind.CloseParen when depth > 0:
+                    depth--;
+                    break;
+
+                case TokenKind.Comma when depth == 0:
+                    return i + 2 < _tokens.Count
+                           && IsNameLike(_tokens[i + 1].Kind)
+                           && _tokens[i + 2].Kind == TokenKind.KeywordIn;
+
+                case TokenKind.CloseParen:
+                case TokenKind.Semicolon when depth == 0:
+                case TokenKind.Newline:
+                case TokenKind.EndOfFile:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    // -- switch ------------------------------------------------------------
+
+    private StatementSyntax ParseSwitch()
+    {
+        int start = _position;
+        _position++;
+
+        // The grammar is decided where the `switch` appears. A `#pragma pop` further down the body
+        // must not retroactively change how this statement was read.
+        bool cStyle = _modes.CSwitch;
+
+        ExpressionSyntax value = ParseParenthesised();
+        List<SwitchCaseSyntax> cases = new();
+
+        if (Current == TokenKind.Newline)
+            _position++;
+
+        SkipNewlinesAndDirectives();
+
+        if (Current != TokenKind.Indent)
+            return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
+
+        _position++;
+
+        while (true)
+        {
+            SkipNewlines();
+
+            if (AtEnd || Current == TokenKind.Dedent)
+                break;
+
+            if (Current == TokenKind.Hash)
+            {
+                ConsumeDirective();
+                continue;
+            }
+
+            int before = _position;
+            SwitchCaseSyntax? arm = cStyle ? ParseCStyleCase() : ParseDmCase();
+
+            if (arm is not null)
+                cases.Add(arm);
+
+            if (_position == before)
+                _position++;
+        }
+
+        if (Current == TokenKind.Dedent)
+            _position++;
+
+        return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
+    }
+
+    /// <summary>DM's own arms: <c>if(1)</c>, <c>if(2,3)</c>, <c>if(a to b)</c> and <c>else</c>.</summary>
+    private SwitchCaseSyntax? ParseDmCase()
+    {
+        int start = _position;
+
+        if (Current == TokenKind.KeywordElse)
+        {
+            _position++;
+            StatementSyntax? elseBody = ParseBody();
+
+            return new SwitchCaseSyntax(
+                Array.Empty<ExpressionSyntax>(), Array.Empty<ExpressionSyntax>(), true, elseBody, SpanFrom(start));
+        }
+
+        if (Current != TokenKind.KeywordIf)
+        {
+            Report(CurrentSpan, "expected 'if' or 'else' in a switch");
+            return null;
+        }
+
+        _position++;
+
+        List<ExpressionSyntax> values = new();
+        List<ExpressionSyntax> rangeEnds = new();
+
+        if (Current == TokenKind.OpenParen)
+        {
+            _position++;
+
+            while (!AtEnd && Current != TokenKind.CloseParen)
+            {
+                if (Current == TokenKind.Comma)
+                {
+                    _position++;
+                    continue;
+                }
+
+                int before = _position;
+                values.Add(ParseExpression());
+
+                // `if(1 to 5)` matches a range rather than a value.
+                if (Current == TokenKind.KeywordTo)
+                {
+                    _position++;
+                    rangeEnds.Add(ParseExpression());
+                }
+                else
+                {
+                    rangeEnds.Add(null!);
+                }
+
+                if (_position == before)
+                    _position++;
+            }
+
+            if (Current == TokenKind.CloseParen)
+                _position++;
+        }
+
+        StatementSyntax? body = ParseBody();
+        return new SwitchCaseSyntax(values, rangeEnds, false, body, SpanFrom(start));
+    }
+
+    /// <summary>
+    /// The <c>#pragma syntax C switch</c> arms, <c>case v:</c> and <c>default:</c>.
+    /// </summary>
+    /// <remarks>
+    /// <c>case</c> and <c>default</c> are ordinary identifiers to the lexer. Without the pragma
+    /// <c>case 1:</c> fails with "expected var or proc name after : operator", because the compiler
+    /// reads <c>case</c> as a name and <c>:</c> as member access.
+    /// </remarks>
+    private SwitchCaseSyntax? ParseCStyleCase()
+    {
+        int start = _position;
+
+        if (!IsNameLike(Current))
+        {
+            Report(CurrentSpan, "expected 'case' or 'default'");
+            return null;
+        }
+
+        bool isDefault = string.Equals(CurrentText, "default", StringComparison.Ordinal);
+        bool isCase = string.Equals(CurrentText, "case", StringComparison.Ordinal);
+
+        if (!isDefault && !isCase)
+        {
+            Report(CurrentSpan, "expected 'case' or 'default'");
+            return null;
+        }
+
+        _position++;
+
+        List<ExpressionSyntax> values = new();
+        List<ExpressionSyntax> rangeEnds = new();
+
+        if (isCase)
+        {
+            // The label's `:` terminates it rather than starting a member access.
+            values.Add(ParseExpression(colonTerminates: true));
+
+            if (Current == TokenKind.KeywordTo)
+            {
+                _position++;
+                rangeEnds.Add(ParseExpression(colonTerminates: true));
+            }
+            else
+            {
+                rangeEnds.Add(null!);
+            }
+        }
+
+        if (Current == TokenKind.Colon)
+            _position++;
+        else
+            Report(CurrentSpan, "expected ':'");
+
+        // Fall-through is real here, so an arm's body runs on to the next case unless `break` stops
+        // it. The statements still belong to this arm.
+        StatementSyntax? body = ParseBody();
+        return new SwitchCaseSyntax(values, rangeEnds, isDefault, body, SpanFrom(start));
+    }
+}

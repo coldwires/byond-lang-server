@@ -38,6 +38,7 @@ internal static class Program
                 "includes" => Includes(args),
                 "preprocess" => Preprocess(args),
                 "outline" => Outline(args),
+                "symbols" => Symbols(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -60,6 +61,9 @@ internal static class Program
         Console.Error.WriteLine("  includes <file.dme>      walk the include graph in compile order");
         Console.Error.WriteLine("      --tree               show nesting instead of a flat list");
         Console.Error.WriteLine("      --orphans            also list .dm files on disk that nothing includes");
+        Console.Error.WriteLine("  symbols <file>           the document outline, as the ABI returns it");
+        Console.Error.WriteLine("      --params             include proc parameters");
+        Console.Error.WriteLine("      --utf8               columns in UTF-8 bytes instead of UTF-16 units");
         Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
         Console.Error.WriteLine("      --macros             show tokens that came from a macro");
         Console.Error.WriteLine("      --dump               print every token");
@@ -233,6 +237,62 @@ internal static class Program
     /// <summary>
     /// Prints the declaration structure of a file, or counts it across a directory.
     /// </summary>
+    /// <summary>
+    /// Prints the document-symbol tree. This is the same call the ABI and the LSP server make, so an
+    /// IDE dev seeing a wrong outline can check here first and tell whose bug it is.
+    /// </summary>
+    private static int Symbols(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: symbols needs a file");
+            return 1;
+        }
+
+        bool includeParameters = args.Contains("--params");
+        PositionEncoding encoding = args.Contains("--utf8") ? PositionEncoding.Utf8 : PositionEncoding.Utf16;
+
+        ParseResult parsed = DeclarationParser.Parse(LexFile(args[1]));
+        IReadOnlyList<DocumentSymbol> symbols =
+            DocumentSymbolService.GetSymbols(parsed, includeParameters, encoding);
+
+        PrintSymbols(symbols, 0);
+
+        foreach (Diagnostic diagnostic in parsed.Diagnostics)
+        {
+            LinePosition at = parsed.Text.GetLinePosition(diagnostic.Span.Start, encoding);
+            Console.Out.WriteLine($"  {at.Line + 1}:{at.Character + 1}  {diagnostic.Id}  {diagnostic.Message}");
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{Total(symbols)} symbol(s), {parsed.Diagnostics.Count} diagnostic(s)");
+        return 0;
+    }
+
+    private static void PrintSymbols(IReadOnlyList<DocumentSymbol> symbols, int depth)
+    {
+        foreach (DocumentSymbol symbol in symbols)
+        {
+            string detail = string.IsNullOrEmpty(symbol.Detail) ? string.Empty : $"  {symbol.Detail}";
+
+            Console.Out.WriteLine(
+                $"{symbol.Start.Line + 1,6}  {new string(' ', depth * 2)}{symbol.Kind.ToString().ToLowerInvariant()} " +
+                $"{symbol.Name}{detail}   [{symbol.SelectionStart.Line + 1}:{symbol.SelectionStart.Character + 1}]");
+
+            PrintSymbols(symbol.Children, depth + 1);
+        }
+    }
+
+    private static int Total(IReadOnlyList<DocumentSymbol> symbols)
+    {
+        int count = 0;
+
+        foreach (DocumentSymbol symbol in symbols)
+            count += 1 + Total(symbol.Children);
+
+        return count;
+    }
+
     private static int Outline(string[] args)
     {
         if (args.Length < 2)

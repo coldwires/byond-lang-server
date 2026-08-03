@@ -71,6 +71,12 @@ public sealed class DeclarationParser
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly List<Token> _tokens = new();
 
+    /// <summary>
+    /// <c>#pragma syntax</c> state, owned here because the pragma sits at file level while the
+    /// grammar it changes is used inside proc bodies.
+    /// </summary>
+    private readonly SyntaxModes _modes = new();
+
     private int _position;
 
     private DeclarationParser(LexResult lex)
@@ -132,7 +138,7 @@ public sealed class DeclarationParser
             if (Current == TokenKind.Newline)
                 _position++;
             else if (Current == TokenKind.Hash)
-                RecoverToNextLine();
+                ConsumeDirective();
             else
                 return;
         }
@@ -155,7 +161,7 @@ public sealed class DeclarationParser
             // already gone, but the outline runs per file on raw tokens, where they are still here.
             if (Current == TokenKind.Hash)
             {
-                RecoverToNextLine();
+                ConsumeDirective();
                 continue;
             }
 
@@ -258,7 +264,7 @@ public sealed class DeclarationParser
                 BlockContext childContext = endsWithProc ? BlockContext.Proc : BlockContext.Var;
                 List<DeclarationSyntax> members = ParseIndentedBlock(childContext);
 
-                return new TypeDeclarationSyntax(path, members, SpanFrom(start));
+                return new TypeDeclarationSyntax(path, members, SpanFrom(start), isGroupHeader: true);
             }
 
             if (context == BlockContext.Var)
@@ -267,6 +273,12 @@ public sealed class DeclarationParser
 
         if (varIndex >= 0)
             return ParseVar(path, varIndex, start);
+
+        // A bare assignment at type level overrides an inherited var and needs no `var/` keyword —
+        // `maxx = 3` on `world`, or stddef.dm's `_dm_interface = _DM_datum|_DM_sound`. It declares a
+        // value, not a type, so modelling it as a type node would put `maxx` in the object tree.
+        if (Current == TokenKind.Assign)
+            return ParseVar(path, varIndex: -1, start);
 
         ConsumeLineEnd();
         List<DeclarationSyntax> children = ParseIndentedBlock(BlockContext.Any);
@@ -289,10 +301,30 @@ public sealed class DeclarationParser
         bool declaresNew = ContainsSegment(path, "proc") || ContainsSegment(path, "verb")
                            || context == BlockContext.Proc;
 
-        ConsumeLineEnd();
-        SkipIndentedBlock();
+        // A proc may declare a return type: `parent() as /hud_obj`. It belongs to the signature, so
+        // it is consumed before the body — without it the clause reads as an inline body.
+        if (Current == TokenKind.KeywordAs)
+        {
+            _position++;
 
-        return new ProcDeclarationSyntax(path, parameters, isVerb, declaresNew, SpanFrom(start));
+            while (Current is TokenKind.Slash or TokenKind.Dot || IsNameLike(Current))
+                _position++;
+
+            while (Current == TokenKind.Pipe)
+            {
+                _position++;
+
+                while (Current is TokenKind.Slash or TokenKind.Dot || IsNameLike(Current))
+                    _position++;
+            }
+        }
+
+        (BlockStatementSyntax? body, int next) =
+            StatementParser.ParseProcBody(_tokens, _lex.Text, _diagnostics, _position, _modes);
+
+        _position = next > _position ? next : _position + 1;
+
+        return new ProcDeclarationSyntax(path, parameters, isVerb, declaresNew, body, SpanFrom(start));
     }
 
     /// <summary>
@@ -631,6 +663,31 @@ public sealed class DeclarationParser
 
         if (Current == TokenKind.Newline)
             _position++;
+    }
+
+    /// <summary>
+    /// Consumes a directive line, applying it when it is a <c>#pragma</c> that changes the grammar.
+    /// </summary>
+    /// <remarks>
+    /// A <c>#pragma syntax C for|switch</c> written between two procs changes how the second one
+    /// parses, so the state has to be tracked at file level and handed to the statement parser.
+    /// </remarks>
+    private void ConsumeDirective()
+    {
+        _position++;
+
+        List<string> words = new();
+
+        while (!AtEnd && Current is not (TokenKind.Newline or TokenKind.Dedent))
+        {
+            words.Add(TextOf(_position));
+            _position++;
+        }
+
+        if (Current == TokenKind.Newline)
+            _position++;
+
+        _modes.Apply(words);
     }
 
     private void RecoverToNextLine()

@@ -521,6 +521,21 @@ public sealed class Lexer
         return true;
     }
 
+    /// <summary>True when the text just after the cursor matches, case-sensitively.</summary>
+    private bool MatchesAhead(string text)
+    {
+        if (_position + text.Length >= _text.Length)
+            return false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (_text[_position + 1 + i] != text[i])
+                return false;
+        }
+
+        return true;
+    }
+
     private void LexNumber()
     {
         int start = _position;
@@ -544,6 +559,22 @@ public sealed class Lexer
             _position++;
             while (!AtEnd && char.IsDigit(Current))
                 _position++;
+        }
+
+        // The infinity and indeterminate literals, `1#INF` and `1#IND`. Left split, the `#` reads as
+        // a directive and the rest as a name. Found in ter13's HudLib.
+        if (Current == '#' && MatchesAhead("INF"))
+        {
+            _position += 4;
+            Add(TokenKind.Number, start);
+            return;
+        }
+
+        if (Current == '#' && MatchesAhead("IND"))
+        {
+            _position += 4;
+            Add(TokenKind.Number, start);
+            return;
         }
 
         if (Current is 'e' or 'E')
