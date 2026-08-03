@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using Dm.Core;
+using Dm.Core.Services;
+using Dm.Core.Text;
 
 namespace Dm.Native;
 
@@ -88,6 +92,158 @@ internal static unsafe class Exports
         {
             return Fail(Classify(ex), ex.Message);
         }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "dm_set_buffer")]
+    public static int SetBuffer(IntPtr workspace, byte* filePath, byte* contentUtf8, int length)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            if (contentUtf8 is null)
+                return Fail(DmStatus.InvalidArgument, "content is null");
+
+            // A negative length means the caller passed a null-terminated string. An explicit
+            // length is preferred: it avoids a scan, and DM source may legitimately contain a NUL
+            // inside a string literal.
+            string content = length >= 0
+                ? Encoding.UTF8.GetString(contentUtf8, length)
+                : NativeStrings.Read(contentUtf8) ?? string.Empty;
+
+            ws.SetBuffer(path, content);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "dm_close_buffer")]
+    public static int CloseBuffer(IntPtr workspace, byte* filePath)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            ws.CloseBuffer(path);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Classifies an inclusive range of lines for syntax highlighting.
+    /// </summary>
+    /// <remarks>
+    /// Results are packed into one contiguous block of <c>int32</c> triples — offset, length, kind
+    /// — so a client copies the whole visible range in a single read rather than making three
+    /// accessor calls per span. This runs on every scroll and every keystroke, so the per-span cost
+    /// is what matters.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_classify_range")]
+    public static int ClassifyRange(
+        IntPtr workspace,
+        byte* filePath,
+        int startLine,
+        int endLine,
+        int encoding,
+        IntPtr* outClassification)
+    {
+        if (outClassification is null)
+            return Fail(DmStatus.InvalidArgument, "out_classification is null");
+
+        *outClassification = IntPtr.Zero;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+            IReadOnlyList<ClassifiedSpan> spans =
+                ClassificationService.ClassifyLines(document.Lex, startLine, endLine);
+
+            *outClassification = HandleTable.Alloc(Pack(document.Text, spans, (PositionEncoding)encoding));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "dm_classification_count")]
+    public static int ClassificationCount(IntPtr classification)
+        => HandleTable.TryGet(classification, out ClassificationBuffer buffer) ? buffer.Count : -1;
+
+    /// <summary>
+    /// Pointer to <c>3 * count</c> consecutive <c>int32</c> values. Valid until
+    /// <c>dm_classification_free</c>.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "dm_classification_data")]
+    public static int* ClassificationData(IntPtr classification)
+        => HandleTable.TryGet(classification, out ClassificationBuffer buffer) ? buffer.Data : null;
+
+    [UnmanagedCallersOnly(EntryPoint = "dm_classification_free")]
+    public static void ClassificationFree(IntPtr classification)
+    {
+        try
+        {
+            if (HandleTable.Release(classification) is IDisposable disposable)
+                disposable.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _lastError = ex.Message;
+        }
+    }
+
+    private static ClassificationBuffer Pack(
+        SourceText text,
+        IReadOnlyList<ClassifiedSpan> spans,
+        PositionEncoding encoding)
+    {
+        ClassificationBuffer buffer = new(spans.Count);
+
+        int* cursor = buffer.Data;
+        foreach (ClassifiedSpan span in spans)
+        {
+            int start = encoding == PositionEncoding.Utf16
+                ? span.Span.Start
+                : text.GetUtf8Offset(span.Span.Start);
+
+            int end = encoding == PositionEncoding.Utf16
+                ? span.Span.End
+                : text.GetUtf8Offset(span.Span.End);
+
+            *cursor++ = start;
+            *cursor++ = end - start;
+            *cursor++ = (int)span.Kind;
+        }
+
+        return buffer;
     }
 
     /// <summary>
