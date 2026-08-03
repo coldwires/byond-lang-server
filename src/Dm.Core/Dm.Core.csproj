@@ -11,4 +11,13 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      The preprocessor's internals are implementation detail, not API surface, but they need direct
+      unit tests. Widening them to public just to test them would freeze decisions we still expect
+      to change.
+    -->
+    <InternalsVisibleTo Include="Dm.Core.Tests" />
+  </ItemGroup>
+
 </Project>

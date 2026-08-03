@@ -174,6 +174,27 @@ The only context where a leading `/` and a leading `.` differ.
 - **No leading separator means it is not a path at all** — `obj.item.sword` is ordinary member
   access and resolves as a var lookup.
 
+### `.` versus `:` on a member access — neither is unchecked
+
+Both are compile-checked; they differ in *what they check against*. Verified by compiling a property
+declared only on a subtype of the receiver's declared type:
+
+| Expression | Property lives on | Result |
+|---|---|---|
+| `M.prop` | the declared type | compiles |
+| `M.prop` | a **subtype** of the declared type | **compile error** |
+| `M:prop` | a **subtype** of the declared type | compiles |
+| `M:prop` | an **unrelated** type | **compile error** |
+
+So `.` checks the declared type only; `:` widens the check to the declared type *and its subtypes*.
+Calling `:` "unchecked" is wrong — it is a wider check, not an absent one. This is what completion
+after `:` must offer (M6).
+
+**`.` degrades to `:` when the receiver's type cannot be inferred.** `L[1].prop` and
+`make().prop` both compile against a property that exists only on an unrelated type, because a list
+lookup and a proc call have no known type to check against. So the compile-time guarantee silently
+disappears exactly where it would be most useful — which is why procs have `as` return types.
+
 The search behaviour is proximity-sensitive, so adding a nearer type silently changes what an
 untouched line means. Given `/obj/item/sword` and `/obj/item/sword/magic`, a `.sword` inside
 `magic` resolves to `/obj/item/sword` — until someone adds `/obj/item/sword/magic/sword`, at which
@@ -201,9 +222,12 @@ behaviour differently, and both are true — position is what distinguishes them
 - **Leading `.` is an upward search** through the code tree (reference: "search **up** in the code
   tree"). Confirmed. The reference does not state that it reaches root or that first-hit-wins; those
   are our empirical refinements.
-- **Leading `:` is a *downward* search** — `mob = :player` is shorthand for `/mob/player`. The
-  reference warns "you should only use it when the target node is unique." This is a separate
-  operator from the `:` runtime member-access operator, distinguished by position.
+- **Leading `:` as a downward path search does not work in 516.1666.** The reference documents
+  `mob = :player` as shorthand for `/mob/player`, but every form was rejected with
+  `:player: undefined type path` — in a proc local, a typed var initialiser, a type-level var, and
+  inside the `/mob` branch itself. An absolute-path control compiled in the same harness. Treat as
+  removed; **do not implement it**. This is the clearest example of the reference documenting
+  something that is no longer true.
 - **Mid-path `.`/`/` interchangeability is not documented anywhere.** The reference only ever shows
   `.` in leading position, then switches to `/` (`.Village/Guard_Post`). Our finding stands on
   compiler evidence, but **do not unify `.` and `/` in the AST** — the leading form carries search
@@ -416,7 +440,7 @@ exactly the extra byte count.
 identifiers introduced by macros, or tell a proc name from a var name. That is what most editors
 ship, and it looks correct.
 
-### M3 — Preprocessor and include graph *(include graph done; preprocessor next)*
+### M3 — Preprocessor and include graph ✅
 
 - ✅ `SourceFileReader` — encoding detection. BOM, then strict UTF-8, then Windows-1252 with the
   0x80–0x9F punctuation range mapped from a table. No encoding-provider package, so `Dm.Core` stays
@@ -425,10 +449,29 @@ ship, and it looks correct.
   verified against `dm.exe`. Directives are extracted from the token stream, so one inside a comment
   is correctly not a directive.
 - ✅ `dmc includes`, with `--tree` and `--orphans`.
-- ⬜ The preprocessor itself: `#define`, macro expansion, conditionals, source maps.
+- ✅ `DirectiveScanner` — all twelve directive kinds, payloads as token ranges, driven off tokens so
+  a directive inside a comment is not one.
+- ✅ `MacroDefinition` / `MacroTable` — object-like, function-like and variadic parsing, plus an
+  order-sensitive state hash for M9.
+- ✅ `ConditionalEvaluator` — `#if` / `#elif` over DM's actual grammar (§8).
+- ✅ `ConditionalStack` and conditional-aware graph walking. `#pragma multiple`, cycle termination,
+  unterminated-conditional and stray-`#endif` diagnostics, and correct `__MAIN__` scoping.
+- ✅ `MacroExpander` — object-like, function-like and variadic substitution, `#`, `##`, `###`, and
+  the source map. Every token carries its origin and, if expanded, the chain out to the invocation
+  the author wrote.
+- ✅ `Preprocessor.Run` — a `.dme` in, the whole project's code tokens out in compile order.
+  `dmc preprocess` drives it.
 
-**Known limitation until the preprocessor lands:** conditional compilation is not evaluated, so an
-`#include` inside a false `#ifdef` is still followed.
+**Expansion is interleaved with the directive walk**, not deferred per file. Each run of code is
+expanded against the macro state that applied *to it*, so code above a redefinition sees the earlier
+value. Deferring would use the file's final state throughout.
+
+**Verified on real projects:** mlaas 102 files / 120,262 tokens / 555 from 114 distinct macros,
+madridspy 96 files, warklan 38 files, all with no errors.
+
+**The graph builder is a preprocessor pass**, not a separate phase. Includes cannot be collected
+without evaluating conditionals, so macro state is threaded through the traversal in include
+order — the same ordering that decides override resolution and the §4a path ambiguity.
 
 **From the DM Reference — what the preprocessor must handle:**
 
@@ -580,8 +623,8 @@ ship, and it looks correct.
 - `CompletionService.CompleteAt(file, line, col)` classifying context:
   - after `/` or `.` mid-path → type paths
   - after `.` on a value → members filtered by receiver type
-  - after `:` → all known members, unfiltered. That operator bypasses type checking by design;
-    filtering it is a bug.
+  - after `:` → members of the declared type **and all its subtypes**. Not "everything": see §4a,
+    `:` widens the check to the subtype tree rather than disabling it.
   - bare identifier → locals + params + `src` members + globals + macros
 - **Semantic classification refinement** — with the object tree available, upgrade M2's lexical
   spans to distinguish user types from builtins, procs from vars, and macro-introduced identifiers.
@@ -716,6 +759,16 @@ that the two candidate behaviours produce different compiler output.
 | **`#include` accepts forward slashes as well as backslashes.** | `#include "sub/b.dm"` loads; the compiler then reports the file as `sub\b.dm`. |
 | **`/mob` has built-in `x`, `y`, `z`.** | Declaring `var/x` on a `/mob` subtype → *"x: duplicate definition (conflicts with built-in variable)"*. Found by accident, and a reminder of why `builtins.json` (M5) is load-bearing. |
 | **`#warn` and `#error` bodies are free text, not tokens.** | `#warn this won't work and "unbalanced` compiles with 0 errors and prints verbatim. Apostrophes and unbalanced quotes are legal there. |
+| **`in` binds looser than assignment.** | `var/r = (has = 2 in L)` leaves `has == 2` and the whole expression `== 1`. It parses as `(has = 2) in L`, not `has = (2 in L)`. |
+| **`..()` with empty parens forwards the current arguments.** | A child override calling `..()` with no args reached the parent with the original `'hello'` intact. It does not pass zero arguments. |
+| **`%` truncates operands to integers; `%%` is fractional.** | `7.5 % 2` is `1`; `7.5 %% 2` is `1.5`. |
+| **DM has pointers (515+).** | `var/p = &x` then `*p = 99` mutates `x`. `*p` is a valid assignment target. |
+| **Modified-type initialisers work in `new`.** | `new /obj/thing{hp = 42; tag_name = "set"}` constructs with both vars set. Braces mandatory, `;` separates same-line entries. |
+| **A bare `for` iterates world *contents*, not all instances.** | Of three objects created, the two with a map location were found by `for(var/obj/marker/M)`; the one with `loc = null` was not. Identical result to `for(... in world)`. |
+| **Function-like macros need the `(` to touch the name.** | `#define A (x)` is object-like and expands to `(x)`; calling `A(1)` fails. `#define B(v)` is function-like and a bare `B` fails with "undefined var". Same rule as C. |
+| **`#if` rejects undefined identifiers rather than treating them as 0.** | A bare undefined name reports `unexpected token`. This is the opposite of C, and it is why real DM guards with `#ifdef` rather than `#if NAME`. |
+| **`#if` supports a narrow grammar.** | Accepted: numbers (floats, unary minus), defined macro names, `defined(X)`, `!`, `+ - * /`, comparisons, `&&`, `\|\|`, parens. Rejected: `%`, `<<`, `>>`, `&`, `\|`, string literals. |
+| **`defined` requires parentheses.** | `defined FIVE` fails with "expected (". |
 | **Names may contain `\` escapes.** | `\~Admin_Chat(T as text)` compiles, as do `D\~E` mid-name and `var/\~G`. `\a`, `\the` and `\1` prefixes are all accepted, so the rule is "backslash plus any one character", not a table of known macros. These control how a verb or var is presented to players. A bare `\~` in *expression* position is rejected — that distinction is the parser's to make. |
 | **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |

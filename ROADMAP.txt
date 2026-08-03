@@ -61,6 +61,10 @@ FOR THE IDE DEVS - HIGHLIGHTING IS READY
   highlighting later; map them now and they light up at M6 with no changes.
 
   TRY IT
+    dotnet run --project src\Dm.Cli -- preprocess <file.dme>
+        the whole project expanded, in compile order
+        --macros    which macros produced how many tokens
+        --dump      every token, showing where it traces back to
     dotnet run --project src\Dm.Cli -- includes <file.dme>
         every file the project compiles, in COMPILE ORDER
         --tree      show nesting
@@ -198,9 +202,10 @@ MILESTONES                                    (restructured 2026-08-02)
                                              286,311 tokens of real DM.
   [x] M2   Lexical classification         <- DONE. syntax highlighting works
                                              end to end, C# -> C ABI -> C++.
-  [~] M3   Preprocessor + include graph   <- include graph DONE + encoding
-                                             detection. preprocessor next.
-  [ ] M4   Parser + syntax errors + document symbols (file outline)
+  [x] M3   Preprocessor + include graph   <- DONE. include graph, encoding,
+                                             conditionals, macro expansion,
+                                             and the source map.
+  [ ] M4   Parser + syntax errors + document symbols   <- NEXT
   [ ] M5   Object tree + BYOND builtins
   [ ] M6   Binder + completion            <- "mob." and "t." work
   [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1
