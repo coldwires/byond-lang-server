@@ -41,6 +41,25 @@ public static class CompletionService
         int character,
         PositionEncoding encoding = PositionEncoding.Utf16,
         CancellationToken cancellationToken = default)
+        => CompleteAt(tree, document, line, character, null, encoding, cancellationToken);
+
+    /// <summary>
+    /// Builds the completion list, also offering the project's macros for a bare identifier.
+    /// </summary>
+    /// <remarks>
+    /// Macros are the one thing in scope that the object tree cannot know about: they are gone by
+    /// the time the parser sees anything, so they have to be carried in separately. They belong
+    /// only in the bare-identifier list — a macro is not a member of anything, so nothing after
+    /// <c>.</c> or <c>:</c> should offer one.
+    /// </remarks>
+    public static CompletionResult CompleteAt(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        IReadOnlyCollection<string>? macros,
+        PositionEncoding encoding = PositionEncoding.Utf16,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(document);
@@ -54,7 +73,7 @@ public static class CompletionService
         int index = IndexBefore(tokens, offset);
 
         if (index < 0)
-            return Empty(CompletionContext.Identifier, tree, document, offset);
+            return Identifiers(tree, document, offset, macros);
 
         // A partly typed word is not context; the trigger is whatever sits before it.
         if (tokens[index].Kind == TokenKind.Identifier && tokens[index].Span.End >= offset)
@@ -76,13 +95,9 @@ public static class CompletionService
                 return TypePaths(tree, tokens, index);
 
             default:
-                return Identifiers(tree, document, offset);
+                return Identifiers(tree, document, offset, macros);
         }
     }
-
-    private static CompletionResult Empty(
-        CompletionContext context, ObjectTree tree, Document document, int offset)
-        => Identifiers(tree, document, offset);
 
     /// <summary>The last token starting at or before the cursor.</summary>
     private static int IndexBefore(IReadOnlyList<Token> tokens, int offset)
@@ -207,13 +222,28 @@ public static class CompletionService
         if (!IsName(tokens[index].Kind))
             return null;
 
-        // A written path: `/obj/item` or `obj/item`.
+        // A written path: `/obj/item`, `obj/item`, or the relative `.item/sword`.
         if (start < index)
         {
             List<string> segments = new();
 
             for (int i = start; i <= index; i += 2)
                 segments.Add(document.Text.ToString(tokens[i].Span));
+
+            // A leading `.` is a search from the enclosing type upward, not a path from root
+            // (PLAN.md §4a). Anything else is looked up as written.
+            bool relative = start > 0
+                && tokens[start - 1].Kind == TokenKind.Dot
+                && (start - 2 < 0 || !IsName(tokens[start - 2].Kind));
+
+            if (relative)
+            {
+                TypePath anchor = EnclosingType(tree, document, offset)?.Path ?? TypePath.Root;
+
+                return RelativePath.Resolve(tree, anchor, segments) is { } found
+                    ? tree.Find(found)
+                    : null;
+            }
 
             return tree.Find(TypePath.FromSegments(segments));
         }
@@ -240,7 +270,8 @@ public static class CompletionService
 
     // -- scope --------------------------------------------------------------
 
-    private static CompletionResult Identifiers(ObjectTree tree, Document document, int offset)
+    private static CompletionResult Identifiers(
+        ObjectTree tree, Document document, int offset, IReadOnlyCollection<string>? macros)
     {
         Dictionary<string, CompletionItem> items = new(StringComparer.Ordinal);
 
@@ -268,6 +299,14 @@ public static class CompletionService
 
         // Globals last. These are the root's procs and vars, which is where the builtins live.
         AddMembers(items, tree.Root);
+
+        // Macros do not live on any type - the preprocessor has removed them long before the parser
+        // runs - so they are carried in separately and go last, behind anything really in scope.
+        if (macros is not null)
+        {
+            foreach (string macro in macros)
+                items.TryAdd(macro, new CompletionItem(macro, CompletionKind.Macro, "macro", false));
+        }
 
         return new CompletionResult(CompletionContext.Identifier, Sorted(items));
     }

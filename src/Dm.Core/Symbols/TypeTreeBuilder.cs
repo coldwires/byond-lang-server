@@ -129,7 +129,14 @@ public static class TypeTreeBuilder
             if (variable.Initializer is PathExpressionSyntax path)
             {
                 // It is a real var as well as an inheritance link, and `dm.exe -o` lists it as one.
-                tree.GetOrAdd(owner).ParentType = TypePath.Parse(path.Path.Text);
+                TypeSymbol target = tree.GetOrAdd(owner);
+
+                // A leading `.` is a search from this type's own path, not a name, so it has to
+                // wait for the finished tree. dm.exe accepts `parent_type = .sibling`.
+                if (path.Path.Anchor == PathAnchor.UpwardSearch)
+                    target.RelativeParentType = path.Path.Segments;
+                else
+                    target.ParentType = TypePath.FromSegments(path.Path.Segments);
             }
         }
 

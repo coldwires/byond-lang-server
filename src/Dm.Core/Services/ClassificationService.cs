@@ -27,13 +27,26 @@ public static class ClassificationService
 {
     /// <summary>Classifies every token overlapping <paramref name="range"/>.</summary>
     public static IReadOnlyList<ClassifiedSpan> Classify(LexResult lex, TextSpan range)
+        => Classify(lex, range, null);
+
+    /// <summary>
+    /// Classifies a range, refining identifiers with <paramref name="semantics"/> when supplied.
+    /// </summary>
+    /// <remarks>
+    /// The semantic pass only ever changes a span's <i>kind</i>. It never adds, removes or moves
+    /// one, so a client that ignores kinds 12-15 sees exactly the M2 output.
+    /// </remarks>
+    public static IReadOnlyList<ClassifiedSpan> Classify(
+        LexResult lex, TextSpan range, SemanticContext? semantics)
     {
         ArgumentNullException.ThrowIfNull(lex);
 
         List<ClassifiedSpan> spans = new();
 
-        foreach (Token token in lex.Tokens)
+        for (int i = 0; i < lex.Tokens.Count; i++)
         {
+            Token token = lex.Tokens[i];
+
             if (token.Span.IsEmpty)
                 continue;
 
@@ -46,6 +59,11 @@ public static class ClassificationService
             ClassificationKind kind = Classify(token.Kind);
             if (kind == ClassificationKind.None)
                 continue;
+
+            // Refine only what the lexer called an identifier. A keyword, string or number is
+            // already as specific as it gets, and re-deciding one could only make it wrong.
+            if (semantics is not null && kind == ClassificationKind.Identifier)
+                kind = semantics.Refine(lex, i) ?? kind;
 
             // Coalesce touching runs of the same kind. A string is three tokens (start, text, end)
             // and would otherwise be three spans for the client to colour identically.
@@ -69,6 +87,11 @@ public static class ClassificationService
 
     /// <summary>Classifies an inclusive range of lines. Out-of-range lines clamp.</summary>
     public static IReadOnlyList<ClassifiedSpan> ClassifyLines(LexResult lex, int startLine, int endLine)
+        => ClassifyLines(lex, startLine, endLine, null);
+
+    /// <summary>Classifies an inclusive range of lines, refining identifiers when asked.</summary>
+    public static IReadOnlyList<ClassifiedSpan> ClassifyLines(
+        LexResult lex, int startLine, int endLine, SemanticContext? semantics)
     {
         ArgumentNullException.ThrowIfNull(lex);
 
@@ -81,7 +104,7 @@ public static class ClassificationService
             text.GetLineStart(first),
             text.GetLineSpanIncludingTerminator(last).End);
 
-        return Classify(lex, range);
+        return Classify(lex, range, semantics);
     }
 
     /// <summary>Classifies the whole file.</summary>

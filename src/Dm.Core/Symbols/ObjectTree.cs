@@ -64,6 +64,18 @@ public sealed class ObjectTree
         if (type.ParentType is { } explicitParent)
             return Find(explicitParent);
 
+        // `parent_type = .sibling` searches upward from this type's own path, so it can only be
+        // resolved once the tree is complete. An unresolvable one yields no parent rather than
+        // falling back to the path parent, matching what an unresolvable absolute one does: the
+        // author asked for a specific type, and quietly substituting a different one would put
+        // members on the type that it does not have.
+        if (type.RelativeParentType is { } relative)
+        {
+            return RelativePath.Resolve(this, type.Path, relative) is { } resolved
+                ? Find(resolved)
+                : null;
+        }
+
         return type.Parent;
     }
 

@@ -350,6 +350,69 @@ public class CompletionServiceTests
         Assert.Empty(result.Items);
     }
 
+    // -- macros --------------------------------------------------------------
+
+    /// <summary>
+    /// Macros are in scope for a bare identifier and nowhere else.
+    /// </summary>
+    /// <remarks>
+    /// They cannot come from the object tree: the preprocessor has removed them long before the
+    /// parser runs, so the workspace carries the names across separately. A macro is not a member of
+    /// anything, which is why nothing after <c>.</c> or <c>:</c> may offer one.
+    /// </remarks>
+    [Fact]
+    public void Macros_are_offered_for_a_bare_identifier()
+    {
+        string[] macros = { "MAX_HEALTH", "HEAL" };
+
+        CompletionResult result = CompleteWithMacros(
+            "/mob/guy\n\tvar/health = 1\n\tproc/f()\n\t\t|\n", macros);
+
+        Assert.Equal(CompletionContext.Identifier, result.Context);
+
+        string[] names = Names(result);
+        Assert.Contains("MAX_HEALTH", names);
+        Assert.Contains("HEAL", names);
+        Assert.Contains("health", names);
+
+        Assert.Equal(
+            CompletionKind.Macro,
+            result.Items.First(i => i.Name == "MAX_HEALTH").Kind);
+    }
+
+    [Fact]
+    public void Macros_are_not_offered_after_a_member_operator()
+    {
+        string[] macros = { "MAX_HEALTH" };
+
+        CompletionResult dot = CompleteWithMacros(
+            "/mob/guy\n\tvar/health = 1\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n", macros);
+
+        Assert.Equal(CompletionContext.Member, dot.Context);
+        Assert.Contains("health", Names(dot));
+        Assert.DoesNotContain("MAX_HEALTH", Names(dot));
+
+        CompletionResult colon = CompleteWithMacros(
+            "/mob/guy\n\tvar/health = 1\n/proc/f()\n\tvar/mob/guy/g = new\n\tg:|\n", macros);
+
+        Assert.DoesNotContain("MAX_HEALTH", Names(colon));
+    }
+
+    private static CompletionResult CompleteWithMacros(string sourceWithCaret, string[] macros)
+    {
+        int caret = sourceWithCaret.IndexOf('|');
+        string source = sourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        return CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character, macros);
+    }
+
     /// <summary>
     /// A call result still resolves to nothing. That is the one place DM itself gives up, letting
     /// <c>.</c> behave like <c>:</c>, so there is no single type to offer.

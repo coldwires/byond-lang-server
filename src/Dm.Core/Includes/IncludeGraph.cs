@@ -118,17 +118,23 @@ public sealed class IncludeOptions
 /// </description></item>
 /// </list>
 /// <para>
-/// <b>Limitation.</b> Conditional compilation is not yet evaluated, so an <c>#include</c> inside a
-/// false <c>#ifdef</c> is still followed. That resolves when the preprocessor lands.
+/// Conditionals are evaluated during the walk, so an <c>#include</c> inside a false <c>#ifdef</c>
+/// is not followed. Macro state is threaded through in include order, which is what makes that
+/// possible and is also what decides override resolution.
 /// </para>
 /// </remarks>
 public sealed class IncludeGraph
 {
-    private IncludeGraph(string dmePath, IReadOnlyList<IncludedFile> files, IReadOnlyList<Diagnostic> diagnostics)
+    private IncludeGraph(
+        string dmePath,
+        IReadOnlyList<IncludedFile> files,
+        IReadOnlyList<Diagnostic> diagnostics,
+        MacroTable macros)
     {
         DmePath = dmePath;
         Files = files;
         Diagnostics = diagnostics;
+        Macros = macros;
     }
 
     public string DmePath { get; }
@@ -137,6 +143,17 @@ public sealed class IncludeGraph
     public IReadOnlyList<IncludedFile> Files { get; }
 
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
+
+    /// <summary>
+    /// Macro state at the end of the walk.
+    /// </summary>
+    /// <remarks>
+    /// The <i>final</i> state, not the state at any particular file. Good enough for offering
+    /// macro names in a completion list, since a project defines them in headers included early and
+    /// rarely undefines them; it is not good enough for deciding what a given line saw, which is
+    /// what the M3 boundary snapshots are for.
+    /// </remarks>
+    public MacroTable Macros { get; }
 
     /// <summary>Walks the graph without expanding macros.</summary>
     public static IncludeGraph Build(string dmePath, IncludeOptions? options = null)
@@ -164,7 +181,7 @@ public sealed class IncludeGraph
 
         builder.Walk(root, includedFrom: null, depth: 0, fromLibrary: false);
 
-        return (new IncludeGraph(root, builder.Files, builder.Diagnostics), tokens);
+        return (new IncludeGraph(root, builder.Files, builder.Diagnostics, builder.Macros), tokens);
     }
 
     /// <summary>

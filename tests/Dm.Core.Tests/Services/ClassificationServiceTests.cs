@@ -1,4 +1,5 @@
 using Dm.Core.Services;
+using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -8,6 +9,25 @@ public class ClassificationServiceTests
 {
     private static IReadOnlyList<ClassifiedSpan> Classify(string source)
         => ClassificationService.Classify(Lexer.Lex(SourceText.From(source)));
+
+    private static (ClassificationKind Kind, string Text)[] SemanticPairs(
+        string source, SemanticContext semantics)
+    {
+        SourceText text = SourceText.From(source);
+        LexResult lex = Lexer.Lex(text);
+
+        List<(ClassificationKind, string)> pairs = new();
+        foreach (ClassifiedSpan span in ClassificationService.Classify(
+            lex, new TextSpan(0, text.Length), semantics))
+        {
+            pairs.Add((span.Kind, text.ToString(span.Span)));
+        }
+
+        return pairs.ToArray();
+    }
+
+    private static ClassificationKind KindOf(string source, string token, SemanticContext semantics)
+        => SemanticPairs(source, semantics).First(p => p.Text == token).Kind;
 
     private static (ClassificationKind Kind, string Text)[] Pairs(string source)
     {
@@ -188,5 +208,89 @@ public class ClassificationServiceTests
             Assert.True(span.Span.Start >= previousEnd, $"{span} overlaps a previous span");
             previousEnd = span.Span.End;
         }
+    }
+
+    // -- semantic refinement, colour IDs 12-15 -------------------------------
+
+    /// <summary>A name the project defines as a macro, before it has been expanded away.</summary>
+    [Fact]
+    public void A_macro_name_is_classified_as_one()
+    {
+        SemanticContext semantics = new(null, new[] { "MAX_HEALTH" });
+
+        Assert.Equal(
+            ClassificationKind.MacroName,
+            KindOf("/mob\n\tvar/hp = MAX_HEALTH\n", "MAX_HEALTH", semantics));
+    }
+
+    [Fact]
+    public void A_name_followed_by_a_paren_is_a_proc()
+    {
+        Assert.Equal(
+            ClassificationKind.ProcName,
+            KindOf("/proc/f()\n\tattack(src)\n", "attack", new SemanticContext()));
+    }
+
+    /// <summary>A member read with no call parentheses.</summary>
+    [Fact]
+    public void A_member_without_parens_is_a_var()
+    {
+        Assert.Equal(
+            ClassificationKind.VarName,
+            KindOf("/proc/f()\n\tsrc.health = 1\n", "health", new SemanticContext()));
+    }
+
+    /// <summary>
+    /// A path segment only becomes a type name when a tree confirms the type exists.
+    /// </summary>
+    /// <remarks>
+    /// Without a tree the paint path stays lexical rather than guessing, which is what keeps
+    /// classification off the whole-project walk.
+    /// </remarks>
+    [Fact]
+    public void A_path_segment_is_a_type_only_when_the_tree_knows_it()
+    {
+        const string Source = "/proc/f()\n\tvar/x = /obj/item\n";
+
+        Assert.Equal(ClassificationKind.Identifier, KindOf(Source, "item", new SemanticContext()));
+
+        ObjectTree tree = new();
+        tree.GetOrAdd(TypePath.Parse("/obj/item"));
+
+        Assert.Equal(ClassificationKind.TypeName, KindOf(Source, "item", new SemanticContext(tree)));
+    }
+
+    /// <summary>An unknown path stays lexical rather than being coloured as a type.</summary>
+    [Fact]
+    public void An_unknown_path_is_not_a_type()
+    {
+        ObjectTree tree = new();
+        tree.GetOrAdd(TypePath.Parse("/obj/item"));
+
+        Assert.Equal(
+            ClassificationKind.Identifier,
+            KindOf("/proc/f()\n\tvar/x = /obj/nothing\n", "nothing", new SemanticContext(tree)));
+    }
+
+    /// <summary>
+    /// The semantic pass changes kinds and nothing else, so a client ignoring 12-15 sees M2 output.
+    /// </summary>
+    [Fact]
+    public void Refinement_does_not_change_span_boundaries()
+    {
+        const string Source = "/mob\n\tvar/hp = MAX\n\tproc/f()\n\t\tsrc.hp = 1\n";
+
+        SourceText text = SourceText.From(Source);
+        LexResult lex = Lexer.Lex(text);
+
+        IReadOnlyList<ClassifiedSpan> lexical =
+            ClassificationService.Classify(lex, new TextSpan(0, text.Length), null);
+        IReadOnlyList<ClassifiedSpan> semantic = ClassificationService.Classify(
+            lex, new TextSpan(0, text.Length), new SemanticContext(null, new[] { "MAX" }));
+
+        Assert.Equal(lexical.Count, semantic.Count);
+
+        for (int i = 0; i < lexical.Count; i++)
+            Assert.Equal(lexical[i].Span, semantic[i].Span);
     }
 }

@@ -535,18 +535,17 @@ internal static class Program
             return 1;
         }
 
-        IncludeGraph graph = IncludeGraph.Build(args[1], BuildOptions(args));
-        ObjectTree tree = new();
-        Builtins.Seed(tree);
+        // Through the workspace, so this is the same path the ABI takes: the preprocessed tree,
+        // the project's macros, and any -D flags.
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        Document document = workspace.GetDocument(args[2]);
 
-        foreach (IncludedFile file in graph.Files)
-        {
-            if (file.Kind == IncludeKind.DmSource)
-                TypeTreeBuilder.AddFile(tree, file.Path, DeclarationParser.Parse(LexFile(file.Path)));
-        }
-
-        Document document = Document.FromText(args[2], SourceText.From(File.ReadAllText(args[2]), args[2]));
-        CompletionResult result = CompletionService.CompleteAt(tree, document, line - 1, column - 1);
+        CompletionResult result = CompletionService.CompleteAt(
+            workspace.GetObjectTree(),
+            document,
+            line - 1,
+            column - 1,
+            workspace.GetMacroNames());
 
         Console.Out.WriteLine($"context: {result.Context}");
 

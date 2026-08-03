@@ -17,8 +17,8 @@ WHERE WE ARE
     bodies are real syntax trees, and the outline ships through the ABI at
     version 0.3. Every DM file in the corpus parses clean.
   - Local git repo initialised. MIT licensed.
-  - dotnet test works: 534 tests, all passing.
-      Dm.Core.Tests   - 502, text layer through completion
+  - dotnet test works: 546 tests, all passing.
+      Dm.Core.Tests   - 514, text layer through completion
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
@@ -46,14 +46,10 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
      through the ABI. He can wire it up today - it does not need anything else
      from us. The CMakeLists include/link lines are meant to be copied.
-  2. Macros in the completion list. DM_COMPLETION_MACRO is in the ABI and
-     never produced, and the macro table now sits right there in the
-     workspace.
-  3. Semantic highlighting, colour IDs 12-15. The last thing INTEGRATION.txt
-     promises that has not landed.
-  4. Leading-"." relative paths. Spec is now exact - see PLAN 4a.
-  5. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
-  6. Test dm.exe for whether a brace block can hold indentation-structured
+  2. One focused pass at tgstation recall, then stop. No cluster is above 9
+     per owner now, so expect diminishing returns fast.
+  3. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
+  4. Test dm.exe for whether a brace block can hold indentation-structured
      sub-blocks. Still a guess. Mixed tabs and spaces is now answered - see
      VERIFIED below.
 
@@ -71,8 +67,13 @@ FOR THE IDE DEVS - HIGHLIGHTING IS READY
   Pass DM_ENCODING_UTF8 if you hold raw bytes.
   Getting that wrong LOOKS FINE until someone types a non-ASCII character.
 
-  Kinds are #defined in abi/dm_core.h. Values 12-15 are reserved for semantic
-  highlighting later; map them now and they light up at M6 with no changes.
+  Kinds are #defined in abi/dm_core.h. Values 12-15 are SEMANTIC and are
+  produced now: type name, proc name, var name, macro name. They only refine
+  a span the lexical pass already made - nothing is added or moved - so
+  ignoring them gives you the old output exactly.
+  Type names need the object tree, and classification will NOT build one on
+  your paint path; they light up once something else has (completion,
+  symbols).
 
   TRY IT
     dotnet run --project src\Dm.Cli -- preprocess <file.dme>
@@ -615,13 +616,15 @@ MILESTONES                                    (restructured 2026-08-02)
              follows parent_type, and the BYOND standard library is
              bundled: 732 entries scraped from the reference plus
              stddef.dm. "mob." now resolves loc and Move().
-  [~] M6   Binder + completion
+  [x] M6   Binder + completion
              "mob." and "t." WORK and ship through dm_complete_at (ABI 0.4).
              try: dmc complete <dme> <file> <line> <col>
              type inference through new/as/assignment is DONE, and is the
              one place we knowingly disagree with dm.exe - see below.
-             still needed: macros in the list, leading-"." relative paths,
-             and semantic highlighting.
+             macros are in the bare-identifier list, and the tree the ABI
+             serves is the PREPROCESSED one, so macro-declared types resolve.
+             semantic highlighting produces colour IDs 12-15, and
+             leading-"." relative paths resolve. M6 IS DONE.
   [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1
   [ ] M8   .dmi icon states  (independent, do anytime)
   [ ] M9   Incremental reparse + performance

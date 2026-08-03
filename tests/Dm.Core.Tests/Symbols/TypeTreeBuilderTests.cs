@@ -329,4 +329,82 @@ public class TypeTreeBuilderTests
         Assert.NotNull(tree.Find("/mob/orc")!.FindProc("attack"));
         Assert.Equal(0, tree.Find("/mob/orc")!.FindProc("attack")!.DeclaringCount);
     }
+
+    // -- leading-`.` parent_type ---------------------------------------------
+
+    /// <summary>
+    /// <c>parent_type = .sibling</c> searches upward from the type's own path, nearest first.
+    /// </summary>
+    /// <remarks>
+    /// Compiler-verified: with both <c>/x/sword</c> and <c>/x/magic/sword</c> declared, a
+    /// <c>.sword</c> inside <c>/x/magic</c> binds to the nearer one, and reaching a var that exists
+    /// only on the far one fails to compile.
+    /// </remarks>
+    [Fact]
+    public void A_relative_parent_type_binds_to_the_nearest_match()
+    {
+        ObjectTree tree = Build(
+            "/x/sword\n\tvar/far_only = 1\n"
+            + "/x/magic/sword\n\tvar/near_only = 1\n"
+            + "/x/magic/thing\n\tparent_type = .sword\n");
+
+        TypeSymbol thing = tree.Find("/x/magic/thing")!;
+
+        Assert.Equal("/x/magic/sword", tree.InheritanceParent(thing)!.Path.Text);
+        Assert.NotNull(tree.ResolveVar(thing, "near_only"));
+        Assert.Null(tree.ResolveVar(thing, "far_only"));
+    }
+
+    /// <summary>
+    /// The search backtracks: matching the first segment is not enough to claim a candidate.
+    /// </summary>
+    /// <remarks>
+    /// The nearer <c>/x/magic/sword</c> has no <c>deep</c>, so <c>.sword/deep</c> must skip it and
+    /// take <c>/x/sword/deep</c>. dm.exe compiles this, which is what proves the abandonment.
+    /// </remarks>
+    [Fact]
+    public void A_relative_parent_type_backtracks_past_a_partial_match()
+    {
+        ObjectTree tree = Build(
+            "/x/sword/deep\n\tvar/far_only = 1\n"
+            + "/x/magic/sword\n\tvar/near_only = 1\n"
+            + "/x/magic/thing\n\tparent_type = .sword/deep\n");
+
+        TypeSymbol thing = tree.Find("/x/magic/thing")!;
+
+        Assert.Equal("/x/sword/deep", tree.InheritanceParent(thing)!.Path.Text);
+        Assert.NotNull(tree.ResolveVar(thing, "far_only"));
+    }
+
+    /// <summary>
+    /// The anchor is the path ancestry, never <c>parent_type</c>'s own target.
+    /// </summary>
+    /// <remarks>
+    /// Verified against dm.exe: a type whose parent is <c>/a/inh</c> does not see <c>/a/inh</c>'s
+    /// children through a leading <c>.</c>, so the search must not walk the inheritance chain.
+    /// </remarks>
+    [Fact]
+    public void A_relative_path_does_not_search_the_inheritance_chain()
+    {
+        ObjectTree tree = Build(
+            "/a/inh\n/a/inh/target\n"
+            + "/b/thing\n\tparent_type = /a/inh\n"
+            + "/b/other\n\tparent_type = .target\n");
+
+        // `/b` has no `target` child and neither does the root, so this resolves to nothing.
+        Assert.Null(tree.InheritanceParent(tree.Find("/b/other")!));
+    }
+
+    /// <summary>The walk reaches root, so a root-level type is visible from any depth.</summary>
+    [Fact]
+    public void A_relative_path_reaches_root()
+    {
+        ObjectTree tree = Build(
+            "/toplevel\n\tvar/from_toplevel = 1\n"
+            + "/deep/nested/thing\n\tparent_type = .toplevel\n");
+
+        TypeSymbol thing = tree.Find("/deep/nested/thing")!;
+
+        Assert.Equal("/toplevel", tree.InheritanceParent(thing)!.Path.Text);
+    }
 }
