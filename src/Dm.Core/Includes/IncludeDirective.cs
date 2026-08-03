@@ -1,11 +1,12 @@
 using System.Collections.Generic;
+using Dm.Core.Preprocessing;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
 namespace Dm.Core.Includes;
 
 /// <summary>
-/// One <c>#include</c> found in a file.
+/// The target of one <c>#include</c>.
 /// </summary>
 public readonly struct IncludeDirective
 {
@@ -16,7 +17,7 @@ public readonly struct IncludeDirective
         Span = span;
     }
 
-    /// <summary>The path as written, before any normalisation.</summary>
+    /// <summary>The path as written, before normalisation.</summary>
     public string Target { get; }
 
     /// <summary>True for <c>&lt;vendor/name&gt;</c>, which resolves outside the project.</summary>
@@ -25,71 +26,55 @@ public readonly struct IncludeDirective
     /// <summary>Span of the whole directive, for diagnostics.</summary>
     public TextSpan Span { get; }
 
+    public override string ToString() => IsLibrary ? $"<{Target}>" : $"\"{Target}\"";
+
     /// <summary>
-    /// Extracts every <c>#include</c> from a lexed file, in source order.
+    /// Reads the target of an <c>#include</c> directive.
     /// </summary>
     /// <remarks>
-    /// Driven off the token stream rather than a regex so that a directive inside a comment or a
-    /// string is not mistaken for a real one — both appear in practice, including commented-out
-    /// includes left in <c>.dme</c> files.
+    /// Two forms. A quoted path resolves relative to the including file's directory; an
+    /// angle-bracket path resolves against the BYOND library root. The angle-bracket form is
+    /// reassembled from the raw span between the brackets rather than from the tokens, because a
+    /// library path like <c>deadron/characterhandling</c> lexes as identifiers and slashes.
     /// </remarks>
-    public static IEnumerable<IncludeDirective> FindAll(LexResult lex)
+    public static bool TryRead(LexResult lex, Directive directive, out IncludeDirective include)
     {
+        include = default;
+
+        if (directive.Kind != DirectiveKind.Include || !directive.HasArguments)
+            return false;
+
         IReadOnlyList<Token> tokens = lex.Tokens;
+        int start = directive.ArgumentStart;
 
-        for (int i = 0; i < tokens.Count - 1; i++)
+        if (tokens[start].Kind == TokenKind.StringStart)
         {
-            if (tokens[i].Kind != TokenKind.Hash || tokens[i + 1].Kind != TokenKind.DirectiveName)
-                continue;
+            int end = start;
+            while (end < directive.ArgumentEnd && tokens[end].Kind != TokenKind.StringEnd)
+                end++;
 
-            if (lex.GetText(tokens[i + 1]) != "include")
-                continue;
+            if (end >= directive.ArgumentEnd)
+                return false;
 
-            int argument = i + 2;
-            if (argument >= tokens.Count)
-                break;
-
-            if (tokens[argument].Kind == TokenKind.StringStart)
-            {
-                int end = argument;
-                while (end < tokens.Count && tokens[end].Kind != TokenKind.StringEnd)
-                    end++;
-
-                if (end >= tokens.Count)
-                    continue;
-
-                TextSpan inner = TextSpan.FromBounds(tokens[argument].Span.End, tokens[end].Span.Start);
-                yield return new IncludeDirective(
-                    lex.Text.ToString(inner),
-                    isLibrary: false,
-                    TextSpan.FromBounds(tokens[i].Span.Start, tokens[end].Span.End));
-
-                i = end;
-                continue;
-            }
-
-            if (tokens[argument].Kind == TokenKind.Less)
-            {
-                int end = argument + 1;
-                while (end < tokens.Count
-                       && tokens[end].Kind != TokenKind.Greater
-                       && tokens[end].Kind != TokenKind.Newline
-                       && tokens[end].Kind != TokenKind.EndOfFile)
-                {
-                    end++;
-                }
-
-                if (end >= tokens.Count || tokens[end].Kind != TokenKind.Greater)
-                    continue;
-
-                TextSpan inner = TextSpan.FromBounds(tokens[argument].Span.End, tokens[end].Span.Start);
-                yield return new IncludeDirective(
-                    lex.Text.ToString(inner).Trim(),
-                    isLibrary: true,
-                    TextSpan.FromBounds(tokens[i].Span.Start, tokens[end].Span.End));
-
-                i = end;
-            }
+            TextSpan inner = TextSpan.FromBounds(tokens[start].Span.End, tokens[end].Span.Start);
+            include = new IncludeDirective(lex.Text.ToString(inner), isLibrary: false, directive.Span);
+            return true;
         }
+
+        if (tokens[start].Kind == TokenKind.Less)
+        {
+            int end = start + 1;
+            while (end < directive.ArgumentEnd && tokens[end].Kind != TokenKind.Greater)
+                end++;
+
+            if (end >= directive.ArgumentEnd)
+                return false;
+
+            TextSpan inner = TextSpan.FromBounds(tokens[start].Span.End, tokens[end].Span.Start);
+            include = new IncludeDirective(lex.Text.ToString(inner).Trim(), isLibrary: true, directive.Span);
+            return true;
+        }
+
+        return false;
     }
 }

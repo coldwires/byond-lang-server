@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Diagnostics;
 using Dm.Core.Includes;
+using Dm.Core.Preprocessing;
+using System.Linq;
 using Dm.Core.Services;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
@@ -34,6 +36,7 @@ internal static class Program
                 "classify" => Classify(args),
                 "scan" => Scan(args),
                 "includes" => Includes(args),
+                "preprocess" => Preprocess(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -56,6 +59,9 @@ internal static class Program
         Console.Error.WriteLine("  includes <file.dme>      walk the include graph in compile order");
         Console.Error.WriteLine("      --tree               show nesting instead of a flat list");
         Console.Error.WriteLine("      --orphans            also list .dm files on disk that nothing includes");
+        Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
+        Console.Error.WriteLine("      --macros             show tokens that came from a macro");
+        Console.Error.WriteLine("      --dump               print every token");
     }
 
     private static int Unknown(string command)
@@ -143,6 +149,84 @@ internal static class Program
         }
 
         return failed ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Runs a whole project through the preprocessor and reports what came out.
+    /// </summary>
+    /// <remarks>
+    /// The macro view is the useful one: it shows which tokens were produced by expansion and
+    /// which invocation each traces back to, which is the part that goes wrong silently if the
+    /// source map is broken.
+    /// </remarks>
+    private static int Preprocess(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: preprocess needs a .dme file");
+            return 1;
+        }
+
+        bool showMacros = Array.IndexOf(args, "--macros") >= 0;
+        bool dump = Array.IndexOf(args, "--dump") >= 0;
+
+        PreprocessResult result = Preprocessor.Run(args[1]);
+
+        int fromMacros = 0;
+        Dictionary<string, int> byMacro = new(StringComparer.Ordinal);
+
+        foreach (ExpandedToken token in result.Tokens)
+        {
+            if (!token.IsFromMacro)
+                continue;
+
+            fromMacros++;
+            string name = token.Expansion!.Outermost.Macro.Name;
+            byMacro[name] = byMacro.TryGetValue(name, out int n) ? n + 1 : 1;
+        }
+
+        if (dump)
+        {
+            foreach (ExpandedToken token in result.Tokens)
+            {
+                (SourceText source, TextSpan span) = token.ReportAt;
+                LinePosition at = source.GetLinePosition(span.Start, PositionEncoding.Utf16);
+                string origin = token.IsFromMacro ? $"  <- {token.Expansion!.Macro.Name}" : string.Empty;
+
+                Console.Out.WriteLine(
+                    $"{Path.GetFileName(source.Path ?? "?"),-24} {at.Line + 1,6}:{at.Character,-4} " +
+                    $"{token.Kind,-22} {Quote(token.Text)}{origin}");
+            }
+        }
+
+        if (showMacros)
+        {
+            Console.Out.WriteLine("tokens produced per macro:");
+            foreach (KeyValuePair<string, int> entry in byMacro.OrderByDescending(e => e.Value).Take(25))
+                Console.Out.WriteLine($"  {entry.Value,7}  {entry.Key}");
+
+            Console.Out.WriteLine();
+        }
+
+        Console.Out.WriteLine(
+            $"{result.Graph.Files.Count} file(s), {result.Tokens.Count} tokens after expansion, " +
+            $"{fromMacros} from macros ({byMacro.Count} distinct)");
+
+        int errors = 0;
+        foreach (Diagnostic diagnostic in result.Diagnostics)
+        {
+            if (diagnostic.Severity != DiagnosticSeverity.Error)
+                continue;
+
+            errors++;
+            if (errors <= 20)
+                Console.Out.WriteLine($"  {diagnostic.Id}  {diagnostic.Message}");
+        }
+
+        if (errors > 20)
+            Console.Out.WriteLine($"  ... and {errors - 20} more");
+
+        return errors == 0 ? 0 : 1;
     }
 
     /// <summary>
@@ -344,4 +428,5 @@ internal static class Program
 
     private static string Quote(string text) => "'" + text.Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t") + "'";
 }
+
 

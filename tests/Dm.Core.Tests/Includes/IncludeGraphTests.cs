@@ -183,6 +183,190 @@ public class IncludeGraphTests
         Assert.Equal(3, graph.Files.Count);
     }
 
+    // -- conditional compilation -------------------------------------------
+
+    /// <summary>
+    /// The whole reason the graph builder has to be a preprocessor pass: an include in a dead
+    /// branch is not compiled, so it is not part of the project.
+    /// </summary>
+    [Fact]
+    public void An_include_in_a_false_branch_is_not_followed()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#ifdef NEVER\n#include \"dead.dm\"\n#endif\n#include \"live.dm\"\n");
+        temp.Write("dead.dm", "/mob/dead\n");
+        temp.Write("live.dm", "/mob/live\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal(new[] { "game.dme", "live.dm" }, RelativeFiles(graph, temp.Path));
+        Assert.DoesNotContain(graph.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void An_include_in_a_true_branch_is_followed()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#define ENABLED 1\n#ifdef ENABLED\n#include \"a.dm\"\n#endif\n");
+        temp.Write("a.dm", "/mob/a\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Contains("a.dm", RelativeFiles(graph, temp.Path));
+    }
+
+    [Fact]
+    public void Else_branches_are_honoured()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#ifdef NEVER\n#include \"a.dm\"\n#else\n#include \"b.dm\"\n#endif\n");
+        temp.Write("a.dm", "/mob/a\n");
+        temp.Write("b.dm", "/mob/b\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal(new[] { "game.dme", "b.dm" }, RelativeFiles(graph, temp.Path));
+    }
+
+    [Fact]
+    public void Only_the_first_true_elif_branch_is_taken()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme",
+            "#define N 2\n#if N == 1\n#include \"one.dm\"\n#elif N == 2\n#include \"two.dm\"\n" +
+            "#elif N == 2\n#include \"also_two.dm\"\n#else\n#include \"other.dm\"\n#endif\n");
+        temp.Write("one.dm", "/mob/a\n");
+        temp.Write("two.dm", "/mob/b\n");
+        temp.Write("also_two.dm", "/mob/c\n");
+        temp.Write("other.dm", "/mob/d\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal(new[] { "game.dme", "two.dm" }, RelativeFiles(graph, temp.Path));
+    }
+
+    /// <summary>
+    /// A condition inside a skipped region must not be evaluated. Such conditions routinely
+    /// reference macros that only exist in the branch that was taken.
+    /// </summary>
+    [Fact]
+    public void Conditions_inside_a_skipped_region_are_not_evaluated()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme",
+            "#ifdef NEVER\n#if UNDEFINED_NAME_THAT_WOULD_ERROR\n#include \"a.dm\"\n#endif\n#endif\n");
+        temp.Write("a.dm", "/mob/a\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Single(graph.Files);
+        Assert.DoesNotContain(graph.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void Defines_carry_across_files_in_include_order()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"defs.dm\"\n#include \"user.dm\"\n");
+        temp.Write("defs.dm", "#define FEATURE 1\n");
+        temp.Write("user.dm", "#ifdef FEATURE\n#include \"enabled.dm\"\n#endif\n");
+        temp.Write("enabled.dm", "/mob/enabled\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Contains("enabled.dm", RelativeFiles(graph, temp.Path));
+    }
+
+    [Fact]
+    public void Undef_takes_effect_for_later_files()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#define FEATURE 1\n#undef FEATURE\n#include \"user.dm\"\n");
+        temp.Write("user.dm", "#ifdef FEATURE\n#include \"enabled.dm\"\n#endif\n");
+        temp.Write("enabled.dm", "/mob/enabled\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.DoesNotContain("enabled.dm", RelativeFiles(graph, temp.Path));
+    }
+
+    [Fact]
+    public void An_unterminated_conditional_is_reported()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#ifdef SOMETHING\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Contains(graph.Diagnostics, d => d.Id == "DM0103");
+    }
+
+    [Fact]
+    public void An_endif_without_an_if_is_reported()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#endif\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Contains(graph.Diagnostics, d => d.Id == "DM0104");
+    }
+
+    /// <summary>
+    /// <c>#pragma multiple</c> opts a file out of the compiler's include-once rule.
+    /// </summary>
+    [Fact]
+    public void Pragma_multiple_allows_reinclusion()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"twice.dm\"\n#include \"twice.dm\"\n");
+        temp.Write("twice.dm", "#pragma multiple\n/mob/a\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal(3, graph.Files.Count);
+        Assert.DoesNotContain(graph.Diagnostics, d => d.Id == "DM0102");
+    }
+
+    [Fact]
+    public void Predefined_macros_are_available_to_conditions()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#if DM_VERSION >= 500\n#include \"modern.dm\"\n#endif\n");
+        temp.Write("modern.dm", "/mob/modern\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Contains("modern.dm", RelativeFiles(graph, temp.Path));
+    }
+
+    /// <summary>
+    /// The reference is explicit: <c>__MAIN__</c> is defined in the .dme being compiled and not in
+    /// any file it includes.
+    /// </summary>
+    [Fact]
+    public void Main_is_defined_in_the_dme_but_not_in_included_files()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme",
+            "#ifdef __MAIN__\n#include \"seen_by_dme.dm\"\n#endif\n" +
+            "#include \"child.dm\"\n" +
+            "#ifdef __MAIN__\n#include \"still_seen_after.dm\"\n#endif\n");
+        temp.Write("child.dm", "#ifdef __MAIN__\n#include \"wrongly_seen.dm\"\n#endif\n");
+        temp.Write("seen_by_dme.dm", "/mob/a\n");
+        temp.Write("still_seen_after.dm", "/mob/b\n");
+        temp.Write("wrongly_seen.dm", "/mob/c\n");
+
+        IncludeGraph graph = IncludeGraph.Build(Path.Combine(temp.Path, "game.dme"));
+        string[] files = RelativeFiles(graph, temp.Path);
+
+        Assert.Contains("seen_by_dme.dm", files);
+        Assert.DoesNotContain("wrongly_seen.dm", files);
+
+        // And it must be restored when control returns to the .dme.
+        Assert.Contains("still_seen_after.dm", files);
+    }
+
     // -- library includes --------------------------------------------------
 
     [Fact]

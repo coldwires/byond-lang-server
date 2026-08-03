@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Diagnostics;
+using Dm.Core.Preprocessing;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -116,7 +117,14 @@ public sealed class IncludeGraph
 
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
 
+    /// <summary>Walks the graph without expanding macros.</summary>
     public static IncludeGraph Build(string dmePath, IncludeOptions? options = null)
+        => BuildCore(dmePath, options, collectTokens: false).Graph;
+
+    internal static (IncludeGraph Graph, List<ExpandedToken> Tokens) BuildCore(
+        string dmePath,
+        IncludeOptions? options,
+        bool collectTokens)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dmePath);
 
@@ -124,32 +132,85 @@ public sealed class IncludeGraph
         if (!File.Exists(root))
             throw new FileNotFoundException("dme not found", root);
 
-        Builder builder = new(options ?? new IncludeOptions());
+        List<ExpandedToken> tokens = new();
+        Builder builder = new(options ?? new IncludeOptions())
+        {
+            Tokens = collectTokens ? tokens : null,
+        };
+
+        // `__MAIN__` is defined only in the .dme being compiled, never in the files it includes.
+        builder.Macros.Define(MacroBuilder.Empty("__MAIN__"));
+
         builder.Walk(root, includedFrom: null, depth: 0, fromLibrary: false);
 
-        return new IncludeGraph(root, builder.Files, builder.Diagnostics);
+        return (new IncludeGraph(root, builder.Files, builder.Diagnostics), tokens);
     }
 
+    /// <summary>
+    /// Walks the graph while acting as a preprocessor pass.
+    /// </summary>
+    /// <remarks>
+    /// Includes cannot be collected without preprocessing, because an <c>#include</c> inside a false
+    /// <c>#ifdef</c> is not compiled. That means macro state has to be threaded through the
+    /// traversal in include order — which is also why DM's override resolution and the §4a path
+    /// ambiguity are order-dependent.
+    /// </remarks>
     private sealed class Builder
     {
         private readonly IncludeOptions _options;
         private readonly HashSet<string> _seen;
+        private readonly HashSet<string> _onStack;
+        private readonly HashSet<string> _reincludable;
 
         public Builder(IncludeOptions options)
         {
             _options = options;
-            _seen = new HashSet<string>(
-                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+            StringComparer comparer =
+                OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+            _seen = new HashSet<string>(comparer);
+            _onStack = new HashSet<string>(comparer);
+            _reincludable = new HashSet<string>(comparer);
+
+            Macros.SeedPredefined();
         }
 
         public List<IncludedFile> Files { get; } = new();
 
         public List<Diagnostic> Diagnostics { get; } = new();
 
+        /// <summary>Macro state, carried across the whole traversal in include order.</summary>
+        public MacroTable Macros { get; } = new();
+
+        /// <summary>
+        /// Preprocessed output in compile order, or null when only the file list is wanted.
+        /// </summary>
+        /// <remarks>
+        /// Expansion is the expensive part, so callers that only need the include list — the
+        /// <c>includes</c> command, orphan detection — skip it entirely.
+        /// </remarks>
+        public List<ExpandedToken>? Tokens { get; init; }
+
         public void Walk(string path, string? includedFrom, int depth, bool fromLibrary)
         {
-            if (!_seen.Add(path))
+            // A file already being walked further up the stack is a cycle; stop rather than recurse.
+            if (!_onStack.Add(path))
                 return;
+
+            try
+            {
+                WalkCore(path, includedFrom, depth, fromLibrary);
+            }
+            finally
+            {
+                _onStack.Remove(path);
+            }
+        }
+
+        private void WalkCore(string path, string? includedFrom, int depth, bool fromLibrary)
+        {
+            _seen.Add(path);
 
             IncludeKind kind = ClassifyByExtension(path);
             Files.Add(new IncludedFile(path, kind, includedFrom, depth, fromLibrary));
@@ -170,35 +231,176 @@ public sealed class IncludeGraph
                 return;
             }
 
-            foreach (IncludeDirective directive in IncludeDirective.FindAll(Lexer.Lex(text)))
+            LexResult lex = Lexer.Lex(text);
+            IReadOnlyList<Directive> directives = DirectiveScanner.Scan(lex);
+            ConditionalStack conditionals = new();
+
+            // Directives are interleaved with code, and each one can change macro state or pull in
+            // another file. Walking token-by-token keeps the emitted stream in true compile order:
+            // a run of code is expanded with the macro state that applied at that point, before the
+            // next directive gets a chance to change it.
+            Dictionary<int, Directive> byHashIndex = new();
+            foreach (Directive directive in directives)
+                byHashIndex[directive.HashIndex] = directive;
+
+            List<Token> pending = new();
+            int tokenIndex = 0;
+
+            while (tokenIndex < lex.Tokens.Count)
             {
-                string? resolved = Resolve(directive, path, out string attempted);
-
-                if (resolved is null)
+                if (!byHashIndex.TryGetValue(tokenIndex, out Directive directive))
                 {
-                    Diagnostics.Add(Diagnostic.Error(
-                        "DM0101",
-                        directive.Span,
-                        $"unable to open \"{directive.Target}\" (looked for {attempted})"));
+                    if (conditionals.IsActive && IsCode(lex.Tokens[tokenIndex].Kind))
+                        pending.Add(lex.Tokens[tokenIndex]);
+
+                    tokenIndex++;
                     continue;
                 }
 
-                if (_seen.Contains(resolved))
-                {
-                    // The compiler ignores a repeat silently. Worth surfacing, not worth failing:
-                    // real .dme files hit this when DreamMaker's generated block re-adds a manual
-                    // entry.
-                    Diagnostics.Add(new Diagnostic(
-                        "DM0102",
-                        DiagnosticSeverity.Information,
-                        directive.Span,
-                        $"\"{directive.Target}\" was already included; the compiler ignores the repeat"));
-                    continue;
-                }
+                FlushPending(text, pending);
+                tokenIndex = System.Math.Max(directive.ArgumentEnd, directive.HashIndex + 2);
 
-                Walk(resolved, path, depth + 1, fromLibrary || directive.IsLibrary);
+                switch (directive.Kind)
+                {
+                    case DirectiveKind.If:
+                        conditionals.PushIf(() => ConditionalEvaluator.Evaluate(lex, directive, Macros, Diagnostics));
+                        break;
+
+                    case DirectiveKind.Ifdef:
+                    case DirectiveKind.Ifndef:
+                        conditionals.PushIf(() => EvaluateIfdef(lex, directive));
+                        break;
+
+                    case DirectiveKind.Elif:
+                        if (!conditionals.Elif(() => ConditionalEvaluator.Evaluate(lex, directive, Macros, Diagnostics)))
+                            Unmatched(directive);
+                        break;
+
+                    case DirectiveKind.Else:
+                        if (!conditionals.Else())
+                            Unmatched(directive);
+                        break;
+
+                    case DirectiveKind.Endif:
+                        if (!conditionals.Endif())
+                            Unmatched(directive);
+                        break;
+
+                    case DirectiveKind.Define when conditionals.IsActive:
+                        if (MacroDefinition.Parse(lex, directive, Diagnostics) is { } macro)
+                            Macros.Define(macro);
+                        break;
+
+                    case DirectiveKind.Undef when conditionals.IsActive:
+                        if (directive.HasArguments)
+                            Macros.Undefine(lex.GetText(lex.Tokens[directive.ArgumentStart]));
+                        break;
+
+                    case DirectiveKind.Pragma when conditionals.IsActive:
+                        // `#pragma multiple` lets a file be included more than once, opting out of
+                        // the compiler's include-once rule.
+                        if (directive.HasArguments && lex.GetText(lex.Tokens[directive.ArgumentStart]) == "multiple")
+                            _reincludable.Add(path);
+                        break;
+
+                    case DirectiveKind.Include when conditionals.IsActive:
+                        FollowInclude(lex, directive, path, depth, fromLibrary);
+                        break;
+                }
+            }
+
+            FlushPending(text, pending);
+
+            if (conditionals.Depth > 0)
+            {
+                Diagnostics.Add(Diagnostic.Error(
+                    "DM0103",
+                    new TextSpan(text.Length, 0),
+                    $"{conditionals.Depth} unterminated conditional block(s) at end of file"));
             }
         }
+
+        /// <summary>
+        /// Expands and emits a run of code, then clears it.
+        /// </summary>
+        /// <remarks>
+        /// Called before every directive and at end of file, so each run is expanded against the
+        /// macro state that actually applied to it. Deferring all expansion to the end of a file
+        /// would use the file's final macro state for code written above the defines.
+        /// </remarks>
+        private void FlushPending(SourceText text, List<Token> pending)
+        {
+            if (pending.Count == 0 || Tokens is null)
+                return;
+
+            Tokens.AddRange(MacroExpander.Expand(text, pending, Macros, Diagnostics));
+            pending.Clear();
+        }
+
+        /// <summary>Layout and comments carry no meaning for the parser.</summary>
+        private static bool IsCode(TokenKind kind)
+            => kind is not (TokenKind.Comment or TokenKind.EndOfFile);
+
+        private bool EvaluateIfdef(LexResult lex, Directive directive)
+        {
+            if (!directive.HasArguments)
+            {
+                Diagnostics.Add(Diagnostic.Error("DM0120", directive.Span, $"#{directive.Name} requires a macro name"));
+                return false;
+            }
+
+            bool defined = Macros.IsDefined(lex.GetText(lex.Tokens[directive.ArgumentStart]));
+            return directive.Kind == DirectiveKind.Ifdef ? defined : !defined;
+        }
+
+        private void Unmatched(Directive directive)
+            => Diagnostics.Add(Diagnostic.Error(
+                "DM0104", directive.Span, $"#{directive.Name} without a matching #if"));
+
+        private void FollowInclude(LexResult lex, Directive directive, string path, int depth, bool fromLibrary)
+        {
+            if (!IncludeDirective.TryRead(lex, directive, out IncludeDirective include))
+            {
+                Diagnostics.Add(Diagnostic.Error("DM0105", directive.Span, "malformed #include"));
+                return;
+            }
+
+            string? resolved = Resolve(include, path, out string attempted);
+
+            if (resolved is null)
+            {
+                Diagnostics.Add(Diagnostic.Error(
+                    "DM0101",
+                    include.Span,
+                    $"unable to open \"{include.Target}\" (looked for {attempted})"));
+                return;
+            }
+
+            if (_seen.Contains(resolved) && !_reincludable.Contains(resolved))
+            {
+                // The compiler ignores a repeat silently. Worth surfacing, not worth failing: real
+                // .dme files hit this when DreamMaker's generated block re-adds a manual entry.
+                Diagnostics.Add(new Diagnostic(
+                    "DM0102",
+                    DiagnosticSeverity.Information,
+                    include.Span,
+                    $"\"{include.Target}\" was already included; the compiler ignores the repeat"));
+                return;
+            }
+
+            // `__MAIN__` is defined only while processing the .dme itself. Included files must not
+            // see it, and it has to come back when we return to the .dme's remaining directives.
+            bool wasMain = Macros.IsDefined(MainMacro);
+            if (wasMain)
+                Macros.Undefine(MainMacro);
+
+            Walk(resolved, path, depth + 1, fromLibrary || include.IsLibrary);
+
+            if (wasMain)
+                Macros.Define(MacroBuilder.Empty(MainMacro));
+        }
+
+        private const string MainMacro = "__MAIN__";
 
         private string? Resolve(IncludeDirective directive, string includingFile, out string attempted)
         {
