@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Diagnostics;
+using Dm.Core.Includes;
 using Dm.Core.Services;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
@@ -32,6 +33,7 @@ internal static class Program
                 "dump-tokens" => DumpTokens(args),
                 "classify" => Classify(args),
                 "scan" => Scan(args),
+                "includes" => Includes(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -51,6 +53,9 @@ internal static class Program
         Console.Error.WriteLine("      --spans              print the raw span table instead");
         Console.Error.WriteLine("      --no-color           plain text, one line per span");
         Console.Error.WriteLine("  scan <file-or-dir>       lex and report unknown tokens and diagnostics");
+        Console.Error.WriteLine("  includes <file.dme>      walk the include graph in compile order");
+        Console.Error.WriteLine("      --tree               show nesting instead of a flat list");
+        Console.Error.WriteLine("      --orphans            also list .dm files on disk that nothing includes");
     }
 
     private static int Unknown(string command)
@@ -71,6 +76,112 @@ internal static class Program
         LexResult result = LexFile(args[1]);
         Console.Out.Write(result.ToDebugString());
         return result.Diagnostics.Count == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Walks the include graph from a <c>.dme</c> and prints it in compile order.
+    /// </summary>
+    /// <remarks>
+    /// Compile order is the point. DM resolves overrides by include order, and the path ambiguity
+    /// in PLAN.md 4a depends on what the compiler had already seen, so this listing is the ground
+    /// truth for both.
+    /// </remarks>
+    private static int Includes(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: includes needs a .dme file");
+            return 1;
+        }
+
+        bool tree = Array.IndexOf(args, "--tree") >= 0;
+        bool orphans = Array.IndexOf(args, "--orphans") >= 0;
+
+        IncludeGraph graph = IncludeGraph.Build(args[1]);
+        string root = Path.GetDirectoryName(graph.DmePath) ?? ".";
+
+        int dm = 0, library = 0;
+
+        foreach (IncludedFile file in graph.Files)
+        {
+            if (file.Kind == IncludeKind.DmSource)
+                dm++;
+            if (file.FromLibrary)
+                library++;
+
+            string shown = file.FromLibrary ? file.Path : Relative(root, file.Path);
+            string marker = file.Kind switch
+            {
+                IncludeKind.Interface => "  [interface]",
+                IncludeKind.Map => "  [map]",
+                IncludeKind.Other => "  [other]",
+                _ => string.Empty,
+            };
+
+            if (file.FromLibrary)
+                marker += "  [library]";
+
+            Console.Out.WriteLine(tree
+                ? new string(' ', file.Depth * 2) + shown + marker
+                : shown + marker);
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{graph.Files.Count} file(s) in compile order, {dm} DM source, {library} from libraries");
+
+        foreach (Diagnostic diagnostic in graph.Diagnostics)
+            Console.Out.WriteLine($"  {diagnostic.Severity}: {diagnostic.Id}  {diagnostic.Message}");
+
+        if (orphans)
+            ReportOrphans(graph, root);
+
+        bool failed = false;
+        foreach (Diagnostic diagnostic in graph.Diagnostics)
+        {
+            if (diagnostic.Severity == DiagnosticSeverity.Error)
+                failed = true;
+        }
+
+        return failed ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Lists <c>.dm</c> files under the project root that the graph never reaches.
+    /// </summary>
+    /// <remarks>
+    /// These are dead as far as the compiler is concerned. Usually a disabled subsystem or a file
+    /// someone forgot to wire up, and neither is visible from the source itself.
+    /// </remarks>
+    private static void ReportOrphans(IncludeGraph graph, string root)
+    {
+        HashSet<string> reached = new(StringComparer.OrdinalIgnoreCase);
+        foreach (IncludedFile file in graph.Files)
+            reached.Add(file.Path);
+
+        List<string> orphans = new();
+        foreach (string path in Directory.EnumerateFiles(root, "*.dm", SearchOption.AllDirectories))
+        {
+            if (!reached.Contains(Path.GetFullPath(path)))
+                orphans.Add(Relative(root, Path.GetFullPath(path)));
+        }
+
+        Console.Out.WriteLine();
+        if (orphans.Count == 0)
+        {
+            Console.Out.WriteLine("no orphaned .dm files: everything on disk is included");
+            return;
+        }
+
+        Console.Out.WriteLine($"{orphans.Count} .dm file(s) on disk that the .dme never reaches:");
+        orphans.Sort(StringComparer.OrdinalIgnoreCase);
+        foreach (string orphan in orphans)
+            Console.Out.WriteLine($"  {orphan}");
+    }
+
+    private static string Relative(string root, string path)
+    {
+        string relative = Path.GetRelativePath(root, path);
+        return relative.StartsWith("..", StringComparison.Ordinal) ? path : relative;
     }
 
     /// <summary>
@@ -219,14 +330,18 @@ internal static class Program
         Console.Out.WriteLine();
         Console.Out.WriteLine($"{files.Count} file(s), {totalTokens} tokens, {totalUnknown} unknown, {filesWithProblems} file(s) with problems");
 
-        return totalUnknown == 0 ? 0 : 1;
+        // Non-zero for diagnostics too, not just unknown tokens. An unterminated string is a
+        // lexer-visible problem and should fail a regression run the same way.
+        return totalUnknown == 0 && filesWithProblems == 0 ? 0 : 1;
     }
 
     private static LexResult LexFile(string path)
     {
-        string content = File.ReadAllText(path);
-        return Lexer.Lex(SourceText.From(content, path));
+        // Through SourceFileReader, not File.ReadAllText: archives contain Windows-1252 files, and
+        // decoding one as UTF-8 turns every high byte into U+FFFD.
+        return Lexer.Lex(SourceFileReader.Read(path));
     }
 
     private static string Quote(string text) => "'" + text.Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t") + "'";
 }
+

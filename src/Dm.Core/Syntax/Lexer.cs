@@ -17,10 +17,9 @@ namespace Dm.Core.Syntax;
 /// </para>
 /// <para>
 /// Layout: <see cref="TokenKind.Newline"/>, <see cref="TokenKind.Indent"/> and
-/// <see cref="TokenKind.Dedent"/> are emitted for block structure. Indentation is compared by
-/// prefix rather than by counting columns, so no tab width has to be assumed — a deeper line must
-/// start with the enclosing line's exact whitespace. Blank and comment-only lines never change the
-/// level.
+/// <see cref="TokenKind.Dedent"/> are emitted for block structure. Depth is measured by
+/// <see cref="MeasureDepth"/>, which follows what dm.exe actually accepts rather than any tidier
+/// rule. Blank lines, comment-only lines and preprocessor directives never change the level.
 /// </para>
 /// <para>
 /// Interpolated strings emit a flat run: <c>StringStart, StringText, InterpolationStart,
@@ -32,7 +31,22 @@ public sealed class Lexer
 {
     private sealed class StringState
     {
-        public bool Multiline;
+        /// <summary>
+        /// The exact text that closes this string: <c>"</c>, <c>"}</c>, or — for a raw string —
+        /// whatever delimiter the author chose.
+        /// </summary>
+        public string Terminator = "\"";
+
+        /// <summary>
+        /// A raw string. Neither backslash escapes nor <c>[...]</c> interpolation are active, which
+        /// is the whole point of the form — it exists so regexes and Windows paths can be written
+        /// literally.
+        /// </summary>
+        public bool Raw;
+
+        /// <summary>False for single-line forms, where a line break means the string is unterminated.</summary>
+        public bool AllowsLineBreaks;
+
         public bool InInterpolation;
         public int BracketDepth;
     }
@@ -40,7 +54,7 @@ public sealed class Lexer
     private readonly SourceText _text;
     private readonly List<Token> _tokens = new();
     private readonly List<Diagnostic> _diagnostics = new();
-    private readonly List<string> _indents = new() { string.Empty };
+    private readonly List<int> _indents = new() { 0 };
     private readonly Stack<StringState> _strings = new();
 
     private int _position;
@@ -115,45 +129,84 @@ public sealed class Lexer
         while (!AtEnd && (Current == ' ' || Current == '\t'))
             _position++;
 
-        // Blank lines and comment-only lines leave the level alone. Emitting Dedent for a blank
-        // line would close blocks that the author is still inside.
-        if (AtEnd || IsLineTerminator(Current) || IsCommentStart())
+        // Blank lines, comment-only lines and preprocessor directives leave the level alone.
+        //
+        // Blank lines: emitting Dedent would close blocks the author is still inside.
+        //
+        // Directives: `#ifdef` and `#endif` are conventionally written at column 0 regardless of
+        // the surrounding code's indentation, and they neither open nor close a block. Treating
+        // one as a normal line dedents to the root, and the next real line then re-enters at its
+        // own depth without restoring the levels in between — so every later dedent misses. Real
+        // DM does this constantly, wrapping indented code in column-0 conditionals.
+        //
+        // A `#` at the start of a line is always a directive. Stringification only appears inside
+        // a macro body, never in this position.
+        if (AtEnd || IsLineTerminator(Current) || IsCommentStart() || Current == '#')
             return;
 
-        string indent = _text.Content.Substring(lineStart, _position - lineStart);
-        string current = _indents[^1];
+        int depth = MeasureDepth(_text.Content.AsSpan(lineStart, _position - lineStart));
 
-        if (indent == current)
+        if (depth == _indents[^1])
             return;
 
-        if (indent.StartsWith(current, StringComparison.Ordinal))
+        if (depth > _indents[^1])
         {
-            _indents.Add(indent);
+            _indents.Add(depth);
             _tokens.Add(new Token(TokenKind.Indent, TextSpan.FromBounds(lineStart, _position)));
             return;
         }
 
-        while (_indents.Count > 1 && !indent.StartsWith(_indents[^1], StringComparison.Ordinal))
+        while (_indents.Count > 1 && depth < _indents[^1])
         {
             _indents.RemoveAt(_indents.Count - 1);
             _tokens.Add(new Token(TokenKind.Dedent, TextSpan.FromBounds(_position, _position)));
         }
 
-        if (_indents[^1] == indent)
-            return;
+        // Landing between two levels means the file has an indentation DM would itself reject.
+        // We adopt the level rather than report: under-reporting is far safer than flagging valid
+        // code, and DM's own rule is not yet fully modelled (see below).
+        if (depth != _indents[^1])
+            _indents[^1] = depth;
+    }
 
-        // Popping did not land on a matching level, so the line sits between two enclosing levels.
-        // Usually mixed tabs and spaces. Report it, then open a block at the new indent: after the
-        // dedents above, this line does extend whatever level we landed on, so pushing keeps the
-        // stack coherent. Overwriting the top entry instead would corrupt the enclosing level —
-        // and at the root that would redefine what column 0 means for the rest of the file.
-        _diagnostics.Add(Diagnostic.Error(
-            "DM0003",
-            TextSpan.FromBounds(lineStart, _position),
-            "inconsistent indentation: this line does not match any enclosing block"));
+    /// <summary>
+    /// Indentation depth of a line's leading whitespace.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Tabs decide the depth; spaces only count when there are no tabs at all. This is not a guess
+    /// — it is the only simple model consistent with what dm.exe 516.1666 actually accepts. Given a
+    /// sibling declared at one tab:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description><c>" \t"</c>, <c>"\t "</c> — accepted as the same level. Tab count 1 either way.</description></item>
+    /// <item><description><c>" "</c> — accepted as the same level. No tabs, so one space is depth 1.</description></item>
+    /// <item><description><c>"    "</c> — <b>rejected</b> by dm.exe as "inconsistent indentation". Depth 4 here, so we treat it as nesting.</description></item>
+    /// </list>
+    /// <para>
+    /// Prefix comparison, which is what this used to do, fails the first two: neither <c>"\t"</c>
+    /// nor <c>" \t"</c> is a prefix of the other, so it reported an error on code DM compiles.
+    /// </para>
+    /// <para>
+    /// The last case is the one place we knowingly diverge: DM errors, we silently nest. Missing an
+    /// error is far cheaper than flagging valid code in an editor, and DM's exact rule is still
+    /// unmodelled — see PLAN.md open questions.
+    /// </para>
+    /// </remarks>
+    private static int MeasureDepth(ReadOnlySpan<char> indent)
+    {
+        int tabs = 0;
+        int spaces = 0;
 
-        _indents.Add(indent);
-        _tokens.Add(new Token(TokenKind.Indent, TextSpan.FromBounds(lineStart, _position)));
+        foreach (char c in indent)
+        {
+            if (c == '\t')
+                tabs++;
+            else if (c == ' ')
+                spaces++;
+        }
+
+        return tabs > 0 ? tabs : spaces;
     }
 
     private bool IsCommentStart() => Current == '/' && (Peek() == '/' || Peek() == '*');
@@ -220,7 +273,15 @@ public sealed class Lexer
 
         if (c == '"' || (c == '{' && Peek() == '"'))
         {
-            LexStringStart();
+            LexStringStart(raw: false);
+            return;
+        }
+
+        // `@` has no other meaning in DM, and the delimiter that follows it can be any single
+        // character, so anything after `@` other than whitespace opens a raw string.
+        if (c == '@' && !AtEndAt(_position + 1) && !IsLineTerminator(Peek()) && Peek() != ' ' && Peek() != '\t')
+        {
+            LexStringStart(raw: true);
             return;
         }
 
@@ -236,7 +297,8 @@ public sealed class Lexer
             return;
         }
 
-        if (IsIdentifierStart(c))
+        // A backslash not before a line break begins a name. See LexIdentifier.
+        if (IsIdentifierStart(c) || (c == '\\' && IsNameEscapeAt(_position)))
         {
             LexIdentifier();
             return;
@@ -263,20 +325,56 @@ public sealed class Lexer
 
         if (Peek() == '/')
         {
-            while (!AtEnd && !IsLineTerminator(Current))
+            // A backslash at the end of a line comment continues it onto the next line, as in C.
+            // Verified against dm.exe: a `//` comment ending in `\` followed by a line of garbage
+            // compiles clean, so the garbage was still comment. Real code relies on this to wrap
+            // long explanatory comments.
+            while (!AtEnd)
+            {
+                if (Current == '\\' && !AtEndAt(_position + 1) && IsLineTerminator(Peek()))
+                {
+                    _position++;
+
+                    if (Current == '\r')
+                        _position++;
+                    if (Current == '\n')
+                        _position++;
+
+                    continue;
+                }
+
+                if (IsLineTerminator(Current))
+                    break;
+
                 _position++;
+            }
 
             Add(TokenKind.Comment, start);
             return;
         }
 
         // Block comments nest in DM, so a depth counter is required rather than scanning for the
-        // first "*/".
+        // first "*/". Verified against dm.exe 516.1666: `/*` `/*` `*/` reports "end of file
+        // reached inside of comment", which only happens if the inner delimiter nested.
         _position += 2;
         int depth = 1;
 
         while (!AtEnd && depth > 0)
         {
+            // A line comment inside a block comment hides both delimiters to end of line. Also
+            // verified against dm.exe: `/*` then `// */` then code then `*/` compiles clean, so
+            // the `*/` on the `//` line was ignored. Without this, a line like
+            // `//*see the article` nests the block comment and swallows the rest of the file.
+            //
+            // Quotes get no such treatment — `"*/"` inside a block comment does close it.
+            if (Current == '/' && Peek() == '/')
+            {
+                while (!AtEnd && !IsLineTerminator(Current))
+                    _position++;
+
+                continue;
+            }
+
             if (Current == '/' && Peek() == '*')
             {
                 depth++;
@@ -299,15 +397,85 @@ public sealed class Lexer
         Add(TokenKind.Comment, start);
     }
 
-    private void LexStringStart()
+    /// <summary>
+    /// Opens a string and records what will close it.
+    /// </summary>
+    /// <remarks>
+    /// Ordinary strings are <c>"…"</c> or <c>{"…"}</c>. Raw strings are the awkward ones: the
+    /// reference documents three forms, all verified to compile.
+    /// <list type="bullet">
+    /// <item><description><c>@X…X</c> — <b>any single character</b> is the delimiter. <c>@#…#</c>,
+    /// <c>@!…!</c>, and critically <c>@/(\d+)/</c>, which is what raw strings exist for. No line
+    /// breaks allowed.</description></item>
+    /// <item><description><c>@{"…"}</c> — multiline.</description></item>
+    /// <item><description><c>@(XYZ)…XYZ</c> — an arbitrary multi-character terminator, multiline.</description></item>
+    /// </list>
+    /// Treating <c>@</c> as only ever introducing <c>@"</c> mis-lexes <c>@/(\d+)/</c> as a division,
+    /// which is a silent wrong answer rather than an error.
+    /// </remarks>
+    private void LexStringStart(bool raw)
     {
         int start = _position;
-        bool multiline = Current == '{';
 
-        _position += multiline ? 2 : 1;
+        if (!raw)
+        {
+            bool multiline = Current == '{';
+            _position += multiline ? 2 : 1;
+
+            Add(TokenKind.StringStart, start);
+            _strings.Push(new StringState
+            {
+                Terminator = multiline ? "\"}" : "\"",
+                AllowsLineBreaks = multiline,
+            });
+            return;
+        }
+
+        _position++;
+
+        if (Current == '{' && Peek() == '"')
+        {
+            _position += 2;
+            Add(TokenKind.StringStart, start);
+            _strings.Push(new StringState { Terminator = "\"}", Raw = true, AllowsLineBreaks = true });
+            return;
+        }
+
+        if (Current == '(')
+        {
+            int reset = _position;
+            _position++;
+
+            int textStart = _position;
+            while (!AtEnd && Current != ')' && !IsLineTerminator(Current))
+                _position++;
+
+            if (Current == ')' && _position > textStart)
+            {
+                string terminator = _text.Content.Substring(textStart, _position - textStart);
+                _position++;
+
+                Add(TokenKind.StringStart, start);
+                _strings.Push(new StringState { Terminator = terminator, Raw = true, AllowsLineBreaks = true });
+                return;
+            }
+
+            // Malformed. Fall through and treat the '(' itself as the delimiter.
+            _position = reset;
+        }
+
+        if (AtEnd)
+        {
+            Add(TokenKind.Unknown, start);
+            Report("DM0006", start, "'@' at end of file");
+            return;
+        }
+
+        string delimiter = Current.ToString();
+        _position++;
 
         Add(TokenKind.StringStart, start);
-        _strings.Push(new StringState { Multiline = multiline });
+        _strings.Push(new StringState { Terminator = delimiter, Raw = true, AllowsLineBreaks = false });
     }
 
     private void LexResource()
@@ -319,7 +487,7 @@ public sealed class Lexer
         {
             if (Current == '\\' && !AtEndAt(_position + 1))
             {
-                _position += 2;
+                ConsumeStringEscape();
                 continue;
             }
 
@@ -338,6 +506,20 @@ public sealed class Lexer
     }
 
     private bool AtEndAt(int index) => index >= _text.Length;
+
+    private bool MatchesAt(int index, string value)
+    {
+        if (value.Length == 0 || index + value.Length > _text.Length)
+            return false;
+
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (_text[index + i] != value[i])
+                return false;
+        }
+
+        return true;
+    }
 
     private void LexNumber()
     {
@@ -386,15 +568,59 @@ public sealed class Lexer
         Add(TokenKind.Number, start);
     }
 
+    /// <summary>
+    /// Lexes an identifier, including embedded backslash escapes.
+    /// </summary>
+    /// <remarks>
+    /// DM names may contain <c>\</c> escapes, which control how a verb or var is presented to
+    /// players — <c>\the</c>, <c>\proper</c>, <c>\~</c> and so on. Verified against dm.exe:
+    /// <c>\~Admin_Chat(T as text)</c>, <c>D\~E</c> mid-name, and <c>var/\~G</c> all compile. A bare
+    /// <c>\~</c> in expression position does not, but rejecting that is the parser's job — the
+    /// lexer has no way to know which position it is in.
+    ///
+    /// The escaped character can be anything, including a digit, so the rule is simply "backslash
+    /// plus one character", not a lookup of known macros.
+    /// </remarks>
     private void LexIdentifier()
     {
         int start = _position;
 
-        while (!AtEnd && IsIdentifierPart(Current))
+        while (!AtEnd)
+        {
+            if (IsNameEscapeAt(_position))
+            {
+                _position += 2;
+                continue;
+            }
+
+            if (!IsIdentifierPart(Current))
+                break;
+
             _position++;
+        }
 
         string text = _text.Content.Substring(start, _position - start);
         Add(Keywords.Lookup(text), start);
+    }
+
+    /// <summary>
+    /// True if a name escape starts at <paramref name="index"/>: a backslash followed by a
+    /// character that is neither whitespace nor a line terminator.
+    /// </summary>
+    /// <remarks>
+    /// Excluding line terminators is what keeps this from swallowing a line continuation, which is
+    /// checked earlier and means something entirely different.
+    /// </remarks>
+    private bool IsNameEscapeAt(int index)
+    {
+        if (index >= _text.Length || _text[index] != '\\')
+            return false;
+
+        if (index + 1 >= _text.Length)
+            return false;
+
+        char next = _text[index + 1];
+        return next != ' ' && next != '\t' && !IsLineTerminator(next);
     }
 
     private void LexHash()
@@ -418,6 +644,27 @@ public sealed class Lexer
             _position++;
 
         Add(TokenKind.DirectiveName, nameStart);
+
+        // `#warn` and `#error` take free text, not tokens. The compiler prints the rest of the
+        // line verbatim, so apostrophes and unbalanced quotes are legal there — real library code
+        // contains `#warn ... HudLib won't work`, whose apostrophe would otherwise open a resource
+        // literal and run to end of line.
+        string name = _text.Content.Substring(nameStart, _position - nameStart);
+        if (name is "warn" or "error")
+            LexDirectiveText();
+    }
+
+    private void LexDirectiveText()
+    {
+        while (!AtEnd && (Current == ' ' || Current == '\t'))
+            _position++;
+
+        int start = _position;
+        while (!AtEnd && !IsLineTerminator(Current))
+            _position++;
+
+        if (_position > start)
+            Add(TokenKind.DirectiveText, start);
     }
 
     private bool IsAtStartOfLogicalLine(int hashOffset)
@@ -450,13 +697,13 @@ public sealed class Lexer
         {
             char c = Current;
 
-            if (c == '\\' && !AtEndAt(_position + 1))
+            if (c == '\\' && !state.Raw && !AtEndAt(_position + 1))
             {
-                _position += 2;
+                ConsumeStringEscape();
                 continue;
             }
 
-            if (c == '[')
+            if (c == '[' && !state.Raw)
             {
                 FlushStringText(start);
                 int bracket = _position;
@@ -468,39 +715,24 @@ public sealed class Lexer
                 return;
             }
 
-            if (state.Multiline)
+            if (MatchesAt(_position, state.Terminator))
             {
-                if (c == '"' && Peek() == '}')
-                {
-                    FlushStringText(start);
-                    int quote = _position;
-                    _position += 2;
-                    Add(TokenKind.StringEnd, quote);
-                    _strings.Pop();
-                    return;
-                }
+                FlushStringText(start);
+                int terminator = _position;
+                _position += state.Terminator.Length;
+                Add(TokenKind.StringEnd, terminator);
+                _strings.Pop();
+                return;
             }
-            else
-            {
-                if (c == '"')
-                {
-                    FlushStringText(start);
-                    int quote = _position;
-                    _position++;
-                    Add(TokenKind.StringEnd, quote);
-                    _strings.Pop();
-                    return;
-                }
 
-                // A single-quoted string cannot span lines. Stop at the terminator so the rest of
-                // the file still lexes; the newline itself belongs to the enclosing code.
-                if (IsLineTerminator(c))
-                {
-                    FlushStringText(start);
-                    Report("DM0001", start, "unterminated string literal");
-                    _strings.Pop();
-                    return;
-                }
+            // A single-line form cannot span lines. Stop at the break so the rest of the file still
+            // lexes; the newline itself belongs to the enclosing code.
+            if (!state.AllowsLineBreaks && IsLineTerminator(c))
+            {
+                FlushStringText(start);
+                Report("DM0001", start, "unterminated string literal");
+                _strings.Pop();
+                return;
             }
 
             _position++;
@@ -515,6 +747,33 @@ public sealed class Lexer
     {
         if (_position > start)
             Add(TokenKind.StringText, start);
+    }
+
+    /// <summary>
+    /// Consumes a backslash and whatever it escapes.
+    /// </summary>
+    /// <remarks>
+    /// A backslash immediately before a line break is a continuation: the string carries on to the
+    /// next line and the break is not part of its value. The terminator has to be consumed whole —
+    /// skipping a fixed two characters eats the CR of a CRLF pair and leaves the LF behind, which
+    /// then reads as the end of an unterminated single-line string. That failure is invisible on
+    /// LF files and appears only on Windows-authored source, where this form is common for long
+    /// description text.
+    /// </remarks>
+    private void ConsumeStringEscape()
+    {
+        _position++;
+
+        if (Current == '\r')
+        {
+            _position++;
+            if (Current == '\n')
+                _position++;
+
+            return;
+        }
+
+        _position++;
     }
 
     // -- operators ---------------------------------------------------------
@@ -578,6 +837,7 @@ public sealed class Lexer
 
             case ':':
                 if (c1 == ':') { _position += 2; return TokenKind.ColonColon; }
+                if (c1 == '=') { _position += 2; return TokenKind.ColonAssign; }
                 _position++; return TokenKind.Colon;
 
             case '?':
@@ -611,6 +871,8 @@ public sealed class Lexer
                 _position++; return TokenKind.Slash;
 
             case '%':
+                if (c1 == '%' && c2 == '=') { _position += 3; return TokenKind.PercentPercentAssign; }
+                if (c1 == '%') { _position += 2; return TokenKind.PercentPercent; }
                 if (c1 == '=') { _position += 2; return TokenKind.PercentAssign; }
                 _position++; return TokenKind.Percent;
 
@@ -629,6 +891,7 @@ public sealed class Lexer
 
             case '<':
                 if (c1 == '<' && c2 == '=') { _position += 3; return TokenKind.LeftShiftAssign; }
+                if (c1 == '=' && c2 == '>') { _position += 3; return TokenKind.Spaceship; }
                 if (c1 == '<') { _position += 2; return TokenKind.LeftShift; }
                 if (c1 == '=') { _position += 2; return TokenKind.LessEqual; }
                 if (c1 == '>') { _position += 2; return TokenKind.NotEqual; }   // DM spells != as <> too
