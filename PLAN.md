@@ -132,7 +132,11 @@ Mid-path, `/` and `.` are the same token. These four produce identical values, c
 /obj/item/sword    /obj/item.sword    /obj.item/sword    /obj.item.sword
 ```
 
-They can be mixed inside a single path. The lexer must fold both into one path-separator token.
+They can be mixed inside a single path.
+
+**Folding happens in the parser, not the lexer.** The lexer emits `Slash` and `Dot` as distinct
+tokens because it cannot tell the cases apart: `a.b` is member access, `/a.b` is a path, and
+`a / b` is division. Only path context decides, and that context is the parser's.
 
 ### Context 1 — the static type tree
 
@@ -280,26 +284,32 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   `osx-x64`, `osx-arm64`. **Note the vswhere quirk** — the publish fails with a misleading
   MSB3073 linker error unless `vswhere.exe`'s directory is on PATH.
 
-### M1 — Text layer and lexer
+### M1 — Text layer and lexer ✅
 
-- `SourceText` with an in-memory overlay shadowing disk. Editor buffers are always ahead of the
-  filesystem. UTF-8 internally, both UTF-8 and UTF-16 offsets exposed.
-- Line-ending handling per §4b: `\r\n`, `\n`, and lone `\r` all terminate; `\r` never enters token
-  text.
-- Lexer producing tokens plus `Indent`/`Dedent`. DM block structure is indentation-significant, and
-  brace blocks `{ }` coexist with it.
-- DM-specific lexer requirements:
-  - `{" ... "}` multiline strings
-  - String interpolation `"text[expr]more"` — the lexer re-enters expression mode recursively.
-    Represent as an interpolated-string token carrying embedded token runs.
-  - `\` line continuation
-  - Nesting `/* */` block comments (differs from C)
-  - Path separators per §4a: `/` and `.` fold to one token mid-path; `//` inside a path is a comment
-  - `operator` followed by an operator token is a single proc-name unit, including `operator:=`
-    which contains a colon
-  - Contextual, non-reserved keywords: `in`, `to`, `step`, `as`, `set`, and note `proc` and `verb`
-    are ordinary path segments
-- `Dm.Cli dump-tokens`, plus snapshot fixtures.
+- ✅ `SourceText`, content preserved exactly rather than normalised. Both UTF-8 and UTF-16 offsets
+  exposed; all three terminator forms recognised per §4b. An offset inside a terminator clamps to
+  the end of that line's content.
+- ✅ Lexer emitting `Newline`/`Indent`/`Dedent`. Indentation is compared by **prefix**, not by
+  counting columns, so no tab width is assumed — this sidesteps open question 7 for now. Blank and
+  comment-only lines never change the level.
+- ✅ Multiline `{" ... "}` strings, interpolation as a flat token run, `\` line continuation,
+  nesting `/* */` comments, resource literals, `#` stringification, the full operator table.
+- ✅ Never throws. Unrecognised input becomes an `Unknown` token plus a diagnostic, so a buffer
+  mid-keystroke still lexes end to end.
+- ✅ `Dm.Cli` (`dmc`) with `dump-tokens` and `scan`.
+
+**Validation approach.** `dmc scan` reports `Unknown` tokens, which is how the operator table gets
+checked against reality — the DM Reference does not enumerate every operator, so real code is the
+only reliable source. Current status: **7,829 tokens across 7 real DM files, 0 unknown, 0
+diagnostics**, including `stddef.dm`.
+
+Deferred to the parser, not the lexer:
+- Folding `/` and `.` in path context (§4a) — the lexer cannot tell paths from member access.
+- `operator` followed by an operator token as a single proc name. The lexer emits `operator` as an
+  `Identifier` followed by the operator tokens; the parser reassembles. This is why `operator:=`
+  needs no special lexer handling.
+
+Still open: whether a brace block can contain indentation-structured sub-blocks (question 7).
 
 ### M2 — Lexical classification → first visible feature
 

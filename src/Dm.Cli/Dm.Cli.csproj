@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Dm.Cli</RootNamespace>
+    <AssemblyName>dmc</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dm.Core\Dm.Core.csproj" />
+  </ItemGroup>
+
+</Project>
