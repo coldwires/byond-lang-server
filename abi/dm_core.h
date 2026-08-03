@@ -63,8 +63,9 @@ void dm_free(void *ptr);
 /*
  * An opened DM project, rooted at a .dme file.
  *
- * M0 note: opening validates the .dme exists and records its directory. Parsing the
- * include graph and building the object tree arrive in M2 and M4.
+ * Opening validates the .dme exists and records its directory; it parses nothing. The
+ * include graph is walked and the object tree built on the first call that needs them,
+ * then cached until a buffer changes.
  */
 typedef void *dm_workspace;
 

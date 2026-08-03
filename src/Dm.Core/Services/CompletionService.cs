@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using Dm.Core.Binding;
 using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
@@ -13,8 +14,15 @@ namespace Dm.Core.Services;
 /// <remarks>
 /// <para>
 /// The scope chain is locals, then the enclosing proc's parameters, then the members of the type
-/// the proc is on including everything it inherits, then globals. Nothing here is type inference:
-/// a declaration already carries its type, so <c>var/mob/test/t</c> then <c>t.</c> is a lookup.
+/// the proc is on including everything it inherits, then globals. Most of it is lookup rather than
+/// inference: a declaration usually carries its type, so <c>var/mob/test/t</c> then <c>t.</c> needs
+/// nothing worked out.
+/// </para>
+/// <para>
+/// Where a declaration left the type out, <see cref="Binding.TypeInference"/> fills it in from a
+/// <c>new</c>, an <c>as</c> clause or an assignment. That is <b>more than dm.exe does</b> — the
+/// compiler has no local inference and rejects every <c>.</c> on an untyped var — so those items
+/// are offered knowing the compiler would refuse them. See PLAN.md §6 for why.
 /// </para>
 /// <para>
 /// <c>.</c> and <c>:</c> produce different lists, and the difference is not "checked versus
@@ -174,10 +182,10 @@ public static class CompletionService
     /// Works out what type sits to the left of the operator.
     /// </summary>
     /// <remarks>
-    /// Handles the three shapes that carry a type without inference: <c>src</c>, a local or
-    /// parameter with a declared type, and a name or path that is itself a type. Anything else —
-    /// a call result, an index — has no declared type, which is exactly where DM itself gives up
-    /// and lets <c>.</c> behave like <c>:</c>.
+    /// Handles the shapes that carry a type outright — <c>src</c>, a local or parameter with a
+    /// declared type, and a name or path that is itself a type — and falls back to inference for a
+    /// local that was declared without one. A call result or an index still resolves to nothing,
+    /// which is where DM itself gives up and lets <c>.</c> behave like <c>:</c>.
     /// </remarks>
     private static TypeSymbol? ResolveReceiver(
         ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset)
@@ -347,6 +355,14 @@ public static class CompletionService
         }
     }
 
+    /// <summary>
+    /// The type of a local or parameter: the one it declared, or failing that an inferred one.
+    /// </summary>
+    /// <remarks>
+    /// A written type always wins, because that is the only thing dm.exe itself checks. Inference
+    /// only fills the gap where the declaration left the slot empty, and it goes further than the
+    /// compiler does — see <see cref="TypeInference"/> for what that costs.
+    /// </remarks>
     private static TypePath? FindLocalType(Document document, int offset, string name)
     {
         if (FindEnclosingProc(document, offset) is not { } proc)
@@ -354,17 +370,87 @@ public static class CompletionService
 
         foreach (LocalVarStatementSyntax local in Locals(proc, offset))
         {
-            if (string.Equals(local.Name, name, StringComparison.Ordinal) && local.DeclaredType is { } type)
+            if (!string.Equals(local.Name, name, StringComparison.Ordinal))
+                continue;
+
+            if (local.DeclaredType is { } type)
                 return TypePath.FromSegments(type.Segments);
+
+            // An untyped local. The most recent assignment before the cursor describes what the
+            // name holds *here*, so it beats the initialiser rather than the other way round.
+            if (LastAssignedType(document, proc, offset, name) is { } assigned)
+                return assigned;
+
+            return Infer(document, proc, offset, local.Initializer, name);
         }
 
         foreach (ParameterSyntax parameter in proc.Parameters)
         {
-            if (string.Equals(parameter.Name, name, StringComparison.Ordinal) && parameter.DeclaredType is { } type)
+            if (!string.Equals(parameter.Name, name, StringComparison.Ordinal))
+                continue;
+
+            if (parameter.DeclaredType is { } type)
                 return TypePath.FromSegments(type.Segments);
+
+            // `f(M as mob)` says what M is without declaring a path.
+            return TypeInference.FromInputType(parameter.InputType);
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Infers an expression's type, resolving any bare name it leans on against the same scope.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="origin"/> is the name being resolved, and is refused as its own answer so
+    /// that <c>var/x = x</c> cannot recurse forever.
+    /// </remarks>
+    private static TypePath? Infer(
+        Document document, ProcDeclarationSyntax proc, int offset, ExpressionSyntax? expression, string origin)
+        => TypeInference.Infer(expression, referenced
+            => string.Equals(referenced, origin, StringComparison.Ordinal)
+                ? null
+                : FindLocalType(document, offset, referenced));
+
+    /// <summary>
+    /// The type last assigned to a name before the cursor, for <c>var/x</c> then <c>x = new /obj</c>.
+    /// </summary>
+    /// <remarks>
+    /// Last one wins rather than first, so a name reassigned to a different type reports what it
+    /// most recently held. Assignments after the cursor are ignored: they have not happened yet at
+    /// the position being asked about.
+    /// </remarks>
+    private static TypePath? LastAssignedType(
+        Document document, ProcDeclarationSyntax proc, int offset, string name)
+    {
+        if (proc.Body is null)
+            return null;
+
+        TypePath? found = null;
+
+        foreach (StatementSyntax statement in Flatten(proc.Body))
+        {
+            if (statement.Span.Start >= offset)
+                break;
+
+            if (statement is not ExpressionStatementSyntax { Expression: AssignmentExpressionSyntax assignment })
+                continue;
+
+            if (assignment.OperatorToken != TokenKind.Assign)
+                continue;
+
+            if (assignment.Target is not IdentifierExpressionSyntax target
+                || !string.Equals(target.Name, name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (Infer(document, proc, offset, assignment.Value, name) is { } inferred)
+                found = inferred;
+        }
+
+        return found;
     }
 
     /// <summary>The type whose members <c>src</c> reaches at this position.</summary>

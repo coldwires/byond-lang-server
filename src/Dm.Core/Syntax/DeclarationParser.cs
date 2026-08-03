@@ -187,6 +187,41 @@ public sealed class DeclarationParser
         return declarations;
     }
 
+    /// <summary>
+    /// True when the rest of this line is empty and the next code line is indented.
+    /// </summary>
+    /// <remarks>
+    /// Looks ahead without consuming, because the caller still needs to parse the line normally when
+    /// the answer is no. Directives are stepped over since they carry no indentation of their own.
+    /// </remarks>
+    private bool OpensAnIndentedBlock()
+    {
+        int probe = _position;
+
+        while (probe < _tokens.Count)
+        {
+            TokenKind kind = _tokens[probe].Kind;
+
+            if (kind == TokenKind.Newline)
+            {
+                probe++;
+                continue;
+            }
+
+            if (kind == TokenKind.Hash)
+            {
+                while (probe < _tokens.Count && _tokens[probe].Kind is not (TokenKind.Newline or TokenKind.Dedent))
+                    probe++;
+
+                continue;
+            }
+
+            return kind == TokenKind.Indent;
+        }
+
+        return false;
+    }
+
     /// <summary>Consumes an indented block and returns its declarations.</summary>
     private List<DeclarationSyntax> ParseIndentedBlock(BlockContext context)
     {
@@ -246,6 +281,16 @@ public sealed class DeclarationParser
             return ParseProc(path, context, start);
 
         int varIndex = IndexOfSegment(path, "var");
+
+        // `var min_rank` — the slot after `var` accepts a space as well as `/` and `.`, so what
+        // looks like a bare `var` header may still name a variable on the same line (PLAN.md §4a).
+        // Read as a header, the name is discarded and any block under it is attributed wrongly.
+        if (path.Segments[^1] == "var" && IsNameLike(Current))
+        {
+            path = Join(path, ParsePath());
+            varIndex = IndexOfSegment(path, "var");
+        }
+
         bool endsWithVar = path.Segments[^1] == "var";
         bool endsWithProc = path.Segments[^1] is "proc" or "verb";
 
@@ -268,11 +313,43 @@ public sealed class DeclarationParser
             }
 
             if (context == BlockContext.Var)
+            {
+                // Inside a `var` block a child can head a deeper block of its own, contributing a
+                // type or a modifier to everything beneath it:
+                //
+                //     var
+                //         list
+                //             chains        <- chains is a /list
+                //         tmp
+                //             obj
+                //                 grapled   <- grapled is a tmp /obj
+                //
+                // Treating the header as a variable loses the name and every child under it.
+                if (OpensAnIndentedBlock())
+                {
+                    ConsumeLineEnd();
+                    List<DeclarationSyntax> nested = ParseIndentedBlock(BlockContext.Var);
+                    return new TypeDeclarationSyntax(path, nested, SpanFrom(start), isGroupHeader: true);
+                }
+
                 return ParseVar(path, varIndex: -1, start);
+            }
         }
 
         if (varIndex >= 0)
+        {
+            // `var/list` on its own line heads a block whose children are all of that type, while
+            // `var/hp` on its own line declares one variable. Only the indent that follows tells
+            // them apart, so the decision needs a look ahead rather than the path alone.
+            if (OpensAnIndentedBlock())
+            {
+                ConsumeLineEnd();
+                List<DeclarationSyntax> typed = ParseIndentedBlock(BlockContext.Var);
+                return new TypeDeclarationSyntax(path, typed, SpanFrom(start), isGroupHeader: true);
+            }
+
             return ParseVar(path, varIndex, start);
+        }
 
         // A bare assignment at type level overrides an inherited var and needs no `var/` keyword —
         // `maxx = 3` on `world`, or stddef.dm's `_dm_interface = _DM_datum|_DM_sound`. It declares a
@@ -452,6 +529,12 @@ public sealed class DeclarationParser
                 _position++;
                 continue;
             }
+
+            // A trailing separator collapses — `/obj/item/` means `/obj/item` (PLAN.md §4a). It has
+            // to be consumed, or `tmp/` heading a var block reads as a variable called `tmp` and
+            // everything under it is lost.
+            if (Current is TokenKind.Slash or TokenKind.Dot)
+                _position++;
 
             break;
         }
@@ -713,6 +796,22 @@ public sealed class DeclarationParser
 
     private void Report(string id, TextSpan span, string message)
         => _diagnostics.Add(Diagnostic.Error(id, span, message));
+
+    /// <summary>Appends one path's segments to another, keeping the first's anchor.</summary>
+    private static PathSyntax Join(PathSyntax first, PathSyntax second)
+    {
+        List<string> segments = new(first.Segments);
+        List<TextSpan> spans = new(first.SegmentSpans);
+
+        segments.AddRange(second.Segments);
+        spans.AddRange(second.SegmentSpans);
+
+        TextSpan span = spans.Count == 0
+            ? first.Span
+            : TextSpan.FromBounds(spans[0].Start, spans[^1].End);
+
+        return new PathSyntax(first.Anchor, segments, span, spans);
+    }
 
     private static int IndexOfSegment(PathSyntax path, string name)
     {

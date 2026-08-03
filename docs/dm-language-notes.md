@@ -405,6 +405,43 @@ null, and the `?` covers the null list. For a numeric index into a plain list it
 than it appears to. BYOND's maintainer describes it the same way — it hijacks the `?.` operator's
 logic, and there is no bounds checking on the index.
 
+## 18. A `proc` block inside a `var` block declares nothing
+
+Indent a `proc` header one level too far — into a `var` block — and everything under it is
+silently discarded:
+
+```dm
+/datum/swallowed
+	var
+		kept = "this one survives"
+		proc
+			vanished()
+```
+
+```
+kept=this one survives  in vars=no  call -> runtime: undefined proc or verb /datum/swallowed/vanished().
+```
+
+It compiles with **0 errors and 0 warnings**. `vanished` is then not a proc, not a var, and absent
+from `vars` — it does not exist in any form, and calling it is a runtime error at the moment that
+line is first reached. The sibling var beside it is unaffected, so nothing looks wrong.
+
+Give those procs bodies and the file stops compiling, which is the clue to what is happening:
+
+```dm
+		proc
+			vanished()
+				return 1        // error: return1: missing =
+```
+
+Everything under the misplaced header is being read as **var declarations**, so `return 1` looks
+like a variable called `return` that forgot its initialiser. The only reason the bodyless form
+compiles is that a bare `name()` is accepted there and then dropped.
+
+This is worth checking for in real code. It was found in a shipped game where four mission procs
+were declared this way and one of them is called from another file — a runtime error waiting on a
+code path, with nothing in the build output to suggest it.
+
 ---
 
 ## Compile-only: `.` versus `:` — neither is unchecked
@@ -435,6 +472,57 @@ Declare a property on a **subtype** of the receiver's declared type, then try to
 So `.` checks the declared type only, and `:` widens the check to the declared type *and its
 subtypes*. Describing `:` as "unchecked" is wrong — it is a wider check, not an absent one.
 
+### There is no local type inference at all
+
+The obvious next question is whether the compiler reads the type off an initialiser. It does not.
+
+```dm
+/obj/item
+	var/hp = 1
+
+/proc/f()
+	var/x = new /obj/item
+	world << x.hp          // error: x.hp: undefined var
+```
+
+`hp` is the correct member of the type named two characters earlier on the previous line, and it
+still fails. Only a **written** type is ever checked — `var/obj/item/x` compiles, `var/x` does not,
+whatever it was initialised with.
+
+Every route you might expect to carry a type was tested, and none of them do:
+
+| Written | `x.member` |
+|---|---|
+| `var/obj/item/x = new` — declared type | **checked against /obj/item** |
+| `var/x = new /obj/item` | error on every member |
+| `var/x = new /obj/item()` | error on every member |
+| `var/x = new /obj/item{hp = 2}` | error on every member |
+| `var/x` then `x = new /obj/item` | error on every member |
+| `var/x = a`, where `a` is a typed local | error on every member |
+| `f(M as mob)` — parameter with an `as` clause | error on every member |
+| `var/M = input("x") as mob` | error on every member |
+
+So `as` is an input filter, not a type annotation, and `new` tells the compiler nothing about the
+variable receiving it.
+
+### `.` and `:` on an untyped receiver are checked differently
+
+Untyped is not the same as unchecked. With `var/x` and no type anywhere:
+
+| Written | Result |
+|---|---|
+| `x.hp` — a member that exists on some type | **error** |
+| `x.nowhere_at_all` — a name on no type at all | **error** |
+| `x:hp` — a member that exists on some type | compiles |
+| `x:nowhere_at_all` — a name on no type at all | **error** |
+
+`.` on an untyped var rejects everything. `:` on an untyped var asks a different question — *does
+this name exist as a member of anything in the program?* — and accepts it if so. That is the widest
+form of the check `:` performs, and it is still a check.
+
+This is why the two operators cannot share a completion list even when the receiver is unknown: the
+correct list after `x.` is empty, and after `x:` it is every member name in the program.
+
 ### `.` degrades to `:` when the type cannot be inferred
 
 ```dm
@@ -452,7 +540,226 @@ subtypes*. Describing `:` as "unchecked" is wrong — it is a wider check, not a
 unrelated type, because a list lookup and a proc call have no known type to check against. The
 compile-time guarantee silently disappears exactly where it would be most useful.
 
+Note how this sits against the previous section, because the two look like the same situation and
+are not. The degradation applies to the **expression form** — the member access is written directly
+on the call or the index. Store that same value in an untyped var first and `.` goes back to
+rejecting everything:
+
+```dm
+mk().elsewhere              // compiles - unchecked
+var/x = mk()
+x.elsewhere                 // error: x.elsewhere: undefined var
+```
+
+So "the type cannot be known" produces opposite answers depending on whether a variable is in the
+way. A tool that models untyped-var access and call-result access with one rule will disagree with
+the compiler on one of them.
+
 This is why procs can declare `as` return types.
+
+---
+
+## Compile-only: what a leading `.` actually searches
+
+The reference says a leading `.` starts "a relative path with an *upward* search" through the code
+tree. That sentence has at least three readings, and only one of them is what the compiler does.
+
+Each case below compiles or fails, so no runtime harness is needed.
+
+**The anchor is the path, not the inheritance chain.** `parent_type` has no effect on it:
+
+```dm
+/a/inh
+/a/inh/target
+/b/thing
+	parent_type = /a/inh
+	var/p = .target        // error: .target: undefined type path
+```
+
+`target` is a child of this type's *parent type* and is still not found, because the search climbs
+`/b/thing` → `/b` → `/` and never consults `parent_type`.
+
+**The whole path has to resolve, and the search backtracks until it does.**
+
+```dm
+/x/sword/deep
+/x/magic/sword           // nearer, but has no `deep`
+/x/magic/thing
+	var/p = .sword/deep    // compiles - resolves to /x/sword/deep
+```
+
+The nearer `sword` matches the first segment and is abandoned anyway, because `deep` is not under
+it. So this is not "first matching segment wins". Trailing segments are genuinely checked —
+`.sword/nonexistent` fails with *"undefined type path"* — so the compiler is searching, not
+shrugging.
+
+**Among ancestors that fully resolve, the nearest wins.** With both `/x/sword` and
+`/x/magic/sword` complete, `.sword` inside `/x/magic` binds to the nearer one. Shown by pointing
+`parent_type` at it and then reaching a var that exists on only one:
+
+```dm
+/x/sword
+	var/far_only = 1
+/x/magic/sword
+	var/near_only = 1
+/x/magic/thing
+	parent_type = .sword
+	proc/f()
+		return near_only   // compiles
+		return far_only    // error: far_only: undefined var
+```
+
+**The walk includes root**, so a root-level type is reachable from any depth. A **global proc
+anchors at root** and therefore reaches only root's own children — `/b/target` is invisible to a
+`.target` written in `/proc/f()`.
+
+The rule in one line: *walk the enclosing type's path ancestors nearest-first, including root, and
+take the first one under which the entire relative path resolves.* It works in type-level var
+initialisers, in proc bodies, and as a `parent_type` value.
+
+---
+
+## Compile-only: a var's declared type is resolved at the use site, not the declaration
+
+"It compiles" is not the same as "it means what you think". This one only shows up if you go on to
+*use* the thing you declared.
+
+```dm
+mob
+	var
+		clothing/slot
+```
+
+Compiles with **0 errors and 0 warnings**, and `slot` genuinely exists — `dm.exe -o` lists it. But
+`/clothing` was never declared, and the moment anything touches the var:
+
+```dm
+mob
+	var
+		clothing/slot
+	proc/f()
+		slot = null        // error, on THIS line: slot: undefined type: /clothing
+```
+
+The error lands on line 5, the use, not on line 3 where the type was written. So a var with a
+misspelled or deleted type sits in a clean build until someone reads or writes it, at which point
+the error points at the reader rather than at the declaration. Declare `/clothing` and both compile.
+
+The same holds for any number of type segments: `var/a/b/c/slot` is silent until used, then reports
+`undefined type: /a/b/c`.
+
+This is the same shape as the discarded-proc trap in §18 — a declaration the compiler accepts and
+then quietly cannot honour — and it is worth a warning for the same reason.
+
+### And no, the separators do not create types
+
+The obvious suspicion about `mob/var/clothing/feet` is that `/` overrides the block structure and
+declares something called `clothing` or `/clothing/feet`. It does not. The object tree for the whole
+file is:
+
+```xml
+<dm>
+	<mob file="c.dm:1">mob
+		<var file="c.dm:3">feet</var>
+	</mob>
+</dm>
+```
+
+One var, named `feet`, on `/mob`. Nothing named `clothing` appears anywhere in the tree, and all
+three candidate types are rejected as paths:
+
+| Probe | Result |
+|---|---|
+| `var/p = /clothing` | `/clothing: undefined type path` |
+| `var/p = /clothing/feet` | `/clothing/feet: undefined type path` |
+| `var/p = /mob/clothing` | `/mob/clothing: undefined type path` |
+
+The one-line form `mob/var/clothing/feet` and the indented `var` block form produce byte-identical
+trees, so the separator really is interchangeable with the indentation here.
+
+### `-o` and `-code_tree` answer different questions
+
+Worth knowing before trusting either as an oracle:
+
+- **`-o`** is the **resolved object tree** — what exists after the compiler has merged everything.
+  It lists types, vars and constant values, and it is the right check for "did this become a type or
+  a var". It does **not** record a var's declared type, so it cannot confirm that `feet` is a
+  `/clothing`; only that `feet` is a var on `/mob`.
+- **`-code_tree`** is the **syntactic** tree, printed before resolution. It shows
+  `mob / var / clothing / feet` as literal nested nodes, exactly as written. That makes it an oracle
+  for a *parser* rather than for a type tree — it will happily show you nesting that resolution then
+  discards.
+
+A bare override shows up in `-o` as a second entry rather than replacing the first:
+
+```xml
+<obj>item
+	<var>hp <val>1</val></var>
+	<var>hp <val>3</val></var>
+</obj>
+```
+
+---
+
+## The two lint warnings, and what actually triggers them
+
+`init_proc` and `frequent_call` ship **off**. `dm.exe -warn init_proc,frequent_call game.dme` turns
+them on, and the name prints inline so you can read the vocabulary off a build log:
+
+```
+lint.dm:2:warning (init_proc): stuff: var will be initialized in a hidden init proc; ...
+lint.dm:3:warning (frequent_call): New: this proc will be called very frequently
+```
+
+Both are narrower than their names suggest, and the restriction has an odd shape that two obvious
+guesses both get wrong. The trigger set is identical for the two warnings:
+
+| Type | Warns |
+|---|---|
+| `/datum`, `/atom`, `/turf` — the exact types | yes |
+| `/turf/sub`, `/turf/a/b/c` — any turf subtype, any depth | **yes** |
+| `/datum/sub`, `/atom/sub` | **no** |
+| `/atom/movable`, `/obj`, `/obj/sub`, `/mob`, `/area`, `/client`, `/image` | no |
+
+So it is **`/datum`, `/atom` and `/turf` exactly, plus the entire `/turf` subtree** — the union of
+two rules, not either one alone. "Three exact types" fails to predict `/turf/sub`; "`/turf` and
+below" fails to predict bare `/datum`. Inheritance is not it either: `/obj` descends from `/atom`
+and stays silent.
+
+That union matches the intent. A var or `New()` on `/datum` or `/atom` *exactly* is inherited by
+every object in the game; and the map instantiates turfs per tile for every turf subtype, so the
+whole branch is hot. Everything else is created on demand.
+
+The practical consequence: **neither lint fires on `/obj/item` or `/mob/living`**, which is where a
+large codebase's per-instance cost actually lives. As a codebase-wide audit they are far weaker than
+the names suggest.
+
+`init_proc` is about **whether the initialiser needs runtime evaluation**, not about lists:
+
+| Initialiser on a `/turf` | Warns |
+|---|---|
+| `= list(1,2,3)`, `= list()`, `= new /obj`, `= newlist(/obj)` | yes |
+| `= 5`, `= "text"`, `= 1+2`, `= /obj`, `= null`, no initialiser, anything `const` | no |
+
+A constant is folded into the type; anything else needs a hidden per-instance init proc.
+
+`frequent_call` covers `New()` and `Del()` only. A plain `proc/whatever()` and an override of
+`Enter()` both stay silent.
+
+### The pragma beats the command-line flag
+
+Verified in both directions, which settles which one a tool should treat as authoritative:
+
+| Written | Result |
+|---|---|
+| `-warn init_proc` + `#pragma ignore init_proc` | silent |
+| `-ignore init_proc` + `#pragma warn init_proc` | warns |
+| `#pragma warn init_proc` alone, no flag | warns |
+| `-error init_proc`, or `#pragma error init_proc` | a real error, printed as `error (name):` |
+
+So the flag sets the starting level and the pragma overrides it from that point in the file.
+`#pragma push` / `#pragma pop` scope it — with `push`, `ignore`, one declaration, `pop`, that
+declaration is silent and the next one warns.
 
 ---
 
@@ -477,7 +784,8 @@ backslash escapes in names (§11); `//` inside a block comment hiding both `/*` 
 continuing a `//` comment; the "inconsistent indentation" error, or any indentation specification at
 all; hexadecimal and scientific number literal syntax; the whitespace rule on a conditional's `:`
 (§15); that a directive line carries no indentation of its own (§16); what `?[]` actually
-guards (§17); the infinity and
+guards (§17); that a `proc` block misplaced inside a `var` block is discarded without a warning
+(§18); the infinity and
 indeterminate literals `1#INF` and `1#IND`, which appear in shipped library code and which a lexer
 splitting on `#` will read as a number, a directive, and a name.
 
@@ -645,6 +953,24 @@ two"
 // A bare `;` at file scope is legal. This line is the proof.
 ;
 
+// ---- 18. a `proc` block inside a `var` block declares nothing ----------
+/datum/swallowed
+	var
+		kept = "this one survives"
+		proc
+			vanished()
+
+/proc/t_proc_in_var()
+	var/datum/swallowed/S = new
+	var/in_vars = ("vanished" in S.vars) ? "yes" : "no"
+	var/called = "?"
+	try
+		call(S, "vanished")()
+		called = "ran"
+	catch(var/exception/e)
+		called = "runtime: [e.name]"
+	return "kept=[S.kept]  in vars=[in_vars]  call -> [called]"
+
 // ---- 17. `?[]` guards a null list, not an out-of-range index -----------
 /proc/t_null_index()
 	var/list/L = list("a","b","c")
@@ -679,6 +1005,7 @@ world/New()
 	world.log << "15 conditional \:   : [t_conditional_colon()]"
 	world.log << "16 directive indent: [t_directive_indent()]"
 	world.log << "17 null index      : [t_null_index()]"
+	world.log << "18 proc in var     : [t_proc_in_var()]"
 	del src
 ```
 
@@ -703,6 +1030,7 @@ world/New()
 15 conditional :   : conditional (b), not member access
 16 directive indent: the guarded block parsed and ran
 17 null index      : L?[4] -> runtime: list index out of bounds   null-list?[1] -> null   long form -> null
+18 proc in var     : kept=this one survives  in vars=no  call -> runtime: undefined proc or verb /datum/swallowed/vanished().
 ```
 
 The file compiles with 0 errors and 0 warnings, and the run above is its actual output.

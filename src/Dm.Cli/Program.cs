@@ -72,6 +72,7 @@ internal static class Program
         Console.Error.WriteLine("      --under <path>       list what is declared under a type path");
         Console.Error.WriteLine("      --members <path>     show one type's vars and procs, inherited too");
         Console.Error.WriteLine("      --no-builtins        project declarations only");
+        Console.Error.WriteLine("      --procs | --vars     flat \"owner name\" list, for diffing");
         Console.Error.WriteLine("  complete <dme> <file> <line> <col>   what can be typed there");
         Console.Error.WriteLine("      lines and columns are 1-based here, unlike the ABI");
         Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
@@ -379,6 +380,44 @@ internal static class Program
                 foreach (ProcSymbol proc in step.Procs.OrderBy(p => p.Name, StringComparer.Ordinal))
                     Console.Out.WriteLine($"      {(proc.IsVerb ? "verb" : "proc")} {proc}");
             }
+        }
+
+        // A flat "ownerpath name" dump, for diffing against `dm.exe -o`.
+        if (args.Contains("--procs") || args.Contains("--vars"))
+        {
+            bool wantVars = args.Contains("--vars");
+            List<string> lines = new();
+
+            foreach (TypeSymbol type in tree.Types)
+            {
+                string owner = type.Path.IsRoot ? "/" : type.Path.Text;
+
+                if (wantVars)
+                {
+                    foreach (VarSymbol variable in type.Vars)
+                    {
+                        if (!variable.IsBuiltin)
+                            lines.Add($"{owner} {variable.Name}");
+                    }
+
+                    continue;
+                }
+
+                foreach (ProcSymbol proc in type.Procs)
+                {
+                    if (proc.IsBuiltin)
+                        continue;
+
+                    lines.Add($"{owner} {proc.Name}");
+                }
+            }
+
+            lines.Sort(StringComparer.Ordinal);
+
+            foreach (string entry in lines)
+                Console.Out.WriteLine(entry);
+
+            return 0;
         }
 
         int declared = 0, vars = 0, procs = 0, overrides = 0;
