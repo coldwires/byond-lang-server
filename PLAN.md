@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0 complete except CI** · Last updated: 2026-08-02
+> Status: **M0–M3 complete (CI outstanding) · M4 declarations done** · Last updated: 2026-08-03
 
 ---
 
@@ -245,6 +245,30 @@ behaviour differently, and both are true — position is what distinguishes them
 
 ---
 
+## 4b. Line endings
+
+DM files are commonly CRLF on Windows. Editors normalize aggressively — Qt's `QTextDocument` and
+`QPlainTextEdit::toPlainText()` always yield `\n` regardless of what was on disk, and
+`QIODevice::Text` translates on read.
+
+**Our requirements:**
+
+- `SourceText` treats `\r\n`, bare `\n`, and lone `\r` as line terminators.
+- `\r` never appears inside token text.
+- Line/column positions are unaffected by ending style, since `\r` is a terminator and never sits
+  inside a line. This is why all positions crossing the ABI are line/column rather than offsets.
+- Combined with the pushed-buffer rule in §4, a client that normalizes its buffer to LF is
+  analysing exactly what it displays, and nothing drifts.
+
+**Client guidance** (belongs in `docs/abi.md`): detect the dominant line ending on load, normalize
+to LF internally, store the original, and re-apply on save. Round-tripping is the client's job; no
+editor framework does it automatically. Failing to do so rewrites every line of a file on save,
+which destroys `git blame` for the rest of the team. Note also that DM's `{" ... "}` multiline
+strings carry their newlines as content, so converting endings inside one changes program data,
+not just formatting.
+
+---
+
 ## 4c. Operator precedence
 
 From the DM Reference `/operator` index. Highest binding first; everything is left-to-right except
@@ -287,30 +311,6 @@ Declared as a proc named `operator` immediately followed by the glyph: `operator
 must accept all of these as a single proc *name* in declaration position.
 
 Not overloadable: `=` `!` `&&` `||` `&&=` `||=` `?` `==` `!=` `.` `:` `?[]`.
-
----
-
-## 4b. Line endings
-
-DM files are commonly CRLF on Windows. Editors normalize aggressively — Qt's `QTextDocument` and
-`QPlainTextEdit::toPlainText()` always yield `\n` regardless of what was on disk, and
-`QIODevice::Text` translates on read.
-
-**Our requirements:**
-
-- `SourceText` treats `\r\n`, bare `\n`, and lone `\r` as line terminators.
-- `\r` never appears inside token text.
-- Line/column positions are unaffected by ending style, since `\r` is a terminator and never sits
-  inside a line. This is why all positions crossing the ABI are line/column rather than offsets.
-- Combined with the pushed-buffer rule in §4, a client that normalizes its buffer to LF is
-  analysing exactly what it displays, and nothing drifts.
-
-**Client guidance** (belongs in `docs/abi.md`): detect the dominant line ending on load, normalize
-to LF internally, store the original, and re-apply on save. Round-tripping is the client's job; no
-editor framework does it automatically. Failing to do so rewrites every line of a file on save,
-which destroys `git blame` for the rest of the team. Note also that DM's `{" ... "}` multiline
-strings carry their newlines as content, so converting endings inside one changes program data,
-not just formatting.
 
 ---
 
@@ -365,8 +365,8 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
 
 - ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.02 MB, 6 exports) via NativeAOT.
 - ✅ `tests/abi-smoke` — CMake C++ program, 14 checks. Reference integration for the Qt client.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests. Handle validation, UTF-8 marshalling, snapshot
-  helper.
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 350 today. Handle validation, UTF-8
+  marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ⬜ CI matrix. NativeAOT produces per-RID binaries: `win-x64`, `linux-x64`, `linux-arm64`,
   `osx-x64`, `osx-arm64`. **Note the vswhere quirk** — the publish fails with a misleading
@@ -524,13 +524,26 @@ order — the same ordering that decides override resolution and the §4a path a
 - **Stringification (`#arg`) exists** and must be implemented. Confirmed by `stddef.dm`:
   `#define ASSERT(c) if(!(c)) {CRASH("[__FILE__]:[__LINE__]:Assertion Failed: [#c]"); }`.
   It appears *inside* a string interpolation, so the two features interact. Token-pasting (`##`)
-  is unconfirmed.
+  and the repeat operator (`###`) are implemented and covered by `MacroExpander`.
 - **Source mapping is required.** Every expanded token carries its origin file, original span, and
   macro expansion chain. Without it, classification, completion, diagnostics, and go-to-definition
   all land on the wrong line in macro-heavy code, which is most real DM.
 - Snapshot the preprocessor's exit state (define-table hash) at each file boundary. M9 depends on it.
 
-### M4 — Parser, syntax diagnostics, document symbols
+### M4 — Parser, syntax diagnostics, document symbols *(declarations done)*
+
+- ✅ `DeclarationParser` — types, vars and proc signatures, with line-oriented recovery. Handles the
+  DM-specific shapes: `var`/`proc` as ordinary path segments, bare `var`/`proc`/`var/const` block
+  headers, comma- and semicolon-separated names, bracket declarations `var/L[]`, and reassembling
+  overloaded operator names from the tokens the lexer emits.
+- ✅ `dmc outline`, per file or across a tree.
+- ⬜ Expression parser over §4c's precedence table.
+- ⬜ Statement parser, with `#pragma syntax` mode tracking.
+- ⬜ Parse the preprocessed stream rather than raw per-file tokens.
+
+Proc **bodies are skipped**, not parsed. Everything an outline and the object tree need lives in
+declarations, so statement parsing slots in later without disturbing this.
+
 
 - Declarations: type-path declarations, `var/` blocks with modifiers (`const`, `tmp`, `global`,
   `static`), `proc/` and `verb/` blocks, overrides, `set` statements, `parent_type`.
@@ -771,6 +784,8 @@ that the two candidate behaviours produce different compiler output.
 | **`defined` requires parentheses.** | `defined FIVE` fails with "expected (". |
 | **Names may contain `\` escapes.** | `\~Admin_Chat(T as text)` compiles, as do `D\~E` mid-name and `var/\~G`. `\a`, `\the` and `\1` prefixes are all accepted, so the rule is "backslash plus any one character", not a table of known macros. These control how a verb or var is presented to players. A bare `\~` in *expression* position is rejected — that distinction is the parser's to make. |
 | **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
+| **Preprocessor directives carry no indentation of their own.** | Inside a one-tab proc body, `#ifdef` at column 0, at one tab, and at three tabs all compile clean. A directive between a header and its body therefore emits no `Indent`, and the parser must look past it for the one the next code line emits. |
+| **A bare `;` at file scope is legal.** | A lone `;` at column 0 between two proc declarations compiles with 0 errors, with a `#warn` after it printing. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -861,7 +876,7 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
 | # | Question | Blocks | Status |
 |---|---|---|---|
 | 1 | License | — | **Resolved** — MIT |
-| 2 | Preprocessor stringification | M3 | **Resolved** — `#arg` exists. Token-pasting `##` unconfirmed. |
+| 2 | Preprocessor stringification | M3 | **Resolved** — `#arg` exists; `##` and `###` implemented in `MacroExpander`. |
 | 3 | Where builtins come from | M5 | **Resolved** — `stddef.dm` + `info.html`. |
 | 4 | MSVC tooling for NativeAOT | M0 | **Resolved** — present and verified. |
 | 5 | Third IDE's language | Nothing; may justify a prebuilt binding package | Open |
@@ -869,7 +884,7 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
 | 7 | Can a brace block contain indented sub-blocks? | M4 | Open — needs a compiler experiment |
 | 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
 | 10 | Source encoding: some old files are Windows-1252, not UTF-8 | M3 | **Resolved** — `SourceFileReader` detects it. |
-| 11 | What does `#include` do inside a false `#ifdef`? | M3 | Open — currently followed regardless. Needs the preprocessor. |
+| 11 | What does `#include` do inside a false `#ifdef`? | M3 | **Resolved** — not followed. `IncludeGraph` walks includes only while `ConditionalStack.IsActive`. |
 | 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | Open — see §9 |
 
 ---
@@ -889,3 +904,13 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   needs only the lexer and is the first thing visible in an editor. Document symbols moved into the
   parser milestone. Everything from the old M2 onward shifted by one. Added §4b on line endings and
   the pushed-buffer rule in §4.
+- **2026-08-02** — M1 landed: `SourceText`, lexer, `dmc scan` / `dump-tokens`. Five lexer bugs came
+  out of scanning real codebases rather than out of tests.
+- **2026-08-02** — M2 landed: `ClassificationService`, `Document`/`Workspace`, and the six
+  classification exports. ABI minor bumped to 2.
+- **2026-08-03** — M3 landed: encoding detection, include graph, directive scanner, macro table,
+  conditional evaluation, macro expansion with source maps, `Preprocessor.Run`. Resolved open
+  questions 2 and 11.
+- **2026-08-03** — M4 declarations landed: `DeclarationParser` and `dmc outline`; proc bodies are
+  skipped. Added §4c with the reference's precedence table. Expressions, statements and
+  `#pragma syntax` mode tracking remain.

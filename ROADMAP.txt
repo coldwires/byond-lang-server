@@ -1,7 +1,7 @@
 ================================================================================
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. Updated as we go. Full detail in PLAN.md.
- Last updated: 2026-08-02
+ Last updated: 2026-08-03
 ================================================================================
 
 WHERE WE ARE
@@ -9,12 +9,16 @@ WHERE WE ARE
   - M0 boundary is PROVEN. C# -> NativeAOT -> C ABI -> C++ round trip works.
       dm_core.dll builds at 1.02 MB with 6 exports.
       tests/abi-smoke passes 14 checks from C++, including use-after-close.
+  - M1, M2 and M3 are DONE: lexer, syntax highlighting through the ABI, and the
+    preprocessor with its include graph and macro source maps.
+  - M4 is PART DONE. Declarations parse and "dmc outline" works. Expressions,
+    statements and #pragma syntax mode tracking are still missing.
   - Local git repo initialised. MIT licensed.
-  - dotnet test works: 38 tests, all passing.
-      Dm.Core.Tests   - Workspace, snapshot helper, repo-root locator
-      Dm.Native.Tests - handle table, UTF-8 marshalling
-    Writing them found a real bug: a garbage handle produced a negative slot
-    index and crashed instead of returning DM_ERR_INVALID_HANDLE.
+  - dotnet test works: 350 tests, all passing.
+      Dm.Core.Tests   - 323, text layer through declaration parser
+      Dm.Native.Tests -  27, handle table, UTF-8 marshalling
+    Writing the first batch found a real bug: a garbage handle produced a
+    negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
   - Environment checked: .NET SDK 9.0.308, git 2.47.0, BYOND installed,
     VS 2022 with MSVC. NativeAOT confirmed working.
   - Builtins come from TWO places, neither is complete on its own:
@@ -37,11 +41,15 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
      through the ABI. He can wire it up today - it does not need anything else
      from us. The CMakeLists include/link lines are meant to be copied.
-  2. M3: preprocessor + include graph. This is where we need real code; see
-     "needed from you" below.
-  3. CI with the 5-platform build matrix.
-  4. Test dm.exe for: brace blocks vs indentation, and mixed tabs/spaces.
-     Both are guesses right now.
+  2. Finish M4: expression parser (precedence table is in PLAN.md 4c - it is
+     the spec, do not re-derive it), then statements with #pragma syntax mode
+     tracking, then a document symbols service for the ABI and LSP.
+  3. Point the parser at the preprocessed token stream instead of raw per-file
+     tokens. DeclarationParser takes a LexResult today.
+  4. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
+  5. Test dm.exe for whether a brace block can hold indentation-structured
+     sub-blocks. Still a guess. Mixed tabs and spaces is now answered - see
+     VERIFIED below.
 
 FOR THE IDE DEVS - HIGHLIGHTING IS READY
 --------------------------------------------------------------------------------
@@ -73,6 +81,8 @@ FOR THE IDE DEVS - HIGHLIGHTING IS READY
         renders the file with syntax colours in your terminal
     dotnet run --project src\Dm.Cli -- classify <file.dm> --spans
         the span table, with utf16 and utf8 offsets side by side
+    dotnet run --project src\Dm.Cli -- outline <file-or-directory>
+        the declaration structure: types, vars, proc signatures
     dotnet run --project src\Dm.Cli -- dump-tokens <file.dm>
     dotnet run --project src\Dm.Cli -- scan <file-or-directory>
 
@@ -124,7 +134,8 @@ CORPUS - RUN SCAN AGAINST THESE AFTER ANY LEXER CHANGE
   will not find library code pulled in by "#include <vendor/name>". That is why
   ~\Documents\BYOND\lib is listed separately - saving.dm includes
   <deadron/characterhandling> and it was invisible to the scan until we pointed
-  at it directly. That gap closes at M3, when we can walk the real graph.
+  at it directly. "dmc includes" and "dmc preprocess" walk the real graph now
+  that M3 has landed; scan still globs.
 
   Token counts move when you edit these repos. The "0 unknown, 0 problems" part
   is the signal; the count is just volume.
@@ -150,9 +161,17 @@ VERIFIED AGAINST dm.exe 516.1666
     including the same file twice is silently ignored, not an error
     #include accepts forward slashes as well as backslashes
     /mob already has built-in x, y, z - declaring var/x on a mob is an error
+    indentation depth is tab count, falling back to space count when there are
+      no tabs. against a sibling at one tab, dm.exe accepts " \t", "\t " and
+      " " as the same level but rejects four spaces. NOT a prefix comparison.
+    #warn / #error bodies are free text, not tokens
+    #if rejects undefined identifiers instead of treating them as 0
+    in binds looser than assignment, % truncates and %% does not, ..() with
+      empty parens forwards the current arguments, and names may contain \
+      escapes. full table in PLAN.md 8, runnable proofs in
+      docs/dm-language-notes.md
 
   Still untested, still guesses:
-    mixed tabs and spaces in one block
     whether a brace block can hold indentation-structured sub-blocks
 
 WHAT M3 HAS TO HANDLE (learned from spies.dme, 102 includes)
@@ -205,7 +224,10 @@ MILESTONES                                    (restructured 2026-08-02)
   [x] M3   Preprocessor + include graph   <- DONE. include graph, encoding,
                                              conditionals, macro expansion,
                                              and the source map.
-  [ ] M4   Parser + syntax errors + document symbols   <- NEXT
+  [~] M4   Parser + syntax errors + document symbols
+             declarations DONE (dmc outline). still needed:
+             expressions (precedence table is in PLAN.md 4c),
+             statements, and #pragma syntax mode tracking.
   [ ] M5   Object tree + BYOND builtins
   [ ] M6   Binder + completion            <- "mob." and "t." work
   [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1
@@ -318,16 +340,19 @@ CHALLENGES
 
 OPEN QUESTIONS
 --------------------------------------------------------------------------------
-  - License? Also: what are SpacemanDMM's terms, if we ever borrow from it?
-  - Is MSVC C++ build tooling installed? NativeAOT needs it. Blocks M0.
-  - Does DM have token pasting (##)? Stringification (#) is confirmed yes.
+  - What are SpacemanDMM's terms, if we ever borrow from it?
   - Can a brace block contain indented sub-blocks? Needs a compiler experiment.
   - What language is the third IDE in?
   - Should Dm.Lsp be AOT compiled for startup speed, or keep the reflection-
     based LSP library? Decide at M9.
 
   ANSWERED
+  - License: MIT.
+  - MSVC C++ build tooling is installed and NativeAOT is verified working.
   - Stringification exists. Confirmed in stddef.dm ASSERT macro.
+  - Token pasting exists. ## and the ### repeat operator are both implemented.
+  - #include inside a false #ifdef is NOT followed. The graph walk only
+    follows includes while the conditional stack is active.
   - Builtins source: stddef.dm + info.html. Neither alone is enough.
   - stddef.dm is regenerated by making a file named stddef.dm and compiling.
     It is version stamped, so builtins.json must record the BYOND version.

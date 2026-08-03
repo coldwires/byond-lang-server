@@ -37,6 +37,7 @@ internal static class Program
                 "scan" => Scan(args),
                 "includes" => Includes(args),
                 "preprocess" => Preprocess(args),
+                "outline" => Outline(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -227,6 +228,108 @@ internal static class Program
             Console.Out.WriteLine($"  ... and {errors - 20} more");
 
         return errors == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Prints the declaration structure of a file, or counts it across a directory.
+    /// </summary>
+    private static int Outline(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: outline needs a file or directory");
+            return 1;
+        }
+
+        if (Directory.Exists(args[1]))
+        {
+            int files = 0, types = 0, vars = 0, procs = 0, problems = 0;
+
+            foreach (string path in Directory.EnumerateFiles(args[1], "*.dm", SearchOption.AllDirectories))
+            {
+                ParseResult parsed = DeclarationParser.Parse(LexFile(path));
+                files++;
+
+                Count(parsed.Root.Declarations, ref types, ref vars, ref procs);
+
+                if (parsed.Diagnostics.Count > 0)
+                {
+                    problems++;
+                    if (problems <= 15)
+                    {
+                        LinePosition at = parsed.Text.GetLinePosition(parsed.Diagnostics[0].Span.Start);
+                        Console.Out.WriteLine(
+                            $"{path}({at.Line + 1},{at.Character + 1}): {parsed.Diagnostics[0].Id} " +
+                            $"{parsed.Diagnostics[0].Message}  [{parsed.Diagnostics.Count} total]");
+                    }
+                }
+            }
+
+            Console.Out.WriteLine();
+            Console.Out.WriteLine(
+                $"{files} file(s): {types} types, {vars} vars, {procs} procs, {problems} file(s) with problems");
+
+            return problems == 0 ? 0 : 1;
+        }
+
+        ParseResult result = DeclarationParser.Parse(LexFile(args[1]));
+        PrintDeclarations(result, result.Root.Declarations, 0);
+
+        foreach (Diagnostic diagnostic in result.Diagnostics)
+        {
+            LinePosition at = result.Text.GetLinePosition(diagnostic.Span.Start);
+            Console.Out.WriteLine($"  {at.Line + 1}:{at.Character + 1}  {diagnostic.Id}  {diagnostic.Message}");
+        }
+
+        return result.Diagnostics.Count == 0 ? 0 : 1;
+    }
+
+    private static void Count(IReadOnlyList<DeclarationSyntax> declarations, ref int types, ref int vars, ref int procs)
+    {
+        foreach (DeclarationSyntax declaration in declarations)
+        {
+            switch (declaration)
+            {
+                case ProcDeclarationSyntax:
+                    procs++;
+                    break;
+
+                case VarDeclarationSyntax variable:
+                    vars += 1 + variable.Siblings.Count;
+                    break;
+
+                case TypeDeclarationSyntax type:
+                    types++;
+                    Count(type.Members, ref types, ref vars, ref procs);
+                    break;
+            }
+        }
+    }
+
+    private static void PrintDeclarations(ParseResult result, IReadOnlyList<DeclarationSyntax> declarations, int depth)
+    {
+        foreach (DeclarationSyntax declaration in declarations)
+        {
+            LinePosition at = result.Text.GetLinePosition(declaration.NameSpan.Start);
+            string indent = new(' ', depth * 2);
+
+            string description = declaration switch
+            {
+                ProcDeclarationSyntax p =>
+                    $"{(p.IsVerb ? "verb" : "proc")} {p.Path}({string.Join(", ", p.Parameters)})"
+                    + (p.IsNewDeclaration ? string.Empty : "   [override]"),
+                VarDeclarationSyntax v =>
+                    $"var {v.Path}" + (v.DeclaredType is null ? string.Empty : $"   : {v.DeclaredType}")
+                    + (v.Modifiers.Count > 0 ? $"   [{string.Join(" ", v.Modifiers)}]" : string.Empty)
+                    + (v.Siblings.Count > 0 ? $"   (+{v.Siblings.Count} more)" : string.Empty),
+                _ => $"type {declaration.Path}",
+            };
+
+            Console.Out.WriteLine($"{at.Line + 1,6}  {indent}{description}");
+
+            if (declaration is TypeDeclarationSyntax type)
+                PrintDeclarations(result, type.Members, depth + 1);
+        }
     }
 
     /// <summary>
