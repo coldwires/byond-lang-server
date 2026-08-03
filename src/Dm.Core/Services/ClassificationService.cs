@@ -105,7 +105,7 @@ public static class ClassificationService
         TokenKind.InterpolationStart or TokenKind.InterpolationEnd
             => ClassificationKind.InterpolationDelimiter,
 
-        TokenKind.Hash or TokenKind.DirectiveName
+        TokenKind.Hash or TokenKind.DirectiveName or TokenKind.DirectiveText
             => ClassificationKind.PreprocessorDirective,
 
         // Layout carries no colour. Newline and Dedent spans are empty or whitespace anyway.

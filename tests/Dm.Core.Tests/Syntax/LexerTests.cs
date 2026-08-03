@@ -122,6 +122,47 @@ public class LexerTests
         Assert.Empty(result.Diagnostics);
     }
 
+    /// <summary>
+    /// Verified against dm.exe 516.1666: <c>/*</c> then <c>// */</c> then code then <c>*/</c>
+    /// compiles clean, so the delimiter on the <c>//</c> line was ignored.
+    /// </summary>
+    [Fact]
+    public void A_line_comment_inside_a_block_comment_hides_a_closing_delimiter()
+    {
+        LexResult result = Lex("/*\n// */\nstill inside\n*/ after");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(TokenKind.Comment, result.Tokens[0].Kind);
+        Assert.Equal("/*\n// */\nstill inside\n*/", result.GetText(result.Tokens[0]));
+    }
+
+    /// <summary>
+    /// The real-world case: a `//*` line inside a block comment must not nest, or it swallows the
+    /// rest of the file.
+    /// </summary>
+    [Fact]
+    public void A_line_comment_inside_a_block_comment_hides_an_opening_delimiter()
+    {
+        LexResult result = Lex("/*\n//*see the article\n*/\n/mob/a\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("/*\n//*see the article\n*/", result.GetText(result.Tokens[0]));
+        Assert.Contains(result.Tokens, t => t.Kind == TokenKind.Identifier);
+    }
+
+    /// <summary>
+    /// Quotes get no special treatment inside a block comment. dm.exe reports "unterminated text"
+    /// for <c>"*/"</c> inside one, which means the delimiter closed the comment and left a stray
+    /// quote behind.
+    /// </summary>
+    [Fact]
+    public void A_quote_does_not_protect_a_closing_delimiter()
+    {
+        LexResult result = Lex("/* \"*/\" ");
+
+        Assert.Equal("/* \"*/", result.GetText(result.Tokens[0]));
+    }
+
     [Fact]
     public void An_unterminated_block_comment_is_reported_but_still_lexes()
     {
@@ -252,6 +293,145 @@ public class LexerTests
         Assert.Empty(result.Diagnostics);
     }
 
+    /// <summary>
+    /// A backslash before a line break continues the string onto the next line. Found in real
+    /// code, used constantly for long description text.
+    /// </summary>
+    [Theory]
+    [InlineData("\"one \\\ntwo\"")]      // LF
+    [InlineData("\"one \\\r\ntwo\"")]    // CRLF
+    [InlineData("\"one \\\rtwo\"")]      // lone CR
+    public void A_backslash_before_a_line_break_continues_the_string(string source)
+    {
+        LexResult result = Lex(source);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            new[] { TokenKind.StringStart, TokenKind.StringText, TokenKind.StringEnd },
+            Kinds(source));
+    }
+
+    /// <summary>
+    /// Regression: skipping a fixed two characters ate the CR of a CRLF pair and left the LF, which
+    /// then read as the end of an unterminated string. Invisible on LF files, so only
+    /// Windows-authored source exposed it.
+    /// </summary>
+    [Fact]
+    public void A_crlf_continuation_does_not_leak_a_newline_into_the_code_stream()
+    {
+        LexResult result = Lex("var/s = \"a \\\r\nb\"\r\nvar/t = 1\r\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Tokens, t => t.Kind == TokenKind.Unknown);
+
+        // Two statements, so exactly two newlines survive.
+        Assert.Equal(2, CountOf(result, TokenKind.Newline));
+    }
+
+    // -- raw strings -------------------------------------------------------
+
+    [Fact]
+    public void A_raw_string_does_not_process_escapes()
+    {
+        LexResult result = Lex("@\"C:\\path\\x01\"");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            new[] { TokenKind.StringStart, TokenKind.StringText, TokenKind.StringEnd },
+            Kinds("@\"C:\\path\\x01\""));
+        Assert.Equal("C:\\path\\x01", result.GetText(result.Tokens[1]));
+    }
+
+    /// <summary>
+    /// The reason raw strings exist. A regex character class would otherwise open an interpolation
+    /// hole and swallow the rest of the pattern.
+    /// </summary>
+    [Fact]
+    public void A_raw_string_does_not_interpolate()
+    {
+        const string source = "@\"[^\\x01-\\xFF]\"";
+        LexResult result = Lex(source);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Tokens, t => t.Kind == TokenKind.InterpolationStart);
+        Assert.Equal("[^\\x01-\\xFF]", result.GetText(result.Tokens[1]));
+    }
+
+    [Fact]
+    public void A_raw_string_ends_at_the_first_quote()
+    {
+        LexResult result = Lex("@\"ab\" + 1");
+
+        Assert.Equal(TokenKind.StringEnd, result.Tokens[2].Kind);
+        Assert.Equal(TokenKind.Plus, result.Tokens[3].Kind);
+    }
+
+    [Fact]
+    public void A_raw_multiline_string_is_supported()
+    {
+        LexResult result = Lex("@{\"a\\b\nc\"}");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("a\\b\nc", result.GetText(result.Tokens[1]));
+    }
+
+    /// <summary>
+    /// The reference documents that a raw string's delimiter is <b>any single character</b>, and
+    /// all of these compile. The regex form is the one that matters: treating <c>@</c> as only ever
+    /// introducing <c>@"</c> mis-lexes <c>@/(\d+)/</c> as a division — a silent wrong answer.
+    /// </summary>
+    [Theory]
+    [InlineData("@\"body\"", "body")]
+    [InlineData("@#body, \"quotes\" fine#", "body, \"quotes\" fine")]
+    [InlineData("@/(\\d+)/", "(\\d+)")]
+    [InlineData("@!body!", "body")]
+    [InlineData("@|body|", "body")]
+    public void A_raw_string_delimiter_may_be_any_single_character(string source, string expected)
+    {
+        LexResult result = Lex(source);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            new[] { TokenKind.StringStart, TokenKind.StringText, TokenKind.StringEnd },
+            Kinds(source));
+        Assert.Equal(expected, result.GetText(result.Tokens[1]));
+    }
+
+    [Fact]
+    public void A_raw_regex_string_does_not_lex_as_division()
+    {
+        LexResult result = Lex("var/r = @/(\\d+)/\nvar/n = 1\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Tokens, t => t.Kind == TokenKind.Slash && result.GetText(t) == "/"
+            && result.Text.GetLinePosition(t.Span.Start).Line == 0
+            && result.Text.GetLinePosition(t.Span.Start).Character > 7);
+    }
+
+    /// <summary>
+    /// <c>@(XYZ)…XYZ</c> — an arbitrary multi-character terminator, spanning lines.
+    /// </summary>
+    [Fact]
+    public void A_raw_string_may_use_an_arbitrary_multi_character_terminator()
+    {
+        LexResult result = Lex("@(~~~)\nline one\nline two\n~~~");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            new[] { TokenKind.StringStart, TokenKind.StringText, TokenKind.StringEnd },
+            Kinds("@(~~~)\nline one\nline two\n~~~"));
+        Assert.Equal("\nline one\nline two\n", result.GetText(result.Tokens[1]));
+    }
+
+    [Fact]
+    public void A_single_line_raw_string_does_not_span_lines()
+    {
+        LexResult result = Lex("@#unclosed\nvar/x = 1\n");
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "DM0001");
+        Assert.Contains(result.Tokens, t => t.Kind == TokenKind.KeywordVar);
+    }
+
     [Fact]
     public void An_unterminated_string_stops_at_the_line_break()
     {
@@ -287,6 +467,12 @@ public class LexerTests
     [InlineData("?:", TokenKind.QuestionColon)]
     [InlineData("..", TokenKind.DotDot)]
     [InlineData("++", TokenKind.PlusPlus)]
+    // Found in the DM Reference's /operator index, not in 2.4M tokens of corpus. All four
+    // verified to compile.
+    [InlineData("%%", TokenKind.PercentPercent)]
+    [InlineData("%%=", TokenKind.PercentPercentAssign)]
+    [InlineData("<=>", TokenKind.Spaceship)]
+    [InlineData(":=", TokenKind.ColonAssign)]
     public void Operators_match_longest_first(string source, TokenKind expected)
     {
         Assert.Equal(new[] { expected }, Kinds(source));
@@ -351,30 +537,83 @@ public class LexerTests
         Assert.Equal(1, CountOf(result, TokenKind.Dedent));
     }
 
+    /// <summary>
+    /// Directives sit at column 0 regardless of the surrounding indentation and neither open nor
+    /// close a block. Found in real code: a depth-2 body wrapped in a column-0 <c>#ifdef</c>
+    /// dedented the lexer to the root, and every later dedent to depth 1 then failed.
+    /// </summary>
     [Fact]
-    public void Inconsistent_indentation_is_reported_but_lexing_continues()
+    public void Preprocessor_directives_do_not_change_the_indent_level()
     {
-        // Tab then spaces: neither prefix of the other.
-        LexResult result = Lex("/a\n\tb\n    c\n");
+        LexResult result = Lex(
+            "/mob\n" +
+            "\tproc/F()\n" +
+            "\t\tvar/a = 1\n" +
+            "#ifdef DEBUG\n" +
+            "\t\tvar/b = 2\n" +
+            "#endif\n" +
+            "\tproc/G()\n");
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "DM0003");
-        Assert.Equal(TokenKind.EndOfFile, result.Tokens[^1].Kind);
+        Assert.Empty(result.Diagnostics);
+
+        // Two blocks opened (\t then \t\t) and both closed, with nothing spurious in between.
+        Assert.Equal(2, CountOf(result, TokenKind.Indent));
+        Assert.Equal(2, CountOf(result, TokenKind.Dedent));
+    }
+
+    [Fact]
+    public void A_directive_at_arbitrary_depth_is_also_layout_neutral()
+    {
+        // Real code puts them indented too.
+        LexResult result = Lex(
+            "/mob\n" +
+            "\tproc/F()\n" +
+            "\t\tvar/a = 1\n" +
+            "\t\t#pragma pop\n" +
+            "\tproc/G()\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, CountOf(result, TokenKind.Indent));
     }
 
     /// <summary>
-    /// Recovery must not corrupt the enclosing levels. If the root entry were overwritten with the
-    /// offending indent, column 0 would stop closing blocks for the rest of the file.
+    /// Depth follows dm.exe, not a tidier rule. Against a sibling at one tab, the compiler accepts
+    /// <c>" \t"</c>, <c>"\t "</c> and <c>" "</c> as the same level. Prefix comparison — which this
+    /// used to do — rejected the first two, flagging code DM compiles.
+    /// </summary>
+    [Theory]
+    [InlineData("\t")]      // control
+    [InlineData(" \t")]     // space then tab
+    [InlineData("\t ")]     // tab then space
+    [InlineData(" ")]       // a single space, no tabs at all
+    public void Whitespace_forms_the_compiler_accepts_are_the_same_depth(string indent)
+    {
+        LexResult result = Lex($"client\n\tNorth()\n{indent}South()\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, CountOf(result, TokenKind.Indent));
+        Assert.Equal(1, CountOf(result, TokenKind.Dedent));
+    }
+
+    [Fact]
+    public void Tabs_decide_depth_when_both_tabs_and_spaces_are_present()
+    {
+        // Two tabs is deeper than one, whatever the spaces around them do.
+        LexResult result = Lex("a\n \tb\n \t\tc\n \td\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, CountOf(result, TokenKind.Indent));
+    }
+
+    /// <summary>
+    /// Odd indentation must not corrupt the enclosing levels: a line back at column 0 has to close
+    /// every block above it, whatever happened in between.
     /// </summary>
     [Fact]
-    public void Inconsistent_indentation_does_not_break_later_dedents()
+    public void Column_zero_still_closes_every_block_after_odd_indentation()
     {
         LexResult result = Lex("/a\n\tb\n    c\n/d\n");
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "DM0003");
-
-        // `/d` is back at column 0, so every block opened above it must be closed by the time it
-        // is reached.
-        int index = 0;
         int depth = 0;
         int depthAtSlashD = -1;
 
@@ -385,8 +624,6 @@ public class LexerTests
 
             if (token.Kind == TokenKind.Slash && result.Text.GetLinePosition(token.Span.Start).Line == 3)
                 depthAtSlashD = depth;
-
-            index++;
         }
 
         Assert.Equal(0, depthAtSlashD);
@@ -446,6 +683,45 @@ public class LexerTests
     [Fact]
     public void A_hash_at_the_start_of_a_line_introduces_a_directive()
     {
+        Assert.Equal(
+            new[] { TokenKind.Hash, TokenKind.DirectiveName, TokenKind.Identifier, TokenKind.Number },
+            Kinds("#define MAX 10"));
+    }
+
+    /// <summary>
+    /// Verified against dm.exe: <c>#warn this won't work and "unbalanced</c> compiles with 0
+    /// errors and prints the line verbatim. Found in a BYOND library whose apostrophe in "won't"
+    /// otherwise opened a resource literal and ran to end of line.
+    /// </summary>
+    [Theory]
+    [InlineData("#warn HudLib won't work")]
+    [InlineData("#error it doesn't build")]
+    [InlineData("#warn an \"unbalanced quote")]
+    [InlineData("#warn trailing // not a comment")]
+    public void Warn_and_error_take_free_text_not_tokens(string source)
+    {
+        LexResult result = Lex(source);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            new[] { TokenKind.Hash, TokenKind.DirectiveName, TokenKind.DirectiveText },
+            Kinds(source));
+    }
+
+    [Fact]
+    public void Directive_free_text_stops_at_the_line_break()
+    {
+        LexResult result = Lex("#warn don't\n/mob/a\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("don't", result.GetText(result.Tokens[2]));
+        Assert.Contains(result.Tokens, t => t.Kind == TokenKind.Identifier);
+    }
+
+    [Fact]
+    public void Other_directives_still_tokenize_their_body()
+    {
+        // Only warn and error are free text. A #define body is a replacement list.
         Assert.Equal(
             new[] { TokenKind.Hash, TokenKind.DirectiveName, TokenKind.Identifier, TokenKind.Number },
             Kinds("#define MAX 10"));

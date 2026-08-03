@@ -99,7 +99,8 @@ public sealed class Workspace : IDisposable
         if (!File.Exists(key))
             throw new FileNotFoundException("file not found", key);
 
-        Document loaded = new(key, SourceText.From(File.ReadAllText(key), key), fromBuffer: false);
+        // Encoding is detected rather than assumed; see SourceFileReader.
+        Document loaded = new(key, SourceFileReader.Read(key), fromBuffer: false);
         _documents[key] = loaded;
         return loaded;
     }

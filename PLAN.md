@@ -193,12 +193,76 @@ Swapping two `#include` lines flips the result on an otherwise identical program
 so our answers agree with `dm.exe`, and emit an M11 warning on any construct whose meaning depends
 on it. Diverging here would mean reporting errors the compiler does not, or missing ones it does.
 
+### What the reference says, and where it differs
+
+The rules above come from compiler testing. The DM Reference describes the *leading-position*
+behaviour differently, and both are true — position is what distinguishes them:
+
+- **Leading `.` is an upward search** through the code tree (reference: "search **up** in the code
+  tree"). Confirmed. The reference does not state that it reaches root or that first-hit-wins; those
+  are our empirical refinements.
+- **Leading `:` is a *downward* search** — `mob = :player` is shorthand for `/mob/player`. The
+  reference warns "you should only use it when the target node is unique." This is a separate
+  operator from the `:` runtime member-access operator, distinguished by position.
+- **Mid-path `.`/`/` interchangeability is not documented anywhere.** The reference only ever shows
+  `.` in leading position, then switches to `/` (`.Village/Guard_Post`). Our finding stands on
+  compiler evidence, but **do not unify `.` and `/` in the AST** — the leading form carries search
+  semantics the mid form does not.
+- **`.` silently degrades to `:`** whenever the compiler cannot infer a type — "if `.` follows a
+  proc call, a list lookup, or a complex expression where the type can't be known, it will act like
+  `:` instead." Same for `?.` → `?:`. This is why procs have `as` return types at all.
+
 ### Lexer edge cases
 
 - `//` inside a path starts a comment. `var x = /obj//item` evaluates to `/obj`, because the rest
   of the line is commented out. Comment detection wins over path separation.
 - Doubled and trailing separators collapse: `/obj./item`, `/obj/.item`, and `/obj/item/` all mean
   `/obj/item`.
+
+---
+
+## 4c. Operator precedence
+
+From the DM Reference `/operator` index. Highest binding first; everything is left-to-right except
+assignment, which is right-to-left.
+
+| # | Operators | Notes |
+|---|---|---|
+| 1 | `()` `.` `:` `/` `::` | **path** operators here, plus grouping/call |
+| 2 | `[]` `.` `:` | index; member access |
+| 3 | `?[]` `?.` `?:` | null-conditional forms of row 2 |
+| 4 | `~` `!` `-` `++` `--` `*` `&` | unary. `*` and `&` are **pointer** deref/reference (515+) |
+| 5 | `**` | |
+| 6 | `*` `/` `%` `%%` | |
+| 7 | `+` `-` | |
+| 8 | `<` `<=` `>` `>=` `<=>` | `<=>` sits with the relationals |
+| 9 | `<<` `>>` | shift *and* output/input share this level |
+| 10 | `==` `!=` `<>` `~=` `~!` | |
+| 11 | `&` | |
+| 12 | `^` | |
+| 13 | `\|` | |
+| 14 | `&&` | |
+| 15 | `\|\|` | |
+| 16 | `? :` | ternary |
+| 17 | `=` `+=` `-=` `*=` `/=` `%=` `%%=` `&=` `\|=` `^=` `<<=` `>>=` `:=` `&&=` `\|\|=` | **right-to-left** |
+| 18 | `in` | **lowest — below assignment** |
+
+Two traps for anyone with C instincts:
+
+- **`in` binds looser than everything, including `=`.** `has_thing = thing in src` parses as
+  `(has_thing = thing) in src`, and `!A in L` parses as `(!A) in L`. The reference calls both out.
+- **Unary `*` and `&` are pointer operators** at level 4, while binary `*` and `&` are at 6 and 11.
+
+`A #= B` is shorthand for `A = A # B` **except** for `~=` and `:=`. Note `~=` is an equivalence
+*test* at level 10, not a compound assignment — easy to mis-bucket from the `=` suffix.
+
+### Overloadable operators
+
+Declared as a proc named `operator` immediately followed by the glyph: `operator+`, `operator[]`,
+`operator[]=`, `operator""`, `operator:=`, `operator_turn`, `operator<=>`, `operator%%`. The lexer
+must accept all of these as a single proc *name* in declaration position.
+
+Not overloadable: `=` `!` `&&` `||` `&&=` `||=` `?` `==` `!=` `.` `:` `?[]`.
 
 ---
 
@@ -298,10 +362,21 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   mid-keystroke still lexes end to end.
 - ✅ `Dm.Cli` (`dmc`) with `dump-tokens` and `scan`.
 
-**Validation approach.** `dmc scan` reports `Unknown` tokens, which is how the operator table gets
-checked against reality — the DM Reference does not enumerate every operator, so real code is the
-only reliable source. Current status: **7,829 tokens across 7 real DM files, 0 unknown, 0
-diagnostics**, including `stddef.dm`.
+**Validation approach.** `dmc scan` reports `Unknown` tokens and diagnostics across a whole
+codebase, which is how the lexer gets checked against reality — the DM Reference does not enumerate
+every operator or edge case, so real code is the only reliable source.
+
+Current status: **279 files, 303,015 tokens, 0 unknown, 0 diagnostics** across `stddef.dm`,
+`dm-bench`, `madridspy`, `mlaas`, `warklan`, and the BYOND library path.
+
+Five bugs were found this way, none of which any amount of synthetic testing would have produced:
+preprocessor directives corrupting the indent stack, `@"..."` raw strings, string continuations
+breaking on CRLF, `//` inside a block comment, and free-text `#warn` bodies.
+
+**`scan` globs `*.dm` off disk; it does not follow the include graph.** Library code reached through
+`#include <vendor/name>` is invisible to it — `saving.dm` pulls in `<deadron/characterhandling>`,
+which went unscanned until the library path was passed explicitly. That gap closes at M3, when the
+real graph can be walked.
 
 Deferred to the parser, not the lexer:
 - Folding `/` and `.` in path context (§4a) — the lexer cannot tell paths from member access.
@@ -341,10 +416,65 @@ exactly the extra byte count.
 identifiers introduced by macros, or tell a proc name from a var name. That is what most editors
 ship, and it looks correct.
 
-### M3 — Preprocessor and include graph
+### M3 — Preprocessor and include graph *(include graph done; preprocessor next)*
 
-- Resolve the `.dme` root; build the `#include` graph as an ordered tree. Include order determines
-  override resolution in DM, and determines the §4a path ambiguity.
+- ✅ `SourceFileReader` — encoding detection. BOM, then strict UTF-8, then Windows-1252 with the
+  0x80–0x9F punctuation range mapped from a table. No encoding-provider package, so `Dm.Core` stays
+  dependency-free and AOT-clean.
+- ✅ `IncludeGraph` — walks a `.dme` in compile order, with all four include forms resolved and
+  verified against `dm.exe`. Directives are extracted from the token stream, so one inside a comment
+  is correctly not a directive.
+- ✅ `dmc includes`, with `--tree` and `--orphans`.
+- ⬜ The preprocessor itself: `#define`, macro expansion, conditionals, source maps.
+
+**Known limitation until the preprocessor lands:** conditional compilation is not evaluated, so an
+`#include` inside a false `#ifdef` is still followed.
+
+**From the DM Reference — what the preprocessor must handle:**
+
+- **`#pragma multiple`** opts a file *out* of include-once. `IncludeGraph` currently dedupes
+  unconditionally and must honour this.
+- **Library search order is system lib dir first, then the per-user lib dir.** We only check the
+  user dir.
+- **`###` is a repeat operator**, distinct from `##`: `#define SAYTWICE(t) 2###t` repeats the
+  replacement N times. A greedy `##` match mis-tokenises it.
+- **`#` and `##` are documented only as *parameter prefixes*** (`#v`, `##k`), not as C-style infix
+  operators — yet `CAT(a,b) a##b` demonstrably works. The reference does not explain the
+  glue-onto-preceding-token behaviour we observed.
+- **Macro substitution reaches inside string literals via `[...]`.** `"This is BIG."` is untouched;
+  `"This is [BIG]."` *is* expanded. A preprocessor that simply skips strings is wrong.
+- **`#if` accepts `fexists()`** as well as `defined()`, so static conditional evaluation cannot
+  always be exact.
+- **`__TYPE__`, `__PROC__`, `__IMPLIED_TYPE__` are pseudo-macros** the preprocessor does not handle
+  — they resolve at the parser layer with type/proc context. Only `DM_VERSION`, `DM_BUILD`,
+  `__FILE__`, `__LINE__`, `__MAIN__` are real preprocessor macros.
+- **`#pragma compatibility N` mutates `DM_VERSION`**, so it is not constant across a file.
+- **`#pragma warn|ignore|error <names,...>`** takes comma-separated warning names, has
+  `push`/`pop` state, and does **not** propagate into included libraries.
+- **`#pragma syntax C for|switch`** changes the grammar mid-file — see M4.
+- **`<stddef.dm>` is implicitly included before all source**, which confirms the M5 builtins plan.
+- **`FILE_DIR` is cumulative**, behaving like a list append rather than a normal macro, and applies
+  only to resource literal lookup.
+
+**Include resolution — from a real 107-file project (`mlaas/spies.dme`):**
+
+| Form | Resolves to | Notes |
+|---|---|---|
+| `#include "src\file.dm"` | relative to the `.dme` directory | Windows `\` is the norm in real `.dme` files. **Both `\` and `/` work** — verified. Must be normalised, or nothing loads on Linux. |
+| `#include <vendor/name>` | `<BYOND user lib>/vendor/name/name.dm` | Angle brackets mean a BYOND library, not the project. On this machine the root is `~/Documents/BYOND/lib`, holding `dantom`, `deadron`, `ter13`. Confirm the exact filename rule when implementing. |
+| `#include "…​.dmf"` | interface file | Present in the graph. Recognise and skip. |
+| `#include "…​.dmm"` | map file | Same. Deferred to the `.dmm` work. |
+
+- **A duplicate `#include` of the same file is silently ignored** — verified against `dm.exe`; the
+  same file twice compiles clean with no duplicate-definition error. Dedupe by *resolved* path, not
+  by the literal string, since the same file can be written two ways. Real `.dme` files hit this:
+  `spies.dme` includes `src\_constants.dm` at both line 7 and line 9, because DreamMaker's
+  auto-generated `// BEGIN_INCLUDE` block re-added a manual entry.
+- **`.dm` files may contain their own `#include`.** The graph is a tree, not a flat list from the
+  `.dme`.
+- `#define FILE_DIR .` appears in the `.dme` preamble and governs resource lookup.
+- DreamMaker rewrites the region between `// BEGIN_INCLUDE` and `// END_INCLUDE`. Anything we ever
+  write back into a `.dme` must respect those markers.
 - Directives: `#define` (object-like and function-like), `#undef`, `#if` / `#ifdef` / `#ifndef` /
   `#elif` / `#else` / `#endif`, `#include`, `#warn`, `#error`, `defined()`.
 - Seed BYOND's predefined macros (`DM_VERSION`, `DM_BUILD`) and `__FILE__` / `__LINE__`.
@@ -363,8 +493,36 @@ ship, and it looks correct.
   `static`), `proc/` and `verb/` blocks, overrides, `set` statements, `parent_type`.
 - Statements: `if`/`else`, all three `for` forms, `while`, `do while`, `switch` with `if(a to b)`
   range cases, `spawn`, `return`, `break`, `continue`, `del`, `try`/`catch`/`throw`.
-  - C-style `for` separates clauses with **commas**: `for(var/i = 1, i <= 5, i++)`.
-  - The other two are `for(var/x in list)` and `for(var/i = 1 to 10 step 2)`.
+  - C-style `for` clause separators, verified by compiling every combination:
+
+    | Header | Default | `#pragma syntax C for` |
+    |---|---|---|
+    | `for(i=0, i<3, i++)` — comma clauses | accepted | **rejected**, "malformed for statement" |
+    | `for(i=0; i<3; i++)` — semicolon clauses | accepted | accepted |
+    | `for(i=0,j=0; i<3; i++,j+=1)` — comma *chaining* | **rejected**, "too many args" | accepted |
+
+    Semicolons work in **both** modes, so the pragma is not what enables them. What it actually does
+    is **swap what the comma means**: it removes comma-as-clause-separator and adds
+    comma-as-statement-chainer. It is subtractive as well as additive, so turning it on breaks any
+    existing comma-separated `for` in that file. Runtime-confirmed that chained clauses both
+    execute: `for(i=0, j=100; i<3; i++, j+=10)` ends at `i=3 j=130`.
+  - **`#pragma syntax C switch`** likewise swaps `if`/`else` for `case v:` / `default:`, and
+    introduces C fall-through. Runtime-confirmed: a `case` without `break` falls into the next.
+    Without the pragma, `case 1:` fails with "expected var or proc name after : operator", so it is
+    a genuinely different grammar rather than an alias.
+  - So the parser needs **three modes**, file-position-dependent, interacting with
+    `#pragma push`/`pop`. Pragmas do not propagate into included libraries.
+  - The other two forms are `for(var/x in list)` and `for(var/i = 1 to 10 step 2)`.
+  - `for(var/client/P)` with **no `in` clause** is legal; the list defaults to the whole world.
+  - 516 adds `for(var/key, value in assoc_list)`.
+- `break Label` and `continue Label` take an optional loop label; labels are declared as
+  `identifier:` on their own line. `del Object` and `throw Value` take a bare operand, no parens.
+- **Modified-type initialisers**: `path {var = val; var2 = val2}` is legal anywhere a type value is.
+  Braces are mandatory here even though they are optional elsewhere.
+- **Bracket var declarations**: `var/L[]`, `var/M[10]`, `var/grid[10][5]`. Also the brace group form
+  `var {cur; tot}`.
+- `::` has four forms — `::A`, `::A()`, `A::B`, `A::B()` — and **`A::B()` is a proc *reference*, not
+  a call**. A parser that treats it as a call expression is wrong.
 - Expressions: full precedence table, `new /path(args)`, `locate()`, `input(...) as ...`,
   `list(a, b, c = d)` with associative entries, indexing, ternary, `..()` parent call, the bare `.`
   return-value variable, `src` / `usr` / `world` / `global.`. `.` and `:` member access are distinct
@@ -544,6 +702,40 @@ Recorded 2026-08-02 on the primary dev machine.
 - `help/ref/info.html` (1.3 MB) is the DM Reference in structured HTML. It supplies the other half.
 - `byondapi/` ships `byondapi.h` and `byondapi.lib` — relevant only to a future debug adapter.
 
+### Language facts verified against `dm.exe` 516.1666
+
+Established by compiling discriminating cases, not by reading documentation. Each test was built so
+that the two candidate behaviours produce different compiler output.
+
+| Behaviour | Evidence |
+|---|---|
+| **Block comments nest.** | `/*` `/*` `*/` + garbage → *"end of file reached inside of comment"*. Non-nesting would have made the garbage live and produced syntax errors instead. |
+| **A `//` inside a block comment hides both `/*` and `*/` to end of line.** | `/*` then `// */` then garbage then `*/` → compiles clean. The delimiter on the `//` line was ignored. |
+| **Quotes do not protect `*/` inside a block comment.** | `/*` then `"*/"` → *"unterminated text (expecting \")"*. The `*/` closed the comment and left a stray quote. |
+| **A duplicate `#include` of the same file is ignored.** | The same file included twice compiles clean. Without a guard it would be a duplicate definition. |
+| **`#include` accepts forward slashes as well as backslashes.** | `#include "sub/b.dm"` loads; the compiler then reports the file as `sub\b.dm`. |
+| **`/mob` has built-in `x`, `y`, `z`.** | Declaring `var/x` on a `/mob` subtype → *"x: duplicate definition (conflicts with built-in variable)"*. Found by accident, and a reminder of why `builtins.json` (M5) is load-bearing. |
+| **`#warn` and `#error` bodies are free text, not tokens.** | `#warn this won't work and "unbalanced` compiles with 0 errors and prints verbatim. Apostrophes and unbalanced quotes are legal there. |
+| **Names may contain `\` escapes.** | `\~Admin_Chat(T as text)` compiles, as do `D\~E` mid-name and `var/\~G`. `\a`, `\the` and `\1` prefixes are all accepted, so the rule is "backslash plus any one character", not a table of known macros. These control how a verb or var is presented to players. A bare `\~` in *expression* position is rejected — that distinction is the parser's to make. |
+| **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
+| **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
+
+The second one matters more than it looks. A line such as `//*see the article` inside a block
+comment would otherwise nest and swallow the remainder of the file. Found in real code.
+
+### Language facts confirmed from real codebases
+
+- **`@"..."` raw strings exist**, with neither escape processing nor interpolation. Found as
+  `new(@"[^\x01-\xFFŐ-š…]", "g")` — the `\x` sequences and the leading `[` both prove it,
+  since either would otherwise be consumed. `@{"..."}` is supported defensively.
+- **A backslash before a line break continues a string literal.** Used constantly for long
+  description text. The terminator must be consumed whole; skipping a fixed two characters eats the
+  CR of a CRLF pair and leaves the LF, which then reads as an unterminated string. Invisible on
+  LF-only files.
+- **Preprocessor directives are layout-neutral.** `#ifdef` and `#endif` are written at column 0
+  regardless of the surrounding indentation and neither open nor close a block. Treating one as a
+  normal line dedents to the root and loses every intermediate level.
+
 ### Language facts confirmed from `stddef.dm`
 
 - `#` stringification exists in function-like macros, and appears inside string interpolation.
@@ -557,6 +749,23 @@ Recorded 2026-08-02 on the primary dev machine.
 - Inherited vars are overridden by bare assignment at type level, with no `var/` keyword.
 - Path literals appear as ordinary expression arguments: `istype(file, /list)`.
 - `new/generator(...)` — `new` immediately followed by a path with no space.
+
+### Grades of evidence
+
+Two sources, and they are not equally reliable. Keep them distinguishable.
+
+- **Compiler-verified** — established by compiling a case built so the two candidate behaviours
+  produce different output. Highest confidence. Everything in the table above.
+- **Reference-documented** — stated in `help/ref/info.html`. Reliable for *inventories* (the
+  operator list, precedence, `as` types, `set` names) which cannot be discovered by testing, but
+  **incomplete on behaviour**. Demonstrated gaps: `\~` in names appears nowhere in the reference;
+  `//` inside a block comment is undocumented; a backslash continuing a `//` comment is undocumented
+  and mildly contradicted; the "inconsistent indentation" error is never mentioned; hex and
+  scientific number literals are never documented as syntax.
+
+Where the two disagree, the compiler wins. The reference also contains outright errors — `-=` is
+listed twice in the precedence table, and `A -= B` is mapped to `operator--(B)` instead of
+`operator-=`.
 
 ### Path semantics source
 
@@ -604,7 +813,10 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
 | 4 | MSVC tooling for NativeAOT | M0 | **Resolved** — present and verified. |
 | 5 | Third IDE's language | Nothing; may justify a prebuilt binding package | Open |
 | 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | Deferred |
-| 7 | Can a brace block contain indented sub-blocks? | M1, M4 | Open — needs a compiler experiment |
+| 7 | Can a brace block contain indented sub-blocks? | M4 | Open — needs a compiler experiment |
+| 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
+| 10 | Source encoding: some old files are Windows-1252, not UTF-8 | M3 | **Resolved** — `SourceFileReader` detects it. |
+| 11 | What does `#include` do inside a false `#ifdef`? | M3 | Open — currently followed regardless. Needs the preprocessor. |
 | 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | Open — see §9 |
 
 ---

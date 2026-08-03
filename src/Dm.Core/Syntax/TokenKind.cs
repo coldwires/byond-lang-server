@@ -98,6 +98,16 @@ public enum TokenKind
     /// <summary>Directive name following a <c>#</c>, such as <c>define</c> or <c>include</c>.</summary>
     DirectiveName,
 
+    /// <summary>
+    /// The free-text remainder of a <c>#warn</c> or <c>#error</c> line.
+    /// </summary>
+    /// <remarks>
+    /// The compiler prints these verbatim and does not tokenize them, so apostrophes and unbalanced
+    /// quotes are legal. Verified against dm.exe: <c>#warn this won't work and "unbalanced</c>
+    /// compiles with 0 errors.
+    /// </remarks>
+    DirectiveText,
+
     // -- punctuation -------------------------------------------------------
 
     OpenParen,
@@ -130,12 +140,25 @@ public enum TokenKind
     StarStar,
     Percent,
 
+    /// <summary>The <c>%%</c> modulo variant. Documented in the DM Reference under /operator.</summary>
+    PercentPercent,
+
+    /// <summary>Three-way comparison, <c>&lt;=&gt;</c>.</summary>
+    Spaceship,
+
+    /// <summary>
+    /// The <c>:=</c> operator. Distinct from <c>:</c> followed by <c>=</c>; it also appears as the
+    /// name of an overloadable operator.
+    /// </summary>
+    ColonAssign,
+
     Assign,
     PlusAssign,
     MinusAssign,
     StarAssign,
     SlashAssign,
     PercentAssign,
+    PercentPercentAssign,
     StarStarAssign,
     AndAssign,
     OrAssign,
