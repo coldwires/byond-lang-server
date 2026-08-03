@@ -777,12 +777,29 @@ completion list after `mob.`.
   `Binding/TypeInference`. A declared type always wins; inference only fills a slot the author left
   empty. Where a name is assigned more than once, the nearest assignment *before the cursor* wins,
   since that is what it holds at the position being asked about.
-- ⬜ Leading-`.` relative path resolution (§4a).
-- ⬜ Macros in the bare-identifier list.
-- ⬜ Semantic classification refinement — M2's reserved kinds 12–15.
-- ✅ `dm_complete_at`, ABI 0.4, verified from C++.
+- ✅ Leading-`.` relative path resolution (§4a), in `Symbols/RelativePath`. Used by completion for a
+  written `.path` receiver and by the object tree for `parent_type = .sibling`, which resolves late
+  because the search needs the finished tree. An unresolvable one yields no parent rather than
+  silently falling back to the path parent, matching what an unresolvable absolute one does.
+- ✅ Macros in the bare-identifier list, carried from the workspace since the preprocessor has
+  removed them long before the parser runs. Bare identifiers only — a macro is not a member of
+  anything, so nothing after `.` or `:` offers one. The names are the walk's **end state** rather
+  than what a given line saw, so `__MAIN__` is offered inside an included file where the compiler
+  would not define it; the M3 boundary snapshots are what would fix that, and it is not worth the
+  cost yet.
+- ✅ Semantic classification refinement, M2's reserved kinds 12–15, in `SemanticContext`. Refines
+  only what the lexer called an identifier and never moves a span, so a client ignoring the new
+  kinds sees exactly the M2 output. Deliberately conservative: a name before `(` is a proc, a member
+  read without parens is a var, a `#define`d name is a macro, and a path segment is a type only when
+  the tree confirms it. A bare `mob` stays an identifier — it is more often a variable than the type,
+  and a wrong colour reads as our bug while a missing one reads as unfinished.
+  **Classification never builds the tree**: that is a whole-project walk and this is the paint path,
+  so type names light up once something else has built one.
+- ✅ `dm_complete_at`, ABI 0.4, verified from C++. `dm_set_defines` at 0.5.
 - ✅ `Workspace.GetObjectTree` — the include graph, the builtins and the pushed buffers, wired
   together at last. Invalidated whole on any buffer change, which is M9's problem to make cheap.
+  Now built from the **preprocessed stream**, with buffers reaching the preprocessor through
+  `IncludeOptions.SourceProvider`, so the tree the ABI serves finally sees macro-declared types.
 
 **Globals are offered for a bare identifier but never after `.`.** They live on the root, and the
 root is deliberately outside the inheritance chain: `istype(x)` is a call, `mob.istype()` is not

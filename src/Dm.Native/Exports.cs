@@ -230,7 +230,8 @@ internal static unsafe class Exports
 
             Document document = ws.GetDocument(path);
             IReadOnlyList<ClassifiedSpan> spans =
-                ClassificationService.ClassifyLines(document.Lex, startLine, endLine);
+                ClassificationService.ClassifyLines(
+                    document.Lex, startLine, endLine, ws.GetSemanticContext());
 
             *outClassification = HandleTable.Alloc(Pack(document.Text, spans, (PositionEncoding)encoding));
             return Ok();
@@ -331,7 +332,12 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             CompletionResult result = CompletionService.CompleteAt(
-                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+                ws.GetObjectTree(),
+                document,
+                line,
+                character,
+                ws.GetMacroNames(),
+                (PositionEncoding)encoding);
 
             *outJson = NativeStrings.Allocate(CompletionJson.Write(result));
             return Ok();

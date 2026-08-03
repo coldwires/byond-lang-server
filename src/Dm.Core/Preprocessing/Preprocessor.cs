@@ -25,6 +25,9 @@ public sealed class PreprocessResult
     public IReadOnlyList<ExpandedToken> Tokens { get; }
 
     public IReadOnlyList<Diagnostic> Diagnostics => Graph.Diagnostics;
+
+    /// <summary>Macro state at the end of the run.</summary>
+    public MacroTable Macros => Graph.Macros;
 }
 
 /// <summary>

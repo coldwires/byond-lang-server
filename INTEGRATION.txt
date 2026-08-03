@@ -91,10 +91,10 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.4. It
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.5. It
   covers version negotiation, string ownership, handle lifetime including
-  use-after-close, classification in both encodings, document symbols and
-  completion. The include and link lines in its CMakeLists.txt are meant to be
+  use-after-close, classification in both encodings, document symbols,
+  completion and injected defines. The include and link lines in its CMakeLists.txt are meant to be
   copied verbatim. If you are stuck on build setup, build that first and
   confirm it runs - it is 30 seconds and it separates "my build is wrong" from
   "my code is wrong".
@@ -139,10 +139,14 @@ WHAT YOU GET TODAY
         dm_free(msg);
     }
 
-    // 3. every time the user types, push the buffer
+    // 3. tell us what the build defines, before anything else asks a question
+    const char *defines[] = { "CBT" };
+    dm_set_defines(ws, defines, 1);
+
+    // 4. every time the user types, push the buffer
     dm_set_buffer(ws, "code/mob.dm", utf8_text, utf8_byte_length);
 
-    // 4. every time you paint, ask for the visible lines
+    // 5. every time you paint, ask for the visible lines
     dm_classification spans = NULL;
     dm_classify_range(ws, "code/mob.dm", first_visible_line, last_visible_line,
                       DM_ENCODING_UTF16, &spans);
@@ -159,7 +163,7 @@ WHAT YOU GET TODAY
 
     dm_classification_free(spans);
 
-    // 5. at shutdown
+    // 6. at shutdown
     dm_workspace_close(ws);
 
 
@@ -367,11 +371,27 @@ WHAT YOU GET TODAY
     10  DM_CLASS_PREPROCESSOR             #define, #include, #if ...
     11  DM_CLASS_ERROR                    we could not understand this
 
-    RESERVED - not produced yet, arrive at M6:
-    12  DM_CLASS_TYPE_NAME                a path naming a type
-    13  DM_CLASS_PROC_NAME                an identifier that is a proc
-    14  DM_CLASS_VAR_NAME                 an identifier that is a var
-    15  DM_CLASS_MACRO_NAME               an identifier from a macro
+    SEMANTIC - produced now:
+    12  DM_CLASS_TYPE_NAME                a path segment naming a real type
+    13  DM_CLASS_PROC_NAME                a name followed by (
+    14  DM_CLASS_VAR_NAME                 a member read with no call parens
+    15  DM_CLASS_MACRO_NAME               a name the project #defines
+
+  ABOUT 12-15
+    These only ever REFINE a span the lexical pass already produced. No span
+    is added, removed or moved, so if you ignore them you get exactly the
+    output you got before - which is why mapping them was safe to do early.
+
+    They are deliberately conservative. A wrong colour reads as a bug in us;
+    a missing one reads as "not implemented yet", so we under-claim. A bare
+    "mob" stays an identifier, because it is more often a variable than the
+    type.
+
+    12 needs the object tree, and CLASSIFICATION WILL NOT BUILD ONE - a
+    whole-project walk on your paint path would be a bad trade. So type
+    names stay plain identifiers until something else builds a tree
+    (dm_complete_at, dm_document_symbols), and light up from then on. If you
+    want them immediately, call dm_complete_at once after opening.
 
   Handle unknown values by falling back to the default colour. That way a
   library update cannot break your renderer.

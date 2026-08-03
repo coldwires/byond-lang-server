@@ -142,6 +142,17 @@ public sealed class TypeSymbol
     public TypePath? ParentType { get; internal set; }
 
     /// <summary>
+    /// Segments of a <c>parent_type</c> written as a leading-<c>.</c> path, resolved on demand.
+    /// </summary>
+    /// <remarks>
+    /// Kept unresolved for the same reason <see cref="ObjectTree.InheritanceParent"/> resolves
+    /// <see cref="ParentType"/> late: the target can be declared after the type naming it. A
+    /// relative path additionally cannot be resolved without the finished tree, since the search
+    /// asks which candidates exist.
+    /// </remarks>
+    public IReadOnlyList<string>? RelativeParentType { get; internal set; }
+
+    /// <summary>
     /// True when BYOND declares this type. A project reopening <c>/mob</c> adds to it without
     /// clearing the flag, so the tree can still tell a builtin type from one the project invented.
     /// </summary>

@@ -24,6 +24,7 @@ public sealed class Workspace : IDisposable
 {
     private readonly Dictionary<string, Document> _documents;
     private ObjectTree? _tree;
+    private IReadOnlyCollection<string>? _macroNames;
     private bool _disposed;
 
     private Workspace(string dmePath, string rootDirectory, IReadOnlyList<string>? defines)
@@ -56,6 +57,7 @@ public sealed class Workspace : IDisposable
     {
         Defines = defines;
         _tree = null;
+        _macroNames = null;
     }
 
     /// <summary>Absolute path to the <c>.dme</c> this workspace was opened from.</summary>
@@ -116,6 +118,7 @@ public sealed class Workspace : IDisposable
 
         // The tree was built from the previous text, so it no longer describes the project.
         _tree = null;
+        _macroNames = null;
 
         return document;
     }
@@ -124,6 +127,7 @@ public sealed class Workspace : IDisposable
     public bool CloseBuffer(string path)
     {
         _tree = null;
+        _macroNames = null;
         return _documents.Remove(NormalisePath(path));
     }
 
@@ -166,6 +170,7 @@ public sealed class Workspace : IDisposable
         };
 
         PreprocessResult preprocessed = Preprocessor.Run(DmePath, options);
+        _macroNames = preprocessed.Macros.Names;
 
         foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed, cancellationToken))
         {
@@ -175,6 +180,32 @@ public sealed class Workspace : IDisposable
 
         _tree = tree;
         return tree;
+    }
+
+    /// <summary>
+    /// The semantic context for classification, using only what is already built.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately does <b>not</b> build the tree. Classification runs on every scroll and every
+    /// keystroke, and a whole-project walk on the paint path would be a serious regression. Type
+    /// names therefore stay lexical until something else — a completion, a symbol query — has built
+    /// a tree, and light up from then on.
+    /// </remarks>
+    public Services.SemanticContext GetSemanticContext() => new(_tree, _macroNames);
+
+    /// <summary>
+    /// Every macro the project defines, for a completion list.
+    /// </summary>
+    /// <remarks>
+    /// Builds the tree if it has not been built, since both come from the same walk. The names are
+    /// the walk's end state rather than what any one line saw — see <see cref="IncludeGraph.Macros"/>.
+    /// </remarks>
+    public IReadOnlyCollection<string> GetMacroNames(CancellationToken cancellationToken = default)
+    {
+        if (_macroNames is null)
+            GetObjectTree(cancellationToken);
+
+        return _macroNames ?? System.Array.Empty<string>();
     }
 
     /// <summary>
