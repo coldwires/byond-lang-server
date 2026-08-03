@@ -59,6 +59,27 @@ public sealed class IncludeOptions
     /// </summary>
     public string? LibraryRoot { get; init; }
 
+    /// <summary>
+    /// Macros to define before the walk, in <c>dm.exe -D</c> spelling: <c>CBT</c>,
+    /// <c>NAME=value</c>, or <c>FN(x)=body</c>.
+    /// </summary>
+    /// <remarks>
+    /// These decide which <c>#ifdef</c> branches exist, so a project built with flags we do not
+    /// receive is a different program from the one we analyse. Pass whatever the build passes.
+    /// </remarks>
+    public IReadOnlyList<string>? Defines { get; init; }
+
+    /// <summary>
+    /// Supplies a file's text, or null to read it from disk.
+    /// </summary>
+    /// <remarks>
+    /// The hook that lets a client's unsaved buffers reach the preprocessor. PLAN.md §4 makes a
+    /// pushed buffer the only source for its path, and the include walk would otherwise go straight
+    /// to disk and analyse the file as it was last saved — which is exactly wrong on every keystroke
+    /// between saves. Paths arrive fully resolved.
+    /// </remarks>
+    public Func<string, SourceText?>? SourceProvider { get; init; }
+
     internal string ResolveLibraryRoot()
         => LibraryRoot ?? System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -174,6 +195,11 @@ public sealed class IncludeGraph
             _reincludable = new HashSet<string>(comparer);
 
             Macros.SeedPredefined();
+
+            // After the predefined ones and before any file, which is where dm.exe puts them: a
+            // -D flag is visible to the very first line of the .dme, including its conditionals.
+            foreach (MacroDefinition macro in CommandLineDefine.ParseAll(options.Defines, Diagnostics))
+                Macros.Define(macro);
         }
 
         public List<IncludedFile> Files { get; } = new();
@@ -223,7 +249,8 @@ public sealed class IncludeGraph
             SourceText text;
             try
             {
-                text = SourceFileReader.Read(path);
+                // A pushed buffer wins over disk, so an editor's unsaved text is what gets analysed.
+                text = _options.SourceProvider?.Invoke(path) ?? SourceFileReader.Read(path);
             }
             catch (IOException ex)
             {
@@ -246,12 +273,28 @@ public sealed class IncludeGraph
             List<Token> pending = new();
             int tokenIndex = 0;
 
+            // Indentation has to be re-levelled rather than passed through. The lexer's
+            // Indent/Dedent tokens describe the file as written, and a skipped `#if` region takes
+            // its Indents with it while the matching Dedents survive in code that is still live.
+            // The stream then pops levels it never pushed, every later declaration is read one
+            // level too shallow, and members end up on the root. Tracking the file's own depth
+            // across skipped regions and emitting the difference before each real token keeps the
+            // surviving stream self-consistent.
+            int sourceDepth = 0;
+            int emittedDepth = 0;
+
             while (tokenIndex < lex.Tokens.Count)
             {
                 if (!byHashIndex.TryGetValue(tokenIndex, out Directive directive))
                 {
-                    if (conditionals.IsActive && IsCode(lex.Tokens[tokenIndex].Kind))
-                        pending.Add(lex.Tokens[tokenIndex]);
+                    Token token = lex.Tokens[tokenIndex];
+
+                    if (token.Kind == TokenKind.Indent)
+                        sourceDepth++;
+                    else if (token.Kind == TokenKind.Dedent)
+                        sourceDepth--;
+                    else if (conditionals.IsActive && IsCode(token.Kind))
+                        AppendLevelled(pending, token, sourceDepth, ref emittedDepth);
 
                     tokenIndex++;
                     continue;
@@ -309,6 +352,14 @@ public sealed class IncludeGraph
                 }
             }
 
+            // Close whatever the file left open, so the next file starts from the root rather than
+            // inheriting this one's depth.
+            while (emittedDepth > 0)
+            {
+                pending.Add(new Token(TokenKind.Dedent, new TextSpan(text.Length, 0)));
+                emittedDepth--;
+            }
+
             FlushPending(text, pending);
 
             if (conditionals.Depth > 0)
@@ -340,6 +391,31 @@ public sealed class IncludeGraph
         /// <summary>Layout and comments carry no meaning for the parser.</summary>
         private static bool IsCode(TokenKind kind)
             => kind is not (TokenKind.Comment or TokenKind.EndOfFile);
+
+        /// <summary>
+        /// Appends a token, first emitting whatever Indent/Dedent the surviving stream still owes.
+        /// </summary>
+        /// <remarks>
+        /// The debt is only ever non-zero at the first real token of a line whose depth changed, so
+        /// the loops are no-ops the rest of the time. Synthesised layout tokens are zero-length at
+        /// the token's own start, which keeps every span inside the file it came from.
+        /// </remarks>
+        private static void AppendLevelled(List<Token> pending, Token token, int sourceDepth, ref int emittedDepth)
+        {
+            while (emittedDepth < sourceDepth)
+            {
+                pending.Add(new Token(TokenKind.Indent, new TextSpan(token.Span.Start, 0)));
+                emittedDepth++;
+            }
+
+            while (emittedDepth > sourceDepth)
+            {
+                pending.Add(new Token(TokenKind.Dedent, new TextSpan(token.Span.Start, 0)));
+                emittedDepth--;
+            }
+
+            pending.Add(token);
+        }
 
         private bool EvaluateIfdef(LexResult lex, Directive directive)
         {

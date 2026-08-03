@@ -127,4 +127,123 @@ public class PreprocessorTests
 
         Assert.Contains(result.Tokens, t => t.IsFromMacro && t.Text == "42");
     }
+
+    /// <summary>
+    /// A proc guarded by an inactive <c>#ifdef</c>, with live code after it and a sibling block
+    /// below. The guarded line is the only thing at its depth.
+    /// </summary>
+    private const string SkippedRegion =
+        "/mob\n\tproc\n\t\tf()\n#ifdef NOPE\n\t\t\tdeep()\n#endif\n\t\t\treturn 1\n\tverb\n\t\tg()\n\t\t\treturn 2\n";
+
+    /// <summary>
+    /// A skipped region takes its <c>Indent</c> tokens with it while the matching <c>Dedent</c>s
+    /// survive in live code, so the stream pops levels it never pushed.
+    /// </summary>
+    /// <remarks>
+    /// Silent and expensive: on a real 100-file project this moved 128 procs and 113 vars off their
+    /// owning types with no diagnostic at all, because the result still parses — just at the wrong
+    /// depth. Depth never going negative is the invariant that catches it.
+    /// </remarks>
+    [Fact]
+    public void An_inactive_conditional_does_not_unbalance_indentation()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", SkippedRegion);
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        int depth = 0;
+        int lowest = 0;
+
+        foreach (ExpandedToken token in result.Tokens)
+        {
+            if (token.Kind == TokenKind.Indent)
+                depth++;
+            else if (token.Kind == TokenKind.Dedent)
+                depth--;
+
+            lowest = System.Math.Min(lowest, depth);
+        }
+
+        Assert.Equal(0, lowest);
+        Assert.Equal(0, depth);
+    }
+
+    /// <summary>
+    /// A <c>-D</c> flag decides which branch exists, so it has to be defined before the first line
+    /// of the <c>.dme</c> is read.
+    /// </summary>
+    [Fact]
+    public void An_injected_define_selects_the_conditional_branch()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", "#ifdef CBT\nvar/from_cbt = 1\n#else\nvar/without_cbt = 1\n#endif\n");
+
+        string dme = Path.Combine(temp.Path, "game.dme");
+
+        Assert.Contains("without_cbt", Text(Preprocessor.Run(dme)));
+        Assert.Contains(
+            "from_cbt",
+            Text(Preprocessor.Run(dme, new Dm.Core.Includes.IncludeOptions { Defines = new[] { "CBT" } })));
+    }
+
+    /// <summary>
+    /// A bare <c>-DNAME</c> defines it <b>empty</b>, not to <c>1</c>. Verified against dm.exe
+    /// 516.1666, where <c>#if NAME == 1</c> then fails with "unexpected token: ==".
+    /// </summary>
+    [Fact]
+    public void A_bare_injected_define_has_an_empty_body_not_one()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", "var/x = FLAG\n");
+
+        PreprocessResult result = Preprocessor.Run(
+            Path.Combine(temp.Path, "game.dme"),
+            new Dm.Core.Includes.IncludeOptions { Defines = new[] { "FLAG" } });
+
+        Assert.Equal("var / x =", Text(result).TrimEnd());
+    }
+
+    [Fact]
+    public void An_injected_define_can_carry_a_value_or_parameters()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", "var/x = SIZE\nvar/y = DOUBLE(4)\n");
+
+        PreprocessResult result = Preprocessor.Run(
+            Path.Combine(temp.Path, "game.dme"),
+            new Dm.Core.Includes.IncludeOptions { Defines = new[] { "SIZE=7", "DOUBLE(n)=((n)*2)" } });
+
+        string text = Text(result);
+
+        Assert.Contains("7", text);
+        Assert.Contains("( ( 4 ) * 2 )", text);
+    }
+
+    /// <summary>What the imbalance actually costs: members land on the root instead of their type.</summary>
+    [Fact]
+    public void Declarations_after_an_inactive_conditional_keep_their_owner()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", SkippedRegion);
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+        Dm.Core.Symbols.ObjectTree tree = new();
+
+        foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(result))
+            Dm.Core.Symbols.TypeTreeBuilder.AddFile(tree, file, DeclarationParser.Parse(source));
+
+        Dm.Core.Symbols.TypeSymbol? mob = tree.Find("/mob");
+
+        Assert.NotNull(mob);
+        Assert.NotNull(mob!.FindProc("f"));
+
+        // The one that used to end up on the root.
+        Assert.NotNull(mob.FindProc("g"));
+    }
 }

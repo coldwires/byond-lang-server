@@ -620,7 +620,11 @@ order — the same ordering that decides override resolution and the §4a path a
   The mode is read where a statement **starts**, so a later `#pragma pop` cannot retroactively
   change how it parsed.
 - ⬜ Parameter defaults still come from the range scan in `ReadParameter`, not the expression parser.
-- ⬜ Parse the preprocessed stream rather than raw per-file tokens.
+- ✅ Parse the preprocessed stream rather than raw per-file tokens, and it is now the default.
+  `TokenSource` lets the parsers read tokens whose text and position come from different files,
+  `PreprocessedSplitter` gathers the project stream back into per-file runs, and `dmc tree --raw`
+  keeps the old path for comparison. **Exact on mlaas: 1493/1493 vars and 1153/1153 procs against
+  `dm.exe -o`, with nothing invented.** §9 has the numbers and the three bugs it took to get there.
 - ⬜ Accept injected defines. `dm.exe -DNAME`, `-DNAME=value` and `-DFN(x)=...` all work, and bare
   `-DNAME` defines it empty rather than `1` (§8). A project whose build passes `-D` flags compiles a
   different program from the one we analyse without them, so `Workspace.Open` needs an optional
@@ -979,7 +983,7 @@ question we also answer, so we can diff against it instead of hand-checking.
 |---|---|---|
 | `-o` | dumps the **resolved** object tree as XML | Already our oracle for `ObjectTree`; three declaration bugs and the proc/var matching came out of it. Lists types, vars and constant values. It does **not** record a var's declared type, so it can confirm that `feet` is a var on `/mob` but not that it is a `/clothing`. A bare override appears as a second `<var>` entry rather than replacing the first. |
 | `-l` | lists every source file the `.dme` reaches | **Oracle for `IncludeGraph`.** Prints a `Source Files:` block — the `.dme` first, then each file in compile order, relative to the `.dme` directory with `\` separators. `stddef.dm` is not listed. It still writes a `.dmb`, so it is a build with a report rather than a dry run. |
-| `-code_tree` | dumps the **syntactic** tree, before resolution | An oracle for the *parser*, not for the type tree — it shows `mob / var / clothing / feet` as literal nested nodes exactly as written, including nesting that resolution later discards. Noisy: it emits the whole of `stddef.dm` ahead of the project and renders each initialiser as an indented `=` node. |
+| `-code_tree` | dumps the **syntactic** tree, before resolution, **plus the builtin branches** | An oracle for the *parser*, not for the type tree — it shows `mob / var / clothing / feet` as literal nested nodes exactly as written, including nesting that resolution later discards. Noisy: it emits the whole of `stddef.dm` ahead of the project and renders each initialiser as an indented `=` node. |
 | `-D<name>[=value]` | defines a macro | See §8's table. Bare `-DNAME` defines it empty, not `1`. |
 | `-clean` | full rebuild, ignoring incremental state | Only relevant if we ever shell out to the compiler. |
 | `-verbose` | verbose progress | — |
@@ -988,6 +992,33 @@ question we also answer, so we can diff against it instead of hand-checking.
 | `-ignore` / `-warn` / `-error <names,...>` | sets a warning's level; `-error` promotes it to a hard failure | See below. |
 
 There is no output-path flag; the `.dmb` and `.rsc` names always derive from the `.dme`.
+
+### What `-code_tree` gives that the other two do not
+
+It emits the builtin type list from *any* project, even a two-line one — `/datum`, `/atom`, `/mob`,
+`/obj`, `/turf`, `/area`, `/client`, `/world`, `/list`, `/savefile`, `/image`, `/sound` and the
+wrapper datums — with **no builtin members**: no `loc`, no `Move()`, no `Login()`. So it does not
+replace the `info.html` scrape that `builtins.txt` needs.
+
+What it does carry is inheritance, in two forms that **disagree**, and the difference matters:
+
+| Form | Says about `/mob` | Trustworthy? |
+|---|---|---|
+| `= (parent_type) (/atom/movable)` | `/atom/movable` | yes — matches the runtime probe |
+| `.child_type (/mob)` under `/atom` | `/atom` | **no**, not as inheritance |
+
+`.child_type` lists more branches, which makes it tempting, but it is a different relation. Taking
+it as the parent would put `/mob` directly under `/atom` and lose `/atom/movable` from every `mob.`
+completion.
+
+Used as a *candidate list* rather than an answer, it is still worth having: diffing its branches
+against `AddVerifiedParentTypes` found three links we never had — `/particles`, `/dm_filter` and
+`/generator`, all `/datum`, each then confirmed by the runtime `initial(T:parent_type)` probe that
+established the original fourteen. Without them a `/particles` var offered nothing from `/datum`,
+so `P.` gave no `type`, `tag`, `New()` or `Del()`.
+
+The probe that found them also re-confirmed the two results §8 calls surprising: `/list` and
+`/client` print an empty `parent_type`, so they genuinely have no parent.
 
 ### Warning names are a shared vocabulary, and that constrains M11
 
@@ -1224,6 +1255,164 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   `var/mob/test/t` then `t.` resolves; object tree dump matches DreamMaker; `.dmi` states enumerate.
 - **Performance** — warm completion latency and cold full-parse time on both the team game and the
   large corpus project, tracked as a regression metric.
+
+### Bench: /tg/station, 2026-08-03
+
+The heaviest input available, roughly 1.5 million lines, run against a known-good object tree for
+the same checkout (`objtree.xml`, 52 MB, 45,337 types).
+
+| | reference | matched | missing | invented | recall |
+|---|---|---|---|---|---|
+| vars | 224,145 | 211,525 | 12,620 | 776 | **94.37%** |
+| procs | 64,870 | 62,566 | 2,304 | 494 | **96.45%** |
+
+7,162 files in 37 seconds cold, 229 of them with problems. 42,131 type nodes built. Nothing crashed
+or hung, which at this size is most of what the run was for.
+
+The gap has one dominant, already-known cause: the parser reads raw per-file tokens, so a macro in
+declaration position becomes a path segment. Both sides of the diff pay for it — `/atom/VAR_PRIVATE`
+is invented, and the var that belonged on `/atom` is lost. The largest single missing cluster is
+`/datum/controller/global_vars` at 1,067 vars, which is the `GLOBAL_VAR` macro family. It is not the
+only cause: 246 of 776 invented vars are macro-shaped and none of the 494 invented procs are.
+
+### Bench: mlaas, the one we can be exact on
+
+/tg/station is the stress test; **mlaas is the correctness harness.** 100 files, a `dm.exe -o`
+reference for the same checkout, and — once the three bugs below were fixed — a perfect match:
+
+| | vars | procs |
+|---|---|---|
+| raw | 1493 / 1493 | 1153 / 1153 |
+| preprocessed | 1493 / 1493 | 1153 / 1153 |
+
+100.00% both ways, nothing invented. That exactness is what makes it the right place to debug: on
+/tg/station a 1% deficit is indistinguishable from a legitimate difference, because their build
+passes `-D` flags we never see and we are therefore analysing a different program. On mlaas any
+deviation at all is our bug.
+
+Finding the last one is the argument for the whole approach. It reproduced on mlaas at 128 procs and
+113 vars lost, was bisected to a single line in one file, reduced to a ten-line fixture, and fixed —
+none of which was practical against 1.5M lines.
+
+### Same bench, `--preprocessed`
+
+| | raw | preprocessed |
+|---|---|---|
+| var recall | 94.37% | **96.00%** |
+| proc recall | 96.50% | **97.90%** |
+| macro-shaped phantom types | 246 | **9** |
+| files with parse problems | 229 | **102** |
+| wall clock | 37s | **15s** |
+
+The half it was built for works: expansion happens, `GLOBAL_VAR(my_thing)` lands on
+`/datum/controller/global_vars`, `VAR_PRIVATE/hidden` lands on `/atom`, and the phantom types all
+but disappear. Vars go up accordingly.
+
+Parse problems are now **below** the raw path — 102 against 229 — after two causes were found and
+fixed. Both were found by asking the compiler-style question, "what is the diagnostic", rather than
+by reasoning about the count:
+
+- **The conditional-`:` whitespace probe read a repositioned span.** `ExpressionParser` answered
+  §4c's spacing rule by inspecting the character before the token's span. Reposition that span onto
+  a macro invocation and the character before the *invocation* decides the parse of text inside it.
+  This produced 5,064 spurious *"expected `:` to complete the conditional"* and dragged 6,044
+  *"expected an expression"* along behind it. `TokenSource.HasWhitespaceBefore` now captures the
+  fact against the token's real location, where it is still knowable. Fixing it took parse problems
+  from 1,630 to 102.
+- **`#pragma syntax` does not survive preprocessing.** Directive lines are consumed, so the
+  statement parser never sees `C for` / `C switch` and parses those bodies under the default
+  grammar. Confirmed on a fixture: both pragma forms parse clean raw and fail preprocessed. Barely
+  visible in this bench — /tg/station has 31 pragmas and no `syntax` ones — but it is a real hole,
+  and the state has to ride the stream as data.
+
+**The reference is reproducible, and `dm.exe` handles /tg/station fine.** `dm.exe -o -DCBT
+tgstation.dme` exits 0 with zero errors and produces a file byte-identical to the `objtree.xml` we
+had been diffing against — same 54,626,955 bytes. So the baseline is trustworthy, it is already a
+`-DCBT` build, and it can be regenerated on demand rather than treated as a fixed artefact. Any
+remaining disagreement is ours.
+
+**Injected defines did not close the gap, and the earlier guess that they would was wrong.** Passing
+`-DCBT` grows our tree by roughly 940 var declaration *sites* and adds not one new owner/name pair;
+recall is identical to the digit. `CBT` mostly steers `MAP_SWITCH`, which chooses between operands
+rather than declaring different things. The `-D` support is still necessary — a project whose build
+sets flags we ignore is a different program — it simply is not what this particular gap was made of.
+
+What the gap is actually made of, as two clusters worth one look each:
+
+| | Top owners |
+|---|---|
+| missing | `/datum/controller/subsystem/*` — shuttle 57, mapping 44, air 41, ticker 35, job 28 |
+| invented | `/particles/*` — 16-17 each across many, and `/datum/admin_verb/cmd_admin_areatest` 21 |
+
+The subsystem half was a **declaration-parser gap, not a preprocessor one**, and is now fixed.
+`SUBSYSTEM_DEF(X)` expands, via `\` continuations, to a run of declarations on one logical line that
+*ends* with a bare type path, and the indented block written under the invocation belongs to that
+path. Reduced to the construct that actually breaks, with no macros involved at all:
+
+```dm
+var/glair;/datum/sub/air
+	var/thing = 1
+```
+
+`dm.exe` declares the var **and** the type, with `thing` under the type. We declared only the var:
+the `;` ended the name list, and the parser then consumed to the end of the line and swallowed the
+indented block with it. A `;` that hands the rest of the line to a new declaration now suppresses
+both. Verified separately that `var/a; b` still shares one `var/` and that a trailing `;` still ends
+the line, since dm.exe accepts all three and they take different paths.
+
+Worth noting how nearly this was misdiagnosed. Three earlier `printf` fixtures "reproduced" it with
+a literal `
+` in the source, which the lexer correctly read as a backslash name-escape (§8) — so
+they failed for an unrelated reason and pointed at braces, which turned out to be fine. Only a
+heredoc fixture with real continuations isolated it. The same class of error as the `grep` patterns
+earlier: **the harness was wrong, and it produced a confident, plausible, wrong answer.**
+
+| /tg/station | before | after |
+|---|---|---|
+| var recall | 95.42% | **96.00%** |
+| proc recall | 96.04% | **97.90%** |
+
+The subsystem cluster is gone from the top misses entirely; what remains is scattered at 5-9 per
+owner.
+
+### The oracle has a blind spot, and "invented" is overstated because of it
+
+`/particles` turned out not to be our bug. `dm.exe -o` **omits whole builtin branches**: a
+`/particles/pollen`, `/sound/x` or `/image/x` subtype is absent from the dump entirely, even when it
+declares brand-new vars of its own.
+
+```dm
+/particles/withvar
+	var/mine = 1        // absent from -o
+/datum/plain
+	var/mine = 1        // reported
+```
+
+It is not about builtin *members* — `/obj/box` overriding the builtin `name`, and `/mob/guy`
+overriding the builtin `Login()`, are both reported. It is the branch that decides.
+
+The reference contains **zero** entries under `/particles`, `/sound` and `/image`; our tree contains
+474, correctly. So of 1,168 "invented" vars, 477 are in this blind spot and are right. The honest
+remainder is 691 vars and 1,096 procs.
+
+**Do not chase the invented column to zero.** Doing so would mean deleting types the compiler agrees
+exist. Recall is unaffected — it is measured against the reference — but any precision figure has to
+exclude these branches or it is measuring the oracle rather than us.
+
+The third cause was **indentation across a skipped `#if` region**, found on mlaas rather than here:
+the region takes its `Indent` tokens with it while the matching `Dedent`s survive in live code, so
+the stream pops levels it never pushed and every later declaration reads one level too shallow.
+Members land on the root. `IncludeGraph` now tracks the file's own depth across skipped regions and
+emits the difference before each surviving token. On mlaas that was worth 128 procs and 113 vars —
+the whole gap.
+
+Both now beat the raw path outright, and mlaas stays exact on both.
+
+Re-run this table after each attempt. It has now disagreed with the obvious expectation four times:
+once by improving the thing that looked broken, once by leaving the headline unmoved after a fix
+that removed 11,000 diagnostics, once by hiding a whole-project defect behind a metric that moved
+less than a point, and once by not moving at all for the `-D` flags that were supposed to explain
+it.
 
 ---
 

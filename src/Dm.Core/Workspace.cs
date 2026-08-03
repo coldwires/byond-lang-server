@@ -4,6 +4,8 @@ using System.IO;
 using Dm.Core.Text;
 using System.Threading;
 using Dm.Core.Includes;
+using Dm.Core.Preprocessing;
+using Dm.Core.Syntax;
 using Dm.Core.Symbols;
 
 namespace Dm.Core;
@@ -24,11 +26,36 @@ public sealed class Workspace : IDisposable
     private ObjectTree? _tree;
     private bool _disposed;
 
-    private Workspace(string dmePath, string rootDirectory)
+    private Workspace(string dmePath, string rootDirectory, IReadOnlyList<string>? defines)
     {
         DmePath = dmePath;
         RootDirectory = rootDirectory;
+        Defines = defines;
         _documents = new Dictionary<string, Document>(PathComparer);
+    }
+
+    /// <summary>
+    /// Macros defined before the walk, in <c>dm.exe -D</c> spelling.
+    /// </summary>
+    /// <remarks>
+    /// Pass whatever the project's build passes. The flags decide which <c>#ifdef</c> branches
+    /// exist, so a workspace opened without them describes a different program from the one the
+    /// build produces — /tg/station needs <c>CBT</c>.
+    /// </remarks>
+    public IReadOnlyList<string>? Defines { get; private set; }
+
+    /// <summary>
+    /// Replaces the injected defines and drops the cached tree.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="Open"/> because the tree is built lazily, so a client can set these
+    /// immediately after opening and still have them apply — and can change build flags later
+    /// without reopening the project.
+    /// </remarks>
+    public void SetDefines(IReadOnlyList<string>? defines)
+    {
+        Defines = defines;
+        _tree = null;
     }
 
     /// <summary>Absolute path to the <c>.dme</c> this workspace was opened from.</summary>
@@ -49,7 +76,10 @@ public sealed class Workspace : IDisposable
     /// </summary>
     /// <exception cref="ArgumentException">The path is empty or has no parent directory.</exception>
     /// <exception cref="FileNotFoundException">The <c>.dme</c> does not exist.</exception>
-    public static Workspace Open(string dmePath)
+    public static Workspace Open(string dmePath) => Open(dmePath, null);
+
+    /// <summary>Opens a workspace, defining macros before the walk as <c>dm.exe -D</c> would.</summary>
+    public static Workspace Open(string dmePath, IReadOnlyList<string>? defines)
     {
         if (string.IsNullOrWhiteSpace(dmePath))
             throw new ArgumentException("dme path is empty", nameof(dmePath));
@@ -63,7 +93,7 @@ public sealed class Workspace : IDisposable
         if (string.IsNullOrEmpty(dir))
             throw new ArgumentException("dme path has no parent directory", nameof(dmePath));
 
-        return new Workspace(full, dir);
+        return new Workspace(full, dir, defines);
     }
 
     // -- documents ---------------------------------------------------------
@@ -123,19 +153,24 @@ public sealed class Workspace : IDisposable
         ObjectTree tree = new();
         Builtins.Seed(tree);
 
-        IncludeGraph graph = IncludeGraph.Build(DmePath);
+        // The preprocessed stream, not each file's own text, so a declaration produced by a macro is
+        // the declaration it expands to rather than the macro's name. Reading per file cannot see
+        // through `SUBSYSTEM_DEF(air)` or `VAR_PRIVATE/hidden` at all.
+        IncludeOptions options = new()
+        {
+            Defines = Defines,
 
-        foreach (IncludedFile file in graph.Files)
+            // Pushed buffers are authoritative (PLAN.md §4). Without this the walk reads the file as
+            // last saved, and every unsaved keystroke would be analysed against stale text.
+            SourceProvider = path => _documents.TryGetValue(path, out Document? open) ? open.Text : null,
+        };
+
+        PreprocessResult preprocessed = Preprocessor.Run(DmePath, options);
+
+        foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (file.Kind != IncludeKind.DmSource)
-                continue;
-
-            if (!TryGetDocument(file.Path, out Document document))
-                continue;
-
-            TypeTreeBuilder.AddFile(tree, file.Path, document.Parse, cancellationToken);
+            TypeTreeBuilder.AddFile(tree, file, DeclarationParser.Parse(source), cancellationToken);
         }
 
         _tree = tree;

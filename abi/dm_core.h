@@ -98,6 +98,29 @@ dm_status dm_set_buffer(dm_workspace workspace, const char *file,
 /* Drops a client buffer. Later reads for that path fall back to disk. */
 dm_status dm_close_buffer(dm_workspace workspace, const char *file);
 
+/* -- build configuration ------------------------------------------------- */
+
+/*
+ * Defines macros for the project, exactly as dm.exe's -D switch does. Added in ABI 0.5.
+ *
+ * PASS WHAT THE PROJECT'S BUILD PASSES. The flags decide which #ifdef branches exist,
+ * so a workspace opened without them describes a different program from the one the
+ * build produces - code behind a guard is invisible, or visible when it should not be.
+ * /tg/station, for instance, builds with -DCBT.
+ *
+ * Each entry uses the compiler's own spelling: "NAME", "NAME=value", or the
+ * function-like "FN(x)=((x)*2)". A bare "NAME" defines it EMPTY rather than to 1,
+ * matching dm.exe.
+ *
+ * Separate from dm_workspace_open because the object tree is built lazily: calling this
+ * straight after opening still applies to the first query, and build flags can be
+ * changed later without reopening. Passing NULL or count 0 clears them. The strings are
+ * copied before the call returns.
+ *
+ * Changing defines invalidates the cached tree, so the next query rebuilds.
+ */
+dm_status dm_set_defines(dm_workspace workspace, const char *const *defines, int32_t count);
+
 /* -- position encoding --------------------------------------------------- */
 
 /*
