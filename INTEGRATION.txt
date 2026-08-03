@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.4  (14 exports)
+ ABI version at last update: 0.5  (15 exports)
  Last updated: 2026-08-03
 ================================================================================
 
@@ -34,6 +34,10 @@ WHAT YOU GET TODAY
       nested /* */ comments, {" multiline "} strings, "[interpolation]" holes,
       and // inside a path eating the rest of the line.
     - Unsaved buffer support. You push editor text, we analyse that, not disk.
+    - MACROS ARE EXPANDED. The object tree is built from the preprocessed
+      stream, so a type or var declared through a macro is the declaration
+      it expands to rather than the macro's name. Codebases that declare
+      through macros - which is most large ones - now resolve.
     - Autocomplete via dm_complete_at. Locals, parameters, src members,
       inherited members and BYOND builtins, with the . / : distinction the
       compiler makes. A receiver resolves when its type is written down -
@@ -173,6 +177,28 @@ WHAT YOU GET TODAY
       tree is built on the first call that needs them - in practice
       dm_complete_at - and is then cached until a buffer changes.
       Returns DM_ERR_NOT_FOUND if the .dme is not there.
+
+  dm_set_defines(ws, defines, count)                          NEW in 0.5
+      Defines macros for the project, exactly as dm.exe's -D switch does.
+
+      ** PASS WHAT THE PROJECT'S BUILD PASSES **
+      The flags decide which #ifdef branches exist, so a workspace without
+      them describes a DIFFERENT PROGRAM from the one the build produces:
+      code behind a guard is invisible to you, or visible when it should not
+      be. /tg/station, for example, builds with -DCBT.
+
+      Spelling is the compiler's own:
+        "NAME"              defined EMPTY, not 1 - matches dm.exe
+        "NAME=value"
+        "FN(x)=((x)*2)"     function-like
+
+      Call it straight after opening. The object tree is lazy, so it still
+      applies to your first query, and you can change flags later without
+      reopening. NULL or count 0 clears them. Strings are copied.
+
+      If your users configure build flags anywhere, plumb them through to
+      this call - it is the difference between analysing their program and
+      analysing a similar one.
 
   dm_set_buffer(ws, file, content, length)
       Tells us what the user currently has on screen for that file.

@@ -212,6 +212,13 @@ internal static class Program
             ("/database", "/datum"),
             ("/exception", "/datum"),
             ("/mutable_appearance", "/image"),
+
+            // Found by diffing this table against `dm.exe -code_tree`, which lists the builtin
+            // branches from any project at all, then confirmed the same way as the rest. Missing
+            // them meant a `/particles` var offered nothing from /datum - no type, no tag, no New.
+            ("/particles", "/datum"),
+            ("/dm_filter", "/datum"),
+            ("/generator", "/datum"),
         };
 
         int added = 0;

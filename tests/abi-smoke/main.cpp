@@ -359,6 +359,55 @@ static void test_completion(const fs::path &dir)
     dm_workspace_close(ws);
 }
 
+// ---------------------------------------------------------------------------
+// Injected defines. The flags a project builds with decide which #ifdef
+// branches exist, so a workspace without them is analysing a different
+// program. Set after open on purpose: the tree is lazy, so this still
+// applies to the first query.
+// ---------------------------------------------------------------------------
+static void test_defines(const fs::path &dir)
+{
+    const fs::path dme = dir / "defines.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"defines.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "defines.dm");
+        out << "#ifdef CBT\n/obj/with_cbt\n\tvar/flagged = 1\n";
+        out << "#else\n/obj/without_cbt\n\tvar/plain = 1\n#endif\n";
+        out << "/proc/f()\n\tvar/obj/with_cbt/t = new\n\tt.\n";
+    }
+
+    std::printf("defines\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "defines: workspace opens");
+
+    const char *flags[] = { "CBT" };
+    check(dm_set_defines(ws, flags, 1) == DM_OK, "defines: accepted");
+
+    char *json = nullptr;
+    // Line 9 (0-based) is `\tt.`; character 3 is just past the dot.
+    check(dm_complete_at(ws, "defines.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "defines: completion succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"name\":\"flagged\"") != std::string::npos,
+              "defines: the guarded branch is the one analysed");
+        dm_free(json);
+    }
+
+    check(dm_set_defines(ws, nullptr, 0) == DM_OK, "defines: clearing is accepted");
+    check(dm_set_defines(nullptr, flags, 1) == DM_ERR_INVALID_HANDLE,
+          "defines: null workspace rejected");
+    check(dm_set_defines(ws, flags, -1) == DM_ERR_INVALID_ARG, "defines: negative count rejected");
+
+    dm_workspace_close(ws);
+}
+
 int main()
 {
     const fs::path dir = fs::temp_directory_path() / "dm_abi_smoke";
@@ -381,6 +430,7 @@ int main()
     test_encodings_differ_only_for_non_ascii(dme);
     test_document_symbols(dme);
     test_completion(dir);
+    test_defines(dir);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);

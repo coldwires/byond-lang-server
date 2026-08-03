@@ -7,17 +7,18 @@
 WHERE WE ARE
 --------------------------------------------------------------------------------
   - M0 boundary is PROVEN. C# -> NativeAOT -> C ABI -> C++ round trip works.
-      dm_core.dll builds at 1.49 MB with 14 exports.
+      dm_core.dll builds at 1.51 MB with 15 exports.
       tests/abi-smoke passes from C++, covering use-after-close, both
-      encodings, dm_document_symbols and dm_complete_at. Reports ABI 0.4.
+      encodings, dm_document_symbols, dm_complete_at and dm_set_defines.
+      Reports ABI 0.5.
   - M1, M2 and M3 are DONE: lexer, syntax highlighting through the ABI, and the
     preprocessor with its include graph and macro source maps.
   - M4 is DONE. Declarations, expressions and statements all parse, proc
     bodies are real syntax trees, and the outline ships through the ABI at
     version 0.3. Every DM file in the corpus parses clean.
   - Local git repo initialised. MIT licensed.
-  - dotnet test works: 523 tests, all passing.
-      Dm.Core.Tests   - 491, text layer through completion
+  - dotnet test works: 534 tests, all passing.
+      Dm.Core.Tests   - 502, text layer through completion
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
@@ -45,13 +46,14 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
      through the ABI. He can wire it up today - it does not need anything else
      from us. The CMakeLists include/link lines are meant to be copied.
-  2. Finish M6: macros in the completion list, leading-"." relative paths,
-     then semantic highlighting (colour IDs 12-15). Type inference is DONE.
-  3. Point the parser at the preprocessed token stream instead of raw per-file
-     tokens. DeclarationParser takes a LexResult today. Fold in -D support
-     while we are there - see INJECTED DEFINES below.
-  4. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
-  5. Test dm.exe for whether a brace block can hold indentation-structured
+  2. Macros in the completion list. DM_COMPLETION_MACRO is in the ABI and
+     never produced, and the macro table now sits right there in the
+     workspace.
+  3. Semantic highlighting, colour IDs 12-15. The last thing INTEGRATION.txt
+     promises that has not landed.
+  4. Leading-"." relative paths. Spec is now exact - see PLAN 4a.
+  5. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
+  6. Test dm.exe for whether a brace block can hold indentation-structured
      sub-blocks. Still a guess. Mixed tabs and spaces is now answered - see
      VERIFIED below.
 
@@ -130,6 +132,193 @@ BIG CORPUS RUN - W:\new-reorg\projects\games\byond
     - a "\" at the end of a // comment continues it to the next line
     - indentation is NOT a prefix comparison. dm.exe accepts " \t", "\t " and
       " " as the same depth as "\t". we were reporting errors on valid code.
+
+BENCH - mlaas, THE ONE WE CAN BE EXACT ON
+--------------------------------------------------------------------------------
+  tgstation is the stress test. mlaas is the CORRECTNESS HARNESS.
+
+                        vars            procs
+    raw            1493 / 1493      1153 / 1153
+    preprocessed   1493 / 1493      1153 / 1153
+
+  100.00% both ways against dm.exe -o, nothing invented.
+
+  Why here and not tgstation: on 1.5M lines a 1% deficit is indistinguishable
+  from a legitimate difference, because their build passes -D flags we never
+  see and we are analysing a different program. On mlaas ANY deviation is our
+  bug, full stop. The last preprocessed defect reproduced here at 128 procs
+  and 113 vars, bisected to one line of one file, reduced to a ten-line
+  fixture, and got fixed. None of that was practical against tgstation.
+
+  RUN THIS AFTER ANY PARSER OR PREPROCESSOR CHANGE:
+    dm.exe -o spies.dme                       the reference
+    dmc tree spies.dme --vars  / --procs      ours, same flat format
+    sort -u both, then comm                   anything non-empty is a bug
+
+BENCH - /tg/station, 2026-08-03
+--------------------------------------------------------------------------------
+  The heaviest thing we have pointed at. ~1.5 million lines.
+
+    7,162 files, 37 seconds, cold, Release build
+    42,131 type nodes (builtins included), 40,339 declared
+    212,565 vars, 63,459 procs, 42,209 overrides
+    229 files with problems
+
+  Compared against a known-good object tree for the same checkout
+  (~\Documents\GitHub\tgstation\objtree.xml, 52 MB, 45,337 types):
+
+                 reference   matched   we miss   we invent   recall
+    vars           224,145   211,525    12,620         776   94.37%
+    procs           64,870    62,566     2,304         494   96.45%
+
+  Nothing crashed and nothing hung, which is the main thing at this size.
+
+  WHERE THE GAP IS - one systemic cause, already on the list
+    We parse RAW PER-FILE TOKENS, not the preprocessed stream. So a macro
+    used in declaration position becomes a path segment instead of being
+    expanded. Confirmed: our tree contains /atom/VAR_PRIVATE, the reference
+    does not. tgstation's VAR_PRIVATE / VAR_PROTECTED / GLOBAL_VAR families
+    are exactly this shape.
+
+    It shows up on both sides of the diff - we invent a type that should not
+    exist, AND we lose the var that should have landed on the real owner.
+    The single biggest missing cluster is /datum/controller/global_vars with
+    1,067 vars, which is the GLOBAL_VAR macro family.
+
+PREPROCESSED PARSING - NOW THE DEFAULT
+--------------------------------------------------------------------------------
+  dmc tree <dme>          the expanded stream (default)
+  dmc tree <dme> --raw    each file's own text, macros stay opaque
+
+  ON mlaas IT IS EXACT: 1493/1493 vars, 1153/1153 procs vs dm.exe -o, nothing
+  invented, both paths. That is the number that matters - see BENCH - mlaas.
+
+  On tgstation:
+                              raw        preprocessed
+    var recall              94.37%          96.00%
+    proc recall             96.50%          97.90%
+    macro-shaped phantoms      246               9
+    files with problems        229             102
+    wall clock                 37s             15s
+
+  The half it was built for WORKS. GLOBAL_VAR(my_thing) now lands on
+  /datum/controller/global_vars, VAR_PRIVATE/hidden lands on /atom, and the
+  phantom types nearly all disappear. Vars go up to match.
+
+  Parse problems are now BELOW the raw path. Two causes found and fixed, both
+  by reading the actual diagnostics (dmc tree --problems) instead of reasoning
+  about the count:
+
+    - the conditional-":" whitespace probe read a REPOSITIONED span.
+      ExpressionParser answered the spacing rule by looking at the character
+      before the token. Reposition that onto a macro invocation and the
+      character before the INVOCATION decides the parse of the text inside
+      it. 5,064 bogus "expected ':'" plus 6,044 "expected an expression"
+      behind it. TokenSource.HasWhitespaceBefore now captures the fact where
+      the token really lives. Problems went 1,630 -> 102.
+    - "#pragma syntax" does not survive preprocessing. Directives are
+      consumed, so the statement parser never sees "C for" / "C switch".
+      Confirmed on a fixture. Barely matters here - tgstation has 31 pragmas
+      and no syntax ones - but it is a real hole and the state has to ride
+      the stream as data.
+
+  THIRD CAUSE - INDENTATION ACROSS A SKIPPED #if. Found on mlaas, not here.
+  A skipped region takes its Indent tokens with it while the matching Dedents
+  survive in live code, so the stream pops levels it never pushed. Everything
+  after reads one level too shallow and members land on the ROOT. It still
+  parses - zero diagnostics - which is why the count never showed it.
+  IncludeGraph now tracks the file's own depth across skipped regions and
+  emits the difference before each surviving token. Worth 128 procs and 113
+  vars on mlaas: the entire gap.
+
+  Vars now beat raw outright. Procs are still 0.46 points behind ON TGSTATION
+  ONLY - mlaas is exact both ways.
+
+  THE ORACLE IS REPRODUCIBLE, AND dm.exe IS NOT IFFY HERE:
+    dm.exe -o -DCBT tgstation.dme
+  exits 0 with zero errors and produces a file BYTE-IDENTICAL to the
+  objtree.xml we had been diffing against - same 54,626,955 bytes. So the
+  baseline is trustworthy, it is already a -DCBT build, and it can be
+  regenerated on demand. Any remaining disagreement is OURS.
+
+  -D DID NOT CLOSE THE GAP, and the guess that it would was wrong. Passing
+  -DCBT grows our tree by ~940 var declaration SITES and adds not one new
+  owner/name pair; recall is identical to the digit. CBT mostly steers
+  MAP_SWITCH, which picks between operands rather than declaring different
+  things. -D is still necessary - a build whose flags we ignore is a
+  different program - it is just not what this gap was made of.
+
+  WHAT THE GAP IS MADE OF:
+    missing   /datum/controller/subsystem/*  (shuttle 57, mapping 44, air 41,
+              ticker 35, job 28) - DIAGNOSED, see below
+    invented  /particles/*  (16-17 each across many) and
+              /datum/admin_verb/cmd_admin_areatest 21 - not investigated
+
+  SUBSYSTEM_DEF - WAS A DECLARATION PARSER GAP. FIXED.
+    The macro expands through \ continuations into a run of declarations on
+    ONE logical line, ending with a bare type path that owns the indented
+    block written under the invocation. Reduced, no macros needed:
+
+      var/glair;/datum/sub/air
+        var/thing = 1
+
+    dm.exe declares the var AND the type, with thing under the type. We
+    declared only the var: the ";" ended the name list, then the parser
+    consumed to end of line and swallowed the indented block with it.
+
+    Fixed by suppressing both when a ";" hands the rest of the line to a new
+    declaration. "var/a; b" still shares one var/, and a trailing ";" still
+    ends the line - dm.exe accepts all three and they take different paths.
+
+    tgstation: vars 95.42 -> 96.00%, procs 96.04 -> 97.90%. The subsystem
+    cluster is gone from the top misses; what is left is scattered at 5-9.
+
+    HOW IT WAS NEARLY MISDIAGNOSED: three printf fixtures "reproduced" it
+    with a literal 
+ in the source, which the lexer correctly read as a
+    backslash name-escape. They failed for an unrelated reason and pointed
+    at brace blocks, which are fine. Only a heredoc with real continuations
+    isolated it. Same class as the grep bugs: THE HARNESS WAS WRONG AND GAVE
+    A CONFIDENT WRONG ANSWER. Write fixtures with a heredoc, and check the
+    file with cat -A before trusting a negative result.
+
+  Re-run the table after each attempt. It has now disagreed with the obvious
+  expectation three times - once by improving the thing that looked broken,
+  once by not moving after a fix that removed 11,000 diagnostics, and once by
+  hiding a whole-project defect behind a metric that shifted under a point.
+
+  Two real preprocessor bugs fell out of pointing it at 1.5M lines, both
+  pre-existing and both now fixed:
+    - MacroExpander.RawText sliced the original text between the first and
+      last token of a run. A body naming a parameter twice, or the ###
+      repeat operator, makes that run go backwards and it threw.
+    - reported positions inside one expansion are not monotonic. a body
+      token reports at the invocation while an argument keeps the caller's
+      position, so "#define X(a) a + a" yields argument, body, argument -
+      and the parser builds node spans with FromBounds across the run.
+
+THE ORACLE'S BLIND SPOT - dm.exe -o DOES NOT REPORT EVERYTHING
+--------------------------------------------------------------------------------
+  -o omits WHOLE BUILTIN BRANCHES. A /particles, /sound or /image subtype is
+  absent from the dump entirely, even when it declares brand new vars:
+
+    /particles/withvar
+      var/mine = 1        <- absent from -o
+    /datum/plain
+      var/mine = 1        <- reported
+
+  It is NOT about builtin members. /obj/box overriding the builtin "name" and
+  /mob/guy overriding the builtin Login() are both reported fine. The branch
+  is what decides.
+
+  The reference has ZERO entries under /particles, /sound and /image. We have
+  474, correctly. So of 1,168 "invented" vars, 477 sit in this blind spot and
+  are RIGHT. Honest remainder: 691 vars, 1,096 procs.
+
+  DO NOT CHASE "invented" TO ZERO - that would mean deleting types dm.exe
+  agrees exist. Recall is unaffected (it is measured against the reference),
+  but any precision number must exclude these branches or it is measuring the
+  oracle instead of us.
 
 CORPUS - RUN SCAN AGAINST THESE AFTER ANY LEXER CHANGE
 --------------------------------------------------------------------------------
@@ -240,15 +429,22 @@ WHERE WE DISAGREE WITH dm.exe - ON PURPOSE, EXACTLY ONCE
   on the list. Nothing else in the library pretends the var has a type -
   the object tree and the diagnostics both agree with dm.exe.
 
-INJECTED DEFINES - dm.exe -D
+INJECTED DEFINES - dm.exe -D   [DONE for the core and the CLI]
 --------------------------------------------------------------------------------
   A project built with "dm.exe -DDEBUG game.dme" compiles a DIFFERENT
   program from the one we analyse, because we never see the -D. Anything
   behind "#ifdef DEBUG" is invisible to us, or visible when it should not be.
 
-  What we need: an optional set of defines on Workspace.Open, seeded into the
-  MacroTable before the include walk, plus "dmc --define NAME=value" and an
-  ABI parameter. Scheduled with the preprocessed-stream work.
+    dmc tree game.dme -DCBT -DFLAVOUR=3 -DFN(x)=((x)*2)
+
+  Accepted by every command that reads a .dme, in both spellings (-DNAME and
+  -D NAME). A bare -DNAME defines it EMPTY, not 1, matching the compiler.
+  IncludeOptions.Defines is the library entry point.
+
+  THROUGH THE ABI TOO, as of 0.5:
+    dm_set_defines(ws, defines, count)
+  Set it straight after opening - the tree is lazy, so it still applies to
+  the first query, and flags can change later without reopening.
 
   For the IDE devs: pass the same -D set to us and to dm.exe, or the
   highlighting and the build will disagree. Pre/post-compile hooks are yours
@@ -266,8 +462,19 @@ dm.exe FLAGS - THE FULL SET FOR 516.1666
                    backslash separated. stddef.dm is not listed. still writes
                    a .dmb, so it is a build with a report, not a dry run.
                    ORACLE FOR OUR INCLUDE GRAPH - cheapest one left to wire up
-    -code_tree     code tree. an oracle for declarations, but noisy: dumps all
-                   of stddef ahead of your project
+    -code_tree     SYNTACTIC tree, before resolution. an oracle for the
+                   PARSER, not the type tree. also lists the builtin branches
+                   from any project at all - but with NO builtin members, so
+                   it does not replace the info.html scrape.
+                   IT CARRIES INHERITANCE IN TWO FORMS THAT DISAGREE:
+                     "= (parent_type) (/atom/movable)"  correct for /mob
+                     ".child_type (/mob)" under /atom   NOT inheritance
+                   child_type lists more branches and is tempting, but taking
+                   it as the parent puts /mob under /atom and loses
+                   /atom/movable from every mob. completion. Use it as a
+                   CANDIDATE LIST, then confirm with initial(T:parent_type).
+                   Doing exactly that found three links we never had:
+                   /particles, /dm_filter, /generator -> /datum.
 
     -clean         full rebuild, ignore incremental state
     -D<name>[=v]   define a macro. see INJECTED DEFINES above

@@ -723,13 +723,16 @@ X /area /atom
 X /atom /datum
 X /atom/movable /atom
 X /database /datum
+X /dm_filter /datum
 X /exception /datum
+X /generator /datum
 X /icon /datum
 X /image /datum
 X /matrix /datum
 X /mob /atom/movable
 X /mutable_appearance /image
 X /obj /atom/movable
+X /particles /datum
 X /regex /datum
 X /sound /datum
 X /turf /atom

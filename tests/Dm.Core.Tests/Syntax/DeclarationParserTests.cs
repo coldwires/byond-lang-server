@@ -349,4 +349,53 @@ public class DeclarationParserTests
 
         Assert.Equal("sword", result.Text.ToString(declaration.NameSpan));
     }
+
+    // -- `;` at declaration level -------------------------------------------
+
+    /// <summary>
+    /// A <c>;</c> can end a var declaration outright, leaving a fresh declaration on the same line,
+    /// and the indented block below belongs to that one rather than to the var.
+    /// </summary>
+    /// <remarks>
+    /// Verified against dm.exe 516.1666: <c>var/a = 1; /datum/x</c> declares both. Macro-heavy code
+    /// reaches this constantly — tgstation's <c>SUBSYSTEM_DEF</c> expands to exactly this shape, and
+    /// treating the remainder as part of the var swallowed the type and every member under it,
+    /// silently. Recovering it moved proc recall on that codebase from 96.04% to 97.90%.
+    /// </remarks>
+    [Fact]
+    public void A_semicolon_can_end_a_var_and_start_a_new_declaration()
+    {
+        ParseResult result = Parse("var/glair;/datum/sub/air\n\tvar/thing = 1\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Root.Declarations.Count);
+
+        VarDeclarationSyntax global = Assert.IsType<VarDeclarationSyntax>(result.Root.Declarations[0]);
+        Assert.Equal("glair", result.Text.ToString(global.NameSpan));
+
+        // The block under the line is the type's, not the var's.
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(result.Root.Declarations[1]);
+        Assert.Equal("/datum/sub/air", type.Path.Text);
+        Assert.Single(type.Members);
+    }
+
+    /// <summary>Names after a <c>;</c> still share the <c>var/</c>, which is the older behaviour.</summary>
+    [Fact]
+    public void A_semicolon_still_separates_names_sharing_one_var()
+    {
+        DeclarationSyntax declaration = Single("var/a; b\n");
+
+        VarDeclarationSyntax variable = Assert.IsType<VarDeclarationSyntax>(declaration);
+        Assert.Single(variable.Siblings);
+    }
+
+    /// <summary>A trailing <c>;</c> with nothing after it still ends the line normally.</summary>
+    [Fact]
+    public void A_trailing_semicolon_does_not_split_the_declaration()
+    {
+        ParseResult result = Parse("var/a;\n/datum/x\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Root.Declarations.Count);
+    }
 }

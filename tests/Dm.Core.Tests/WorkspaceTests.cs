@@ -186,4 +186,74 @@ public class WorkspaceTests
         workspace.Dispose();
         workspace.Dispose();
     }
+
+    // -- the object tree sees what the preprocessor sees ---------------------
+
+    /// <summary>
+    /// A type produced by a macro is the type it expands to, not the macro's name.
+    /// </summary>
+    /// <remarks>
+    /// The workspace read each file's own text until this landed, so nothing that declared through
+    /// a macro existed in the tree the ABI serves — every <c>SUBSYSTEM_DEF</c>, <c>GLOBAL_VAR</c>
+    /// and <c>VAR_PRIVATE</c> in a real codebase.
+    /// </remarks>
+    [Fact]
+    public void The_object_tree_expands_macros()
+    {
+        using TempDirectory temp = new();
+        string dme = temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", "#define DECLARE(X) /obj/##X\nDECLARE(sword)\n\tvar/damage = 5\n");
+
+        using Workspace workspace = Workspace.Open(dme);
+        Dm.Core.Symbols.ObjectTree tree = workspace.GetObjectTree();
+
+        Dm.Core.Symbols.TypeSymbol? sword = tree.Find("/obj/sword");
+
+        Assert.NotNull(sword);
+        Assert.NotNull(sword!.FindVar("damage"));
+
+        // The macro's own name must not have become a type.
+        Assert.Null(tree.Find("/obj/DECLARE"));
+    }
+
+    /// <summary>
+    /// The include walk reads pushed buffers, not disk.
+    /// </summary>
+    /// <remarks>
+    /// PLAN.md §4 makes a pushed buffer the only source for its path. The preprocessor loads files
+    /// itself, so without a hook the tree would describe the last saved version and every unsaved
+    /// keystroke would be analysed against stale text.
+    /// </remarks>
+    [Fact]
+    public void The_object_tree_reads_pushed_buffers_rather_than_disk()
+    {
+        using TempDirectory temp = new();
+        string dme = temp.Write("game.dme", "#include \"code.dm\"\n");
+        string file = temp.Write("code.dm", "/obj/on_disk\n");
+
+        using Workspace workspace = Workspace.Open(dme);
+        Assert.NotNull(workspace.GetObjectTree().Find("/obj/on_disk"));
+
+        workspace.SetBuffer(file, "/obj/in_buffer\n\tvar/unsaved = 1\n");
+
+        Dm.Core.Symbols.ObjectTree tree = workspace.GetObjectTree();
+
+        Assert.NotNull(tree.Find("/obj/in_buffer"));
+        Assert.Null(tree.Find("/obj/on_disk"));
+    }
+
+    /// <summary>Defines reach the walk, so the branch the build compiles is the one we analyse.</summary>
+    [Fact]
+    public void Defines_passed_to_open_select_the_conditional_branch()
+    {
+        using TempDirectory temp = new();
+        string dme = temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", "#ifdef CBT\n/obj/with_cbt\n#else\n/obj/without_cbt\n#endif\n");
+
+        using Workspace plain = Workspace.Open(dme);
+        Assert.NotNull(plain.GetObjectTree().Find("/obj/without_cbt"));
+
+        using Workspace flagged = Workspace.Open(dme, new[] { "CBT" });
+        Assert.NotNull(flagged.GetObjectTree().Find("/obj/with_cbt"));
+    }
 }

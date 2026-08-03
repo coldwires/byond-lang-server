@@ -49,6 +49,11 @@ internal static class Program
         catch (Exception ex)
         {
             Console.Error.WriteLine($"error: {ex.Message}");
+
+            // A stack is the difference between "something threw" and a fix, and this is a dev tool.
+            if (Environment.GetEnvironmentVariable("DMC_STACK") is not null)
+                Console.Error.WriteLine(ex);
+
             return 1;
         }
     }
@@ -73,11 +78,22 @@ internal static class Program
         Console.Error.WriteLine("      --members <path>     show one type's vars and procs, inherited too");
         Console.Error.WriteLine("      --no-builtins        project declarations only");
         Console.Error.WriteLine("      --procs | --vars     flat \"owner name\" list, for diffing");
+        Console.Error.WriteLine("      --raw                parse each file's own text instead of");
+        Console.Error.WriteLine("                           the expanded stream; macros stay opaque");
+        Console.Error.WriteLine("      --problems           aggregate parse diagnostics by message");
+        Console.Error.WriteLine("      --verbose            with --problems, name a file per problem");
         Console.Error.WriteLine("  complete <dme> <file> <line> <col>   what can be typed there");
         Console.Error.WriteLine("      lines and columns are 1-based here, unlike the ABI");
         Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
         Console.Error.WriteLine("      --macros             show tokens that came from a macro");
         Console.Error.WriteLine("      --dump               print every token");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("  -DNAME, -DNAME=value, -DFN(x)=body");
+        Console.Error.WriteLine("      define a macro before the walk, as dm.exe -D does. accepted by");
+        Console.Error.WriteLine("      every command that reads a .dme. PASS WHAT THE BUILD PASSES:");
+        Console.Error.WriteLine("      the flags decide which #ifdef branches exist, so without them");
+        Console.Error.WriteLine("      you are analysing a different program. /tg/station needs -DCBT.");
+        Console.Error.WriteLine("      a bare -DNAME defines it EMPTY, not 1, matching the compiler.");
     }
 
     private static int Unknown(string command)
@@ -119,7 +135,7 @@ internal static class Program
         bool tree = Array.IndexOf(args, "--tree") >= 0;
         bool orphans = Array.IndexOf(args, "--orphans") >= 0;
 
-        IncludeGraph graph = IncludeGraph.Build(args[1]);
+        IncludeGraph graph = IncludeGraph.Build(args[1], BuildOptions(args));
         string root = Path.GetDirectoryName(graph.DmePath) ?? ".";
 
         int dm = 0, library = 0;
@@ -186,7 +202,7 @@ internal static class Program
         bool showMacros = Array.IndexOf(args, "--macros") >= 0;
         bool dump = Array.IndexOf(args, "--dump") >= 0;
 
-        PreprocessResult result = Preprocessor.Run(args[1]);
+        PreprocessResult result = Preprocessor.Run(args[1], BuildOptions(args));
 
         int fromMacros = 0;
         Dictionary<string, int> byMacro = new(StringComparer.Ordinal);
@@ -319,20 +335,68 @@ internal static class Program
             return 1;
         }
 
-        IncludeGraph graph = IncludeGraph.Build(args[1]);
         List<(string, ParseResult)> parsed = new();
         int problems = 0;
 
-        foreach (IncludedFile file in graph.Files)
+        // The preprocessed stream is the default: a declaration produced by a macro is then the
+        // declaration it expands to rather than the macro's name. --raw keeps the old per-file
+        // parse, which cannot see through a macro, for comparing the two. See PLAN.md §9.
+        if (args.Contains("--raw"))
         {
-            if (file.Kind != IncludeKind.DmSource)
-                continue;
+            IncludeGraph graph = IncludeGraph.Build(args[1], BuildOptions(args));
 
-            ParseResult parse = DeclarationParser.Parse(LexFile(file.Path));
-            parsed.Add((file.Path, parse));
+            foreach (IncludedFile file in graph.Files)
+            {
+                if (file.Kind != IncludeKind.DmSource)
+                    continue;
 
-            if (parse.Diagnostics.Count > 0)
-                problems++;
+                ParseResult parse = DeclarationParser.Parse(LexFile(file.Path));
+                parsed.Add((file.Path, parse));
+
+                if (parse.Diagnostics.Count > 0)
+                    problems++;
+            }
+        }
+        else
+        {
+            PreprocessResult preprocessed = Preprocessor.Run(args[1], BuildOptions(args));
+
+            foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed))
+            {
+                ParseResult parse = DeclarationParser.Parse(source);
+                parsed.Add((file, parse));
+
+                if (parse.Diagnostics.Count > 0)
+                    problems++;
+            }
+        }
+
+        // What actually went wrong, rather than how many files it went wrong in. The count alone
+        // cannot tell a real regression from a fixture that was always broken.
+        if (args.Contains("--problems"))
+        {
+            Dictionary<string, int> byMessage = new(StringComparer.Ordinal);
+
+            foreach ((string file, ParseResult parse) in parsed)
+            {
+                foreach (Diagnostic diagnostic in parse.Diagnostics)
+                {
+                    string key = $"{diagnostic.Id} {diagnostic.Message}";
+                    byMessage[key] = byMessage.GetValueOrDefault(key) + 1;
+                }
+
+                if (parse.Diagnostics.Count > 0 && args.Contains("--verbose"))
+                {
+                    Diagnostic first = parse.Diagnostics[0];
+                    LinePosition at = parse.Text.GetLinePosition(first.Span.Start);
+                    Console.Out.WriteLine($"{file}({at.Line + 1},{at.Character + 1}): {first.Id} {first.Message}");
+                }
+            }
+
+            foreach ((string message, int count) in byMessage.OrderByDescending(e => e.Value))
+                Console.Out.WriteLine($"{count,8}  {message}");
+
+            return 0;
         }
 
         // Builtins first: a project reopens /mob to add its own members, and the two merge.
@@ -405,7 +469,11 @@ internal static class Program
 
                 foreach (ProcSymbol proc in type.Procs)
                 {
-                    if (proc.IsBuiltin)
+                    // Declaration sites, not the builtin flag. A project overriding `/client/New`
+                    // leaves the symbol flagged builtin - it was seeded from builtins.txt first -
+                    // so filtering on the flag drops procs the project really did declare, and the
+                    // diff then reports a gap that only exists in this dump.
+                    if (proc.Sites.Count == 0)
                         continue;
 
                     lines.Add($"{owner} {proc.Name}");
@@ -467,7 +535,7 @@ internal static class Program
             return 1;
         }
 
-        IncludeGraph graph = IncludeGraph.Build(args[1]);
+        IncludeGraph graph = IncludeGraph.Build(args[1], BuildOptions(args));
         ObjectTree tree = new();
         Builtins.Seed(tree);
 
@@ -500,6 +568,31 @@ internal static class Program
 
         foreach (TypeSymbol child in type.Children.OrderBy(c => c.Path.Text, StringComparer.Ordinal))
             PrintSubtree(child, depth + 1);
+    }
+
+    /// <summary>
+    /// Collects <c>-D</c> flags into the options every graph walk takes.
+    /// </summary>
+    /// <remarks>
+    /// Both spellings the compiler accepts: attached as <c>-DCBT</c>, and separated as
+    /// <c>-D CBT</c>. A project built with flags we do not receive is a different program from the
+    /// one we analyse, so these belong on every command that walks the graph, not just on `tree`.
+    /// </remarks>
+    private static IncludeOptions BuildOptions(string[] args)
+    {
+        List<string> defines = new();
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i];
+
+            if (arg.Length > 2 && arg.StartsWith("-D", StringComparison.Ordinal))
+                defines.Add(arg[2..]);
+            else if ((arg == "-D" || arg == "--define") && i + 1 < args.Length)
+                defines.Add(args[++i]);
+        }
+
+        return new IncludeOptions { Defines = defines.Count > 0 ? defines : null };
     }
 
     private static string? OptionValue(string[] args, string name)

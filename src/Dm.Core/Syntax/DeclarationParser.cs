@@ -67,7 +67,7 @@ public sealed class DeclarationParser
     private static readonly HashSet<string> Modifiers =
         new(StringComparer.Ordinal) { "const", "tmp", "global", "static", "final" };
 
-    private readonly LexResult _lex;
+    private readonly TokenSource _source;
     private readonly List<Diagnostic> _diagnostics = new();
     private readonly List<Token> _tokens = new();
 
@@ -79,27 +79,34 @@ public sealed class DeclarationParser
 
     private int _position;
 
-    private DeclarationParser(LexResult lex)
+    private DeclarationParser(TokenSource source)
     {
-        _lex = lex;
+        _source = source;
 
         // Comments carry no structure. Layout tokens are kept: they are the structure.
-        foreach (Token token in lex.Tokens)
-        {
-            if (token.Kind != TokenKind.Comment)
-                _tokens.Add(token);
-        }
+        _tokens.AddRange(source.Tokens);
     }
 
     public static ParseResult Parse(LexResult lex)
     {
         ArgumentNullException.ThrowIfNull(lex);
 
-        DeclarationParser parser = new(lex);
+        return Parse(TokenSource.FromLex(lex));
+    }
+
+    /// <summary>
+    /// Parses whatever a <see cref="TokenSource"/> holds — a lexed file, or one file's worth of the
+    /// preprocessed stream with its macros already expanded.
+    /// </summary>
+    public static ParseResult Parse(TokenSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        DeclarationParser parser = new(source);
         List<DeclarationSyntax> declarations = parser.ParseBlock(BlockContext.Any);
 
-        TextSpan span = new(0, lex.Text.Length);
-        return new ParseResult(lex.Text, new FileSyntax(declarations, span), parser._diagnostics);
+        TextSpan span = new(0, source.Text.Length);
+        return new ParseResult(source.Text, new FileSyntax(declarations, span), parser._diagnostics);
     }
 
     // -- token access ------------------------------------------------------
@@ -112,9 +119,12 @@ public sealed class DeclarationParser
         => _position + offset < _tokens.Count ? _tokens[_position + offset].Kind : TokenKind.EndOfFile;
 
     private TextSpan CurrentSpan
-        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_lex.Text.Length, 0);
+        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_source.Text.Length, 0);
 
-    private string TextOf(int index) => _lex.Text.ToString(_tokens[index].Span);
+    private string TextOf(int index) => _source.TextOf(index);
+
+    /// <summary>True when nothing further sits on this line.</summary>
+    private bool AtLineEnd => Current is TokenKind.Newline or TokenKind.Dedent or TokenKind.EndOfFile;
 
     private void SkipNewlines()
     {
@@ -397,7 +407,7 @@ public sealed class DeclarationParser
         }
 
         (BlockStatementSyntax? body, int next) =
-            StatementParser.ParseProcBody(_tokens, _lex.Text, _diagnostics, _position, _modes);
+            StatementParser.ParseProcBody(_tokens, _source, _diagnostics, _position, _modes);
 
         _position = next > _position ? next : _position + 1;
 
@@ -454,12 +464,24 @@ public sealed class DeclarationParser
 
         // Several names can share one `var/`, separated by commas — `var/a = 1, b = 2` — or by
         // semicolons when written on one line, as in stddef.dm's `x = 0; y = 0; z = 0`.
+        //
+        // A `;` can also end the declaration outright, with a fresh one following on the same line.
+        // `var/glair;/datum/sub/air` declares the var *and* the type, and the indented block below
+        // belongs to the type — verified against dm.exe 516.1666. Macro-heavy code reaches this
+        // constantly: tgstation's SUBSYSTEM_DEF expands to exactly this shape, and treating the
+        // remainder as part of the var swallowed both the type and every member under it.
+        bool endedBySeparator = false;
+
         while (Current is TokenKind.Comma or TokenKind.Semicolon)
         {
+            bool afterSemicolon = Current == TokenKind.Semicolon;
             _position++;
 
             if (Current != TokenKind.Identifier)
+            {
+                endedBySeparator = afterSemicolon && !AtLineEnd;
                 break;
+            }
 
             int siblingStart = _position;
             PathSyntax siblingPath = ParsePath();
@@ -484,10 +506,16 @@ public sealed class DeclarationParser
                 inVarContext));
         }
 
-        ConsumeLineEnd();
+        // Neither applies when a `;` handed the rest of the line to a new declaration: consuming to
+        // the line end would eat it, and the indented block underneath is that declaration's, not
+        // this one's.
+        if (!endedBySeparator)
+        {
+            ConsumeLineEnd();
 
-        // A var may still open a block, as in a type with initialised members beneath it.
-        SkipIndentedBlock();
+            // A var may still open a block, as in a type with initialised members beneath it.
+            SkipIndentedBlock();
+        }
 
         return new VarDeclarationSyntax(
             path, modifiers, declaredType, hasInitializer, initializer, siblings, SpanFrom(start), inVarContext);
@@ -551,7 +579,7 @@ public sealed class DeclarationParser
                 _position++;
 
             TextSpan combined = TextSpan.FromBounds(nameStart, _tokens[_position - 1].Span.End);
-            segments[^1] = _lex.Text.ToString(combined);
+            segments[^1] = _source.Text.ToString(combined);
             spans[^1] = combined;
         }
 
@@ -701,7 +729,7 @@ public sealed class DeclarationParser
         _position++;
 
         (ExpressionSyntax expression, int next) =
-            ExpressionParser.Parse(_tokens, _lex.Text, _diagnostics, _position);
+            ExpressionParser.Parse(_tokens, _source, _diagnostics, _position);
 
         // Guarantee progress even when the expression consumed nothing.
         _position = next > _position ? next : _position + 1;

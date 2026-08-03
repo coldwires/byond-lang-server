@@ -14,11 +14,10 @@ public class ExpressionParserTests
 {
     private static ExpressionSyntax Parse(string source, out IReadOnlyList<Diagnostic> diagnostics)
     {
-        LexResult lex = Lexer.Lex(SourceText.From(source));
-        List<Token> tokens = lex.Tokens.Where(t => t.Kind != TokenKind.Comment).ToList();
+        TokenSource tokenSource = TokenSource.FromLex(Lexer.Lex(SourceText.From(source)));
         List<Diagnostic> collected = new();
 
-        (ExpressionSyntax expression, _) = ExpressionParser.Parse(tokens, lex.Text, collected, 0);
+        (ExpressionSyntax expression, _) = ExpressionParser.Parse(tokenSource.Tokens, tokenSource, collected, 0);
         diagnostics = collected;
         return expression;
     }

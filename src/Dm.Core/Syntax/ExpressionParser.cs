@@ -32,7 +32,7 @@ namespace Dm.Core.Syntax;
 public sealed class ExpressionParser
 {
     private readonly IReadOnlyList<Token> _tokens;
-    private readonly SourceText _text;
+    private readonly TokenSource _source;
     private readonly List<Diagnostic> _diagnostics;
 
     private int _position;
@@ -56,13 +56,13 @@ public sealed class ExpressionParser
 
     private ExpressionParser(
         IReadOnlyList<Token> tokens,
-        SourceText text,
+        TokenSource source,
         List<Diagnostic> diagnostics,
         int position,
         bool colonTerminates)
     {
         _tokens = tokens;
-        _text = text;
+        _source = source;
         _diagnostics = diagnostics;
         _position = position;
         _colonTerminates = colonTerminates;
@@ -72,16 +72,16 @@ public sealed class ExpressionParser
     /// <returns>The expression, and the position of the first token after it.</returns>
     public static (ExpressionSyntax Expression, int Position) Parse(
         IReadOnlyList<Token> tokens,
-        SourceText text,
+        TokenSource source,
         List<Diagnostic> diagnostics,
         int position,
         bool colonTerminates = false)
     {
         ArgumentNullException.ThrowIfNull(tokens);
-        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(diagnostics);
 
-        ExpressionParser parser = new(tokens, text, diagnostics, position, colonTerminates);
+        ExpressionParser parser = new(tokens, source, diagnostics, position, colonTerminates);
         ExpressionSyntax expression = parser.ParseExpression();
         return (expression, parser._position);
     }
@@ -96,9 +96,9 @@ public sealed class ExpressionParser
     private bool AtEnd => _position >= _tokens.Count || Current == TokenKind.EndOfFile;
 
     private TextSpan CurrentSpan
-        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_text.Length, 0);
+        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_source.Text.Length, 0);
 
-    private string TextOf(int index) => _text.ToString(_tokens[index].Span);
+    private string TextOf(int index) => _source.TextOf(index);
 
     private TextSpan SpanFrom(int startToken)
     {
@@ -146,9 +146,7 @@ public sealed class ExpressionParser
         if (_ternaryDepth == 0 || Current != TokenKind.Colon)
             return false;
 
-        int start = CurrentSpan.Start;
-
-        if (start > 0 && char.IsWhiteSpace(_text[start - 1]))
+        if (_source.HasWhitespaceBefore(_position))
             return true;
 
         // Tight against a bare identifier is the one shape where member access wins.
@@ -804,6 +802,6 @@ public sealed class ExpressionParser
 
         return hasHole
             ? new InterpolatedStringExpressionSyntax(parts, span)
-            : new LiteralExpressionSyntax(LiteralKind.String, _text.ToString(span), span);
+            : new LiteralExpressionSyntax(LiteralKind.String, _source.Text.ToString(span), span);
     }
 }

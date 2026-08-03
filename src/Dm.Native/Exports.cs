@@ -95,6 +95,52 @@ internal static unsafe class Exports
         }
     }
 
+    /// <summary>
+    /// Defines macros for the project, as <c>dm.exe -D</c> does. Added in ABI 0.5.
+    /// </summary>
+    /// <remarks>
+    /// Separate from opening because the object tree is built lazily: setting these straight after
+    /// <c>dm_workspace_open</c> still applies to the first query, and a client can change build
+    /// flags later without reopening. Passing null or a count of zero clears them.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_set_defines")]
+    public static int SetDefines(IntPtr workspace, byte** defines, int count)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (count < 0)
+                return Fail(DmStatus.InvalidArgument, "count is negative");
+
+            if (defines is null || count == 0)
+            {
+                ws.SetDefines(null);
+                return Ok();
+            }
+
+            List<string> parsed = new(count);
+
+            for (int i = 0; i < count; i++)
+            {
+                string? define = NativeStrings.Read(defines[i]);
+
+                if (string.IsNullOrWhiteSpace(define))
+                    return Fail(DmStatus.InvalidArgument, $"define {i} is null or empty");
+
+                parsed.Add(define);
+            }
+
+            ws.SetDefines(parsed);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "dm_set_buffer")]
     public static int SetBuffer(IntPtr workspace, byte* filePath, byte* contentUtf8, int length)
     {

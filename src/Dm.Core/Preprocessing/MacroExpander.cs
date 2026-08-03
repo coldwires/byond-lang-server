@@ -421,17 +421,34 @@ internal sealed class MacroExpander
         if (tokens.Count == 0)
             return string.Empty;
 
+        // Slicing the original text is only meaningful when this run really is one stretch of one
+        // file. Two things break that, and both occur in real code: tokens from different sources
+        // once an argument has itself been expanded, and tokens that revisit the same source
+        // backwards, which is what a body naming a parameter twice (`#define X(a) a a`) or the
+        // `###` repeat operator produces. Slicing a backwards run threw rather than mis-stringified,
+        // so this only ever showed up as a crash on a project large enough to contain one.
         SourceText source = tokens[0].Source;
+        bool contiguous = true;
+        int previousStart = tokens[0].Span.Start;
+
         foreach (ExpandedToken token in tokens)
         {
-            if (!ReferenceEquals(token.Source, source))
+            if (!ReferenceEquals(token.Source, source) || token.Span.Start < previousStart)
             {
-                StringBuilder fallback = new();
-                foreach (ExpandedToken part in tokens)
-                    fallback.Append(part.Text);
-
-                return fallback.ToString();
+                contiguous = false;
+                break;
             }
+
+            previousStart = token.Span.Start;
+        }
+
+        if (!contiguous)
+        {
+            StringBuilder fallback = new();
+            foreach (ExpandedToken part in tokens)
+                fallback.Append(part.Text);
+
+            return fallback.ToString();
         }
 
         return source.ToString(TextSpan.FromBounds(tokens[0].Span.Start, tokens[^1].Span.End));

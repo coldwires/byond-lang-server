@@ -32,7 +32,7 @@ public sealed class StatementParser
         new(StringComparer.Ordinal) { "const", "tmp", "global", "static", "final" };
 
     private readonly IReadOnlyList<Token> _tokens;
-    private readonly SourceText _text;
+    private readonly TokenSource _source;
     private readonly List<Diagnostic> _diagnostics;
 
     /// <summary>Shared with the declaration parser, since the pragma lives outside proc bodies.</summary>
@@ -42,13 +42,13 @@ public sealed class StatementParser
 
     private StatementParser(
         IReadOnlyList<Token> tokens,
-        SourceText text,
+        TokenSource source,
         List<Diagnostic> diagnostics,
         int position,
         SyntaxModes modes)
     {
         _tokens = tokens;
-        _text = text;
+        _source = source;
         _diagnostics = diagnostics;
         _position = position;
         _modes = modes;
@@ -63,17 +63,17 @@ public sealed class StatementParser
     /// </remarks>
     public static (BlockStatementSyntax? Body, int Position) ParseProcBody(
         IReadOnlyList<Token> tokens,
-        SourceText text,
+        TokenSource source,
         List<Diagnostic> diagnostics,
         int position,
         SyntaxModes modes)
     {
         ArgumentNullException.ThrowIfNull(tokens);
-        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(diagnostics);
         ArgumentNullException.ThrowIfNull(modes);
 
-        StatementParser parser = new(tokens, text, diagnostics, position, modes);
+        StatementParser parser = new(tokens, source, diagnostics, position, modes);
         BlockStatementSyntax? body = parser.ParseBody();
         return (body, parser._position);
     }
@@ -88,9 +88,9 @@ public sealed class StatementParser
     private bool AtEnd => _position >= _tokens.Count || Current == TokenKind.EndOfFile;
 
     private TextSpan CurrentSpan
-        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_text.Length, 0);
+        => _position < _tokens.Count ? _tokens[_position].Span : new TextSpan(_source.Text.Length, 0);
 
-    private string TextOf(int index) => _text.ToString(_tokens[index].Span);
+    private string TextOf(int index) => _source.TextOf(index);
 
     private string CurrentText => _position < _tokens.Count ? TextOf(_position) : string.Empty;
 
@@ -116,7 +116,7 @@ public sealed class StatementParser
     private ExpressionSyntax ParseExpression(bool colonTerminates = false)
     {
         (ExpressionSyntax expression, int next) =
-            ExpressionParser.Parse(_tokens, _text, _diagnostics, _position, colonTerminates);
+            ExpressionParser.Parse(_tokens, _source, _diagnostics, _position, colonTerminates);
 
         _position = next > _position ? next : _position + 1;
         return expression;
