@@ -1,0 +1,440 @@
+================================================================================
+ BYOND DM LANGUAGE LIBRARY - INTEGRATION GUIDE
+ For anyone wiring this into an editor or IDE.
+
+ LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
+ bug in the doc - say so.
+
+ ABI version at last update: 0.2
+ Last updated: 2026-08-02
+================================================================================
+
+
+WHAT THIS IS
+--------------------------------------------------------------------------------
+  A library that reads DM (DreamMaker) source and answers questions about it.
+  You embed it. It has no UI and no opinions about your editor.
+
+  It ships as a normal native shared library with a plain C header. You do not
+  need .NET installed, and you do not need to know it is written in C#.
+
+    Windows   dm_core.dll  + dm_core.lib
+    Linux     libdm_core.so
+    macOS     libdm_core.dylib
+
+  Anything with a C FFI can call it. C++, C, Rust, Python, Go, Zig, C#.
+
+
+WHAT YOU GET TODAY
+--------------------------------------------------------------------------------
+  WORKING NOW
+    - Syntax highlighting (lexical). Keywords, strings, comments, numbers,
+      operators, preprocessor directives, resource literals.
+    - Correct handling of the DM constructs that break naive highlighters:
+      nested /* */ comments, {" multiline "} strings, "[interpolation]" holes,
+      and // inside a path eating the rest of the line.
+    - Unsaved buffer support. You push editor text, we analyse that, not disk.
+
+  NOT YET - do not design around these being absent, they are coming
+    - Autocomplete                    (M6)
+    - Go to definition                (M7)
+    - Document outline / symbols      (M4)
+    - Object tree browsing            (M7)
+    - Error squiggles beyond lexical  (M4)
+    - .dmi icon states                (M8)
+
+  Semantic highlighting (telling a type from a proc from a var) arrives at M6.
+  The colour IDs for it are already reserved - see COLOURS below. Map them now
+  and they start working with no changes on your side.
+
+
+--------------------------------------------------------------------------------
+ 0. BUILD IT
+--------------------------------------------------------------------------------
+  You need the .NET 9 SDK, and on Windows the MSVC C++ build tools.
+
+    dotnet publish src/Dm.Native/Dm.Native.csproj -c Release -r win-x64
+
+  Valid RIDs: win-x64, linux-x64, linux-arm64, osx-x64, osx-arm64.
+
+  ** WINDOWS GOTCHA **
+  If that fails with MSB3073 and something about link.exe, the real cause is
+  that vswhere.exe is not on PATH. The error message blames the linker and is
+  lying to you. Fix:
+
+    $env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\Installer;$env:PATH"
+
+  Output lands in:
+    src/Dm.Native/bin/Release/net9.0/<rid>/publish/   <- the .dll / .so
+    src/Dm.Native/bin/Release/net9.0/<rid>/native/    <- the .lib (Windows)
+
+
+--------------------------------------------------------------------------------
+ 1. FILES YOU NEED
+--------------------------------------------------------------------------------
+    abi/dm_core.h        the header. this is the source of truth, read it.
+    dm_core.dll          ship next to your executable
+    dm_core.lib          link against this (Windows only, it is an import lib)
+
+  There is a working CMake project at tests/abi-smoke. The include and link
+  lines in its CMakeLists.txt are meant to be copied verbatim. If you are stuck
+  on build setup, build that first and confirm it runs - it is 30 seconds and
+  it separates "my build is wrong" from "my code is wrong".
+
+
+--------------------------------------------------------------------------------
+ 2. LINK IT
+--------------------------------------------------------------------------------
+  CMake, Windows:
+
+    target_include_directories(myapp PRIVATE "path/to/abi")
+    target_link_libraries(myapp PRIVATE "path/to/native/dm_core.lib")
+
+    add_custom_command(TARGET myapp POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "path/to/publish/dm_core.dll" "$<TARGET_FILE_DIR:myapp>")
+
+  Linux:
+
+    target_link_libraries(myapp PRIVATE "path/to/publish/libdm_core.so")
+    set_target_properties(myapp PROPERTIES BUILD_RPATH "path/to/publish")
+
+  The header already has extern "C" guards. Just #include it from C++.
+
+
+--------------------------------------------------------------------------------
+ 3. THE MINIMUM PROGRAM
+--------------------------------------------------------------------------------
+  This is the whole thing. Everything else is detail.
+
+    #include "dm_core.h"
+
+    // 1. check we agree on the ABI
+    if (DM_ABI_VERSION_MAJOR(dm_abi_version()) != DM_ABI_EXPECTED_MAJOR)
+        fatal("dm_core is a different major version than this build expects");
+
+    // 2. open the project
+    dm_workspace ws = NULL;
+    if (dm_workspace_open("C:/games/mygame/mygame.dme", &ws) != DM_OK) {
+        char *msg = dm_last_error();
+        fatal(msg);
+        dm_free(msg);
+    }
+
+    // 3. every time the user types, push the buffer
+    dm_set_buffer(ws, "code/mob.dm", utf8_text, utf8_byte_length);
+
+    // 4. every time you paint, ask for the visible lines
+    dm_classification spans = NULL;
+    dm_classify_range(ws, "code/mob.dm", first_visible_line, last_visible_line,
+                      DM_ENCODING_UTF16, &spans);
+
+    int32_t n = dm_classification_count(spans);
+    const int32_t *d = dm_classification_data(spans);
+
+    for (int32_t i = 0; i < n; ++i) {
+        int32_t offset = d[i * 3 + 0];
+        int32_t length = d[i * 3 + 1];
+        int32_t kind   = d[i * 3 + 2];
+        paint(offset, length, colour_for(kind));
+    }
+
+    dm_classification_free(spans);
+
+    // 5. at shutdown
+    dm_workspace_close(ws);
+
+
+--------------------------------------------------------------------------------
+ 4. THE CALLS, IN ORDER
+--------------------------------------------------------------------------------
+  dm_abi_version()
+      Call first, once. Returns (major << 16) | minor. Use the
+      DM_ABI_VERSION_MAJOR / _MINOR macros. Refuse to run on a major mismatch.
+      A higher minor than you were built against is fine - additions only.
+
+  dm_workspace_open(dme_path, &ws)
+      Opens a project. Right now this validates the .dme exists and records its
+      directory; from M3 it will also read the include graph.
+      Returns DM_ERR_NOT_FOUND if the .dme is not there.
+
+  dm_set_buffer(ws, file, content, length)
+      Tells us what the user currently has on screen for that file.
+
+      ** ONCE YOU CALL THIS, WE NEVER READ THAT FILE FROM DISK AGAIN **
+      (until dm_close_buffer). That is deliberate. Your editor is ahead of the
+      filesystem on every unsaved keystroke, and disk is the wrong answer.
+
+      `content` is UTF-8 and is copied before the call returns - you can free
+      your copy immediately. `length` is in BYTES. Pass -1 if it is
+      null-terminated, but prefer the real length: it avoids a scan, and DM
+      string literals can legally contain a NUL.
+
+      `file` may be absolute, or relative to the folder holding the .dme.
+
+      Call this on every edit. It is cheap - it stores text and marks derived
+      data stale. Nothing is re-analysed until you ask a question.
+
+  dm_close_buffer(ws, file)
+      User closed the tab. We go back to reading that path from disk.
+
+  dm_classify_range(ws, file, start_line, end_line, encoding, &out)
+      Line numbers are ZERO-BASED and INCLUSIVE. Out of range values clamp,
+      they do not error.
+      Ask only for what is visible. Asking for the whole file works but is
+      wasted effort on a 10,000 line file where you are showing 60 lines.
+
+  dm_classification_count(spans)     -> N, or -1 if the handle is invalid
+  dm_classification_data(spans)      -> pointer to 3*N int32s, or NULL
+  dm_classification_free(spans)      -> release it
+
+      The data block is (offset, length, kind) repeated N times, contiguous.
+      memcpy it if you want, it is plain int32s. Valid until you call free.
+
+  dm_workspace_close(ws)
+      Done. Safe to call on an already-closed handle.
+
+
+--------------------------------------------------------------------------------
+ 5. ENCODING - READ THIS ONE
+--------------------------------------------------------------------------------
+  Every call that deals in offsets takes an encoding. There is no default and
+  we will not guess.
+
+    DM_ENCODING_UTF16   offsets count UTF-16 code units
+    DM_ENCODING_UTF8    offsets count UTF-8 bytes
+
+  WHICH DO I WANT?
+
+    Qt / QString              -> DM_ENCODING_UTF16
+    C# / .NET string          -> DM_ENCODING_UTF16
+    Java / JavaScript string  -> DM_ENCODING_UTF16
+    std::string / raw bytes   -> DM_ENCODING_UTF8
+    Rust String / &str        -> DM_ENCODING_UTF8
+    Python 3 str              -> neither is exact; use UTF-8 and index bytes
+
+  ** WHY THIS WILL BITE YOU **
+
+  For pure ASCII the two are IDENTICAL. So if you pick the wrong one,
+  everything works. Your tests pass. You ship it.
+
+  Then a user types a comment with an accented character, or an emoji, or CJK
+  text in a string literal - and every colour on that line after it shifts by
+  one to three characters. It will look like a bug in our lexer. It is not.
+
+  Pick the right one now. If you are unsure, write one test with a non-ASCII
+  character in it and check the colours still line up.
+
+
+--------------------------------------------------------------------------------
+ 6. COLOURS
+--------------------------------------------------------------------------------
+  `kind` is one of these. Values are a permanent contract and are never reused.
+
+     0  DM_CLASS_NONE                     default foreground
+     1  DM_CLASS_COMMENT                  // and /* */
+     2  DM_CLASS_KEYWORD                  var, if, for, src, return, ...
+     3  DM_CLASS_IDENTIFIER               everything else that is a name
+     4  DM_CLASS_NUMBER                   42, 3.5, 0x1F, 1e10
+     5  DM_CLASS_STRING                   "..." and {"..."} incl. the quotes
+     6  DM_CLASS_INTERPOLATION_DELIMITER  the [ and ] inside a string
+     7  DM_CLASS_RESOURCE                 'icons/mob.dmi'
+     8  DM_CLASS_OPERATOR                 + - * / = < > etc
+     9  DM_CLASS_PUNCTUATION              ( ) [ ] { } , ;
+    10  DM_CLASS_PREPROCESSOR             #define, #include, #if ...
+    11  DM_CLASS_ERROR                    we could not understand this
+
+    RESERVED - not produced yet, arrive at M6:
+    12  DM_CLASS_TYPE_NAME                a path naming a type
+    13  DM_CLASS_PROC_NAME                an identifier that is a proc
+    14  DM_CLASS_VAR_NAME                 an identifier that is a var
+    15  DM_CLASS_MACRO_NAME               an identifier from a macro
+
+  Handle unknown values by falling back to the default colour. That way a
+  library update cannot break your renderer.
+
+  NOTES ON SPECIFIC KINDS
+
+    INTERPOLATION_DELIMITER is separate from STRING so that "[src.name]" reads
+    as string, bracket, code, bracket, string. Colour the brackets like an
+    operator and the hole reads as code, which is what people expect.
+
+    Spans do NOT cover whitespace. The gaps between spans are whitespace and
+    layout - paint them with your background.
+
+    Touching spans of the same kind are already merged. A three-token string
+    comes back as one span, not three.
+
+
+--------------------------------------------------------------------------------
+ 7. ERRORS
+--------------------------------------------------------------------------------
+  Every function that can fail returns dm_status. DM_OK is 0.
+
+    DM_OK                    0
+    DM_ERR_INVALID_ARG       1   you passed a null or nonsense argument
+    DM_ERR_INVALID_HANDLE    2   handle is closed, freed, or garbage
+    DM_ERR_NOT_FOUND         3   file does not exist and has no buffer
+    DM_ERR_OUT_OF_MEMORY     4
+    DM_ERR_INTERNAL          5   our bug. please report with the message.
+
+  char *msg = dm_last_error();   // may be NULL. YOU FREE IT with dm_free.
+
+  dm_last_error is per-thread and reflects the last failing call on that
+  thread.
+
+  Out-parameters are always cleared before we do any work, so reading them
+  after an ignored error gives you NULL rather than uninitialised stack.
+
+  WE NEVER THROW ACROSS THE BOUNDARY. An exception escaping into your process
+  would kill your IDE, so every entry point converts failures into a status
+  code. If we ever crash your process, that is a bug worth reporting loudly.
+
+
+--------------------------------------------------------------------------------
+ 8. THREADING
+--------------------------------------------------------------------------------
+  Current contract: ONE WORKSPACE IS USED FROM ONE THREAD AT A TIME.
+
+  This is not enforced, and violating it will corrupt state rather than fail
+  cleanly. If you analyse on a worker thread, either keep all calls on that
+  thread or hold a mutex.
+
+  Different workspaces on different threads is fine.
+
+  Background analysis with callbacks is a later feature. Ask if you need it
+  sooner and we will move it up.
+
+
+--------------------------------------------------------------------------------
+ 9. WHO FREES WHAT
+--------------------------------------------------------------------------------
+  Anything we hand you, you release. Nothing we hand you points into memory we
+  might move.
+
+    char *          from dm_last_error, dm_workspace_root  -> dm_free()
+    dm_classification                                      -> dm_classification_free()
+    dm_workspace                                           -> dm_workspace_close()
+
+  Anything you hand us is copied before the call returns. Free your own copy
+  whenever you like.
+
+  USING A FREED HANDLE IS SAFE-ISH BY DESIGN. Handles carry a generation
+  counter, so a stale one returns DM_ERR_INVALID_HANDLE (or -1 / NULL) rather
+  than silently resolving to whatever object took its slot. Do not rely on
+  this, but it means a use-after-free in your code is a clean error you can
+  find, not memory corruption you cannot.
+
+  Closing twice is a no-op, not a crash.
+
+
+--------------------------------------------------------------------------------
+ 10. PERFORMANCE
+--------------------------------------------------------------------------------
+  What actually happens when you call dm_classify_range:
+
+    - if the buffer changed since last time, the WHOLE FILE is re-lexed
+    - the result is cached on the document
+    - only your requested line range is packed and returned
+
+  Why the whole file: a {" multiline string "} or a nested /* comment */ can
+  open thousands of lines above your visible range, and it decides whether
+  line 900 is code or text. Lexing just the visible range gives wrong colours.
+
+  Practically: cost is paid once per edit, not once per scroll. Scrolling a
+  large file re-uses the cached lex and is cheap.
+
+  Do not call dm_set_buffer with identical text on every paint. That throws
+  away the cache and re-lexes. Call it when the text actually changes.
+
+  Incremental re-lexing (only the edited region) is a later milestone. Say
+  something if you hit a file where the current approach is too slow, ideally
+  with the file size.
+
+
+--------------------------------------------------------------------------------
+ 11. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  "unresolved external symbol dm_..."
+      You are not linking dm_core.lib, or you are linking a stale one.
+      On Windows you link the .lib and ship the .dll. Both.
+
+  Program starts and immediately exits, code 0xc0000135
+      dm_core.dll is not next to your executable.
+
+  dm_workspace_open returns 3 (NOT_FOUND)
+      The .dme path is wrong. Check dm_last_error for the resolved path we
+      actually tried.
+
+  Everything returns 2 (INVALID_HANDLE)
+      You are passing a handle that was closed, or never initialised. Note we
+      clear out-params on failure, so an ignored error leaves you holding NULL.
+
+  Colours are right on ASCII lines and wrong after accented / CJK characters
+      Wrong encoding. See section 5.
+
+  Colours are right, but shifted by a line
+      Line numbers are ZERO-based here. Editors often display 1-based.
+
+  A whole file colours as one giant string
+      An unterminated {" ... "} somewhere above. That is correct behaviour -
+      it is also what the DM compiler sees. Check for a stray {" .
+
+  Whole file colours as a comment
+      Same thing with /* and no */. DM nests block comments, so an extra /*
+      inside a comment needs its own */.
+
+
+--------------------------------------------------------------------------------
+ 12. HOW TO CHECK OUR OUTPUT
+--------------------------------------------------------------------------------
+  If you think we are classifying something wrong, check with the CLI before
+  digging into your own code. It uses the exact same code path as the ABI.
+
+    dotnet run --project src/Dm.Cli -- classify <file.dm>
+        renders the file with colours in your terminal
+
+    dotnet run --project src/Dm.Cli -- classify <file.dm> --spans
+        the raw span table, with BOTH utf16 and utf8 offsets side by side.
+        very useful for confirming an encoding problem.
+
+    dotnet run --project src/Dm.Cli -- dump-tokens <file.dm>
+        the raw token stream, if you want to see why a span came out that way
+
+    dotnet run --project src/Dm.Cli -- scan <file-or-directory>
+        reports anything the lexer did not recognise across a whole codebase
+
+  RULE OF THUMB: if the CLI reproduces the problem, it is ours - report it.
+  If the CLI looks right and your editor does not, it is in your integration.
+
+
+--------------------------------------------------------------------------------
+ 13. WHAT'S COMING, AND ROUGHLY WHEN
+--------------------------------------------------------------------------------
+  Order is fixed; timing is not. See ROADMAP.txt for live status.
+
+    M3   preprocessor + #include graph      (no API for you, but everything
+                                             after it depends on it)
+    M4   parser -> document outline, real syntax errors
+    M5   object tree + BYOND builtins
+    M6   autocomplete, semantic highlighting (colour IDs 12-15 light up)
+    M7   go to definition, hover, workspace symbols, object tree queries
+    M8   .dmi icon states                   (independent, could come earlier)
+
+  If your ordering needs differ from this, say so. M8 in particular is a small
+  self-contained piece and can be pulled forward if you are building an icon
+  browser sooner.
+
+
+--------------------------------------------------------------------------------
+ 14. REPORTING A PROBLEM
+--------------------------------------------------------------------------------
+  Useful:
+    - the smallest .dm file that shows it
+    - what you expected vs what you got
+    - output of: dmc classify <file> --spans
+    - dm_abi_version() you are running against
+
+  Not needed:
+    - your editor's code, unless the CLI disagrees with it
+================================================================================

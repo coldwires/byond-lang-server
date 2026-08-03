@@ -29,6 +29,7 @@ namespace Dm.Core.Text;
 public sealed class SourceText
 {
     private readonly int[] _lineStarts;
+    private int[]? _utf8LineStarts;
 
     private SourceText(string content, string? path)
     {
@@ -166,6 +167,53 @@ public sealed class SourceText
     }
 
     public LinePosition GetLinePosition(int offset) => GetLinePosition(offset, PositionEncoding.Utf16);
+
+    /// <summary>
+    /// Converts a UTF-16 offset into the equivalent UTF-8 byte offset from the start of the file.
+    /// </summary>
+    /// <remarks>
+    /// Used when handing spans to a client that indexes its buffer in bytes. Unlike
+    /// <see cref="GetLinePosition"/> this does not clamp to a line end — a file offset inside a
+    /// terminator is meaningful.
+    ///
+    /// Per-line byte offsets are computed once on first use, so a conversion costs a scan of one
+    /// line rather than of the whole file.
+    /// </remarks>
+    public int GetUtf8Offset(int utf16Offset)
+    {
+        int clamped = Math.Clamp(utf16Offset, 0, Content.Length);
+        int line = GetLineIndex(clamped);
+        int lineStart = _lineStarts[line];
+
+        return Utf8LineStarts[line] + Encoding.UTF8.GetByteCount(Content.AsSpan(lineStart, clamped - lineStart));
+    }
+
+    /// <summary>Length of the text in UTF-8 bytes.</summary>
+    public int Utf8Length => GetUtf8Offset(Content.Length);
+
+    private int[] Utf8LineStarts
+    {
+        get
+        {
+            if (_utf8LineStarts is not null)
+                return _utf8LineStarts;
+
+            int[] starts = new int[_lineStarts.Length];
+            int total = 0;
+
+            for (int i = 0; i < _lineStarts.Length; i++)
+            {
+                starts[i] = total;
+
+                int start = _lineStarts[i];
+                int end = i + 1 < _lineStarts.Length ? _lineStarts[i + 1] : Content.Length;
+                total += Encoding.UTF8.GetByteCount(Content.AsSpan(start, end - start));
+            }
+
+            _utf8LineStarts = starts;
+            return starts;
+        }
+    }
 
     public int GetOffset(int line, int character, PositionEncoding encoding)
         => GetOffset(new LinePosition(line, character), encoding);

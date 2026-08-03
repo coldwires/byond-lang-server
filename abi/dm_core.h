@@ -76,6 +76,96 @@ void dm_workspace_close(dm_workspace workspace);
 /* Absolute path to the directory containing the .dme. Caller frees. */
 dm_status dm_workspace_root(dm_workspace workspace, char **out_root);
 
+/* -- documents ----------------------------------------------------------- */
+
+/*
+ * Records the text the client currently has open for a file.
+ *
+ * Once set, this text is the only source for that path until dm_close_buffer; disk is
+ * never consulted for it. That is what makes editor-side line-ending normalisation
+ * harmless -- the analyzer sees exactly what the editor displays.
+ *
+ * `content` is UTF-8 and is copied before the call returns. Pass its length in bytes;
+ * a negative length means it is null-terminated. Prefer passing the length: it avoids a
+ * scan, and DM source may legitimately contain a NUL inside a string literal.
+ *
+ * `file` may be absolute, or relative to the directory containing the .dme.
+ */
+dm_status dm_set_buffer(dm_workspace workspace, const char *file,
+                        const char *content, int32_t length);
+
+/* Drops a client buffer. Later reads for that path fall back to disk. */
+dm_status dm_close_buffer(dm_workspace workspace, const char *file);
+
+/* -- position encoding --------------------------------------------------- */
+
+/*
+ * How offsets and lengths are measured. Never assumed; always passed explicitly,
+ * because LSP and native clients disagree.
+ *
+ * Qt's QString and .NET's string are both UTF-16, so a client holding either wants
+ * DM_ENCODING_UTF16. A client holding raw bytes wants DM_ENCODING_UTF8. For pure ASCII
+ * the two are identical, which is exactly why a mismatch survives testing and then
+ * misplaces spans the first time someone types a non-ASCII character.
+ */
+typedef int32_t dm_position_encoding;
+
+#define DM_ENCODING_UTF8  0
+#define DM_ENCODING_UTF16 1
+
+/* -- classification ------------------------------------------------------ */
+
+/*
+ * Colouring categories. These are a stable numeric contract; values are never reused.
+ * Members from DM_CLASS_TYPE_NAME onward are reserved for semantic classification and
+ * are not produced yet -- they are declared now so client colour tables do not have to
+ * be renumbered when M6 lands.
+ */
+#define DM_CLASS_NONE                    0
+#define DM_CLASS_COMMENT                 1
+#define DM_CLASS_KEYWORD                 2
+#define DM_CLASS_IDENTIFIER              3
+#define DM_CLASS_NUMBER                  4
+#define DM_CLASS_STRING                  5
+#define DM_CLASS_INTERPOLATION_DELIMITER 6
+#define DM_CLASS_RESOURCE                7
+#define DM_CLASS_OPERATOR                8
+#define DM_CLASS_PUNCTUATION             9
+#define DM_CLASS_PREPROCESSOR            10
+#define DM_CLASS_ERROR                   11
+#define DM_CLASS_TYPE_NAME               12  /* reserved, M6 */
+#define DM_CLASS_PROC_NAME               13  /* reserved, M6 */
+#define DM_CLASS_VAR_NAME                14  /* reserved, M6 */
+#define DM_CLASS_MACRO_NAME              15  /* reserved, M6 */
+
+typedef void *dm_classification;
+
+/*
+ * Classifies an inclusive range of lines. Line numbers are zero-based and clamp.
+ *
+ * The whole file is lexed and cached; only the requested range is returned. Lexing just
+ * the visible range would be wrong, because a {" "} string or a nested block comment can
+ * begin thousands of lines earlier and decides whether the range is code or text.
+ */
+dm_status dm_classify_range(dm_workspace workspace, const char *file,
+                            int32_t start_line, int32_t end_line,
+                            dm_position_encoding encoding,
+                            dm_classification *out_classification);
+
+/* Number of spans. Returns -1 for an invalid handle. */
+int32_t dm_classification_count(dm_classification classification);
+
+/*
+ * Pointer to 3 * count consecutive int32 values: offset, length, kind. Valid until
+ * dm_classification_free. Returns NULL for an invalid handle.
+ *
+ * One contiguous block rather than per-span accessors, because this is called on every
+ * scroll and every keystroke.
+ */
+const int32_t *dm_classification_data(dm_classification classification);
+
+void dm_classification_free(dm_classification classification);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

@@ -311,19 +311,35 @@ Deferred to the parser, not the lexer:
 
 Still open: whether a brace block can contain indentation-structured sub-blocks (question 7).
 
-### M2 — Lexical classification → first visible feature
+### M2 — Lexical classification ✅ → first visible feature
 
-Syntax highlighting for both custom IDEs. Needs the lexer and nothing else.
+Syntax highlighting for both custom IDEs.
 
-- `ClassificationService.Classify(file, span)` returning `(offset, length, kind)` spans.
-  Kinds: keyword, identifier, type path, string, interpolation hole, number, comment, operator,
-  preprocessor directive, macro name.
-- ABI: `dm_classify_range`, using the handle/accessor pattern rather than JSON — this is called on
-  every visible-range change.
-- Re-classification of a changed range only, so a keystroke does not re-lex the file.
-- **Known limits, to be refined at M6 and M11:** lexical classification cannot distinguish a user
-  type from a builtin, cannot resolve identifiers introduced by macros, and cannot tell a proc name
-  from a var name. That is what most editors ship, and it looks correct.
+- ✅ `ClassificationService` with `Classify` and `ClassifyLines`. Touching runs of the same kind are
+  coalesced, so a three-token string is one span.
+- ✅ `ClassificationKind` with explicit numeric values, including members reserved for M6 so client
+  colour tables never need renumbering.
+- ✅ `Document` (immutable, caches the lex) and the `Workspace` document store. A pushed buffer is
+  authoritative; disk is never consulted for that path.
+- ✅ ABI: `dm_set_buffer`, `dm_close_buffer`, `dm_classify_range`, `dm_classification_count`,
+  `dm_classification_data`, `dm_classification_free`. ABI minor bumped to 2.
+- ✅ `SourceText.GetUtf8Offset`, with per-line byte offsets computed once.
+
+**Whole-file lex, then filter.** Classification never lexes only the visible range: a `{" ... "}`
+string or a nested `/* */` can begin thousands of lines earlier and decides whether the range is
+code or text. The lex is cached on the `Document`, so the cost is paid per edit, not per scroll.
+
+**Packed output.** Spans cross the ABI as one contiguous block of `int32` triples rather than
+through per-span accessors, because this runs on every scroll and keystroke.
+
+**Encoding is explicit.** Qt's `QString` and .NET's `string` are both UTF-16; a client holding raw
+bytes wants UTF-8. They agree for ASCII, so a mismatch survives testing and then misplaces every
+span the first time someone types a non-ASCII character. The smoke test asserts the two diverge by
+exactly the extra byte count.
+
+**Known limits, refined at M6 and M11:** cannot distinguish a user type from a builtin, resolve
+identifiers introduced by macros, or tell a proc name from a var name. That is what most editors
+ship, and it looks correct.
 
 ### M3 — Preprocessor and include graph
 
