@@ -41,9 +41,9 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
      through the ABI. He can wire it up today - it does not need anything else
      from us. The CMakeLists include/link lines are meant to be copied.
-  2. Finish M4: expression parser (precedence table is in PLAN.md 4c - it is
-     the spec, do not re-derive it), then statements with #pragma syntax mode
-     tracking, then a document symbols service for the ABI and LSP.
+  2. Finish M4: statements with #pragma syntax mode tracking, then a document
+     symbols service for the ABI and LSP. The expression parser is done and
+     the precedence table it implements is in PLAN.md 4c.
   3. Point the parser at the preprocessed token stream instead of raw per-file
      tokens. DeclarationParser takes a LexResult today.
   4. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
@@ -225,9 +225,11 @@ MILESTONES                                    (restructured 2026-08-02)
                                              conditionals, macro expansion,
                                              and the source map.
   [~] M4   Parser + syntax errors + document symbols
-             declarations DONE (dmc outline). still needed:
-             expressions (precedence table is in PLAN.md 4c),
-             statements, and #pragma syntax mode tracking.
+             declarations DONE (dmc outline).
+             expressions DONE - full precedence table, wired into var
+               initialisers.
+             still needed: statements, #pragma syntax mode tracking,
+             parameter defaults, and parsing the preprocessed stream.
   [ ] M5   Object tree + BYOND builtins
   [ ] M6   Binder + completion            <- "mob." and "t." work
   [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1

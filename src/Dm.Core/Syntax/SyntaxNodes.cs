@@ -105,6 +105,7 @@ public sealed class VarDeclarationSyntax : DeclarationSyntax
         IReadOnlyList<string> modifiers,
         PathSyntax? declaredType,
         bool hasInitializer,
+        ExpressionSyntax? initializer,
         IReadOnlyList<VarDeclarationSyntax> siblings,
         TextSpan span)
         : base(path, span)
@@ -112,6 +113,7 @@ public sealed class VarDeclarationSyntax : DeclarationSyntax
         Modifiers = modifiers;
         DeclaredType = declaredType;
         HasInitializer = hasInitializer;
+        Initializer = initializer;
         Siblings = siblings;
     }
 
@@ -123,7 +125,11 @@ public sealed class VarDeclarationSyntax : DeclarationSyntax
     /// </summary>
     public PathSyntax? DeclaredType { get; }
 
+    /// <summary>True when an <c>=</c> was written, even if the expression after it did not parse.</summary>
     public bool HasInitializer { get; }
+
+    /// <summary>The initialising expression, or null when there was none or it did not parse.</summary>
+    public ExpressionSyntax? Initializer { get; }
 
     /// <summary>Further names declared under the same <c>var/</c>.</summary>
     public IReadOnlyList<VarDeclarationSyntax> Siblings { get; }
