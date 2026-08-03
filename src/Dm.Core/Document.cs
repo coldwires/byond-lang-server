@@ -18,6 +18,7 @@ namespace Dm.Core;
 public sealed class Document
 {
     private LexResult? _lex;
+    private ParseResult? _parse;
 
     internal Document(string path, SourceText text, bool fromBuffer)
     {
@@ -39,4 +40,13 @@ public sealed class Document
 
     /// <summary>Token stream for the whole file. Computed once.</summary>
     public LexResult Lex => _lex ??= Lexer.Lex(Text);
+
+    /// <summary>
+    /// Syntax tree and syntax diagnostics for the file. Computed once.
+    /// </summary>
+    /// <remarks>
+    /// Held for the same reason as the lex: an outline pane asks again on every edit, and reparsing
+    /// a large file per request would show up as lag while typing.
+    /// </remarks>
+    public ParseResult Parse => _parse ??= DeclarationParser.Parse(Lex);
 }

@@ -13,10 +13,11 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 3: added dm_document_symbols.
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 2;
+    public const int Minor = 3;
 
     public static int Packed => (Major << 16) | Minor;
 }

@@ -43,12 +43,29 @@ public sealed class ExpressionParser
     /// <summary>Depth of ternary true-branches currently being parsed. See <see cref="IsTernaryColon"/>.</summary>
     private int _ternaryDepth;
 
-    private ExpressionParser(IReadOnlyList<Token> tokens, SourceText text, List<Diagnostic> diagnostics, int position)
+    /// <summary>
+    /// When set, a <c>:</c> ends the expression instead of starting a member access.
+    /// </summary>
+    /// <remarks>
+    /// Needed for the <c>case 1:</c> label of a <c>#pragma syntax C switch</c>, where the colon
+    /// belongs to the label. Without the pragma that same text is a member access, which is why
+    /// <c>case 1:</c> fails with "expected var or proc name after : operator" in the default
+    /// grammar — the compiler reads <c>case</c> as a name.
+    /// </remarks>
+    private bool _colonTerminates;
+
+    private ExpressionParser(
+        IReadOnlyList<Token> tokens,
+        SourceText text,
+        List<Diagnostic> diagnostics,
+        int position,
+        bool colonTerminates)
     {
         _tokens = tokens;
         _text = text;
         _diagnostics = diagnostics;
         _position = position;
+        _colonTerminates = colonTerminates;
     }
 
     /// <summary>Parses one expression starting at <paramref name="position"/>.</summary>
@@ -57,13 +74,14 @@ public sealed class ExpressionParser
         IReadOnlyList<Token> tokens,
         SourceText text,
         List<Diagnostic> diagnostics,
-        int position)
+        int position,
+        bool colonTerminates = false)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(diagnostics);
 
-        ExpressionParser parser = new(tokens, text, diagnostics, position);
+        ExpressionParser parser = new(tokens, text, diagnostics, position, colonTerminates);
         ExpressionSyntax expression = parser.ParseExpression();
         return (expression, parser._position);
     }
@@ -107,16 +125,21 @@ public sealed class ExpressionParser
         => _diagnostics.Add(Diagnostic.Error("DM0201", span, message));
 
     /// <summary>
-    /// True when the <c>:</c> at the cursor separates a conditional rather than starting a member
+    /// True when the <c>:</c> at the cursor closes a conditional rather than starting a member
     /// access.
     /// </summary>
     /// <remarks>
-    /// Whitespace before the colon decides, which is the only place in DM where spacing changes a
-    /// parse. Verified by compiling all four spacings of <c>1 ? b : c</c> against dm.exe 516.1666
-    /// with <c>b:c</c> a valid member access: <c>b : c</c> and <c>b :c</c> compile as conditionals,
-    /// while <c>b:c</c> and <c>b: c</c> take the colon as member access and then fail with
-    /// "expected ':'". So a colon with nothing but the operand before it belongs to the member
-    /// access, however the conditional was spaced.
+    /// Compiled against dm.exe 516.1666, with a valid member <c>c</c> in scope. Inside a
+    /// conditional the colon closes it in every case except one: written tight against a bare
+    /// identifier, member access wins and the conditional is then left without a separator.
+    /// <code>
+    /// 1 ? b : c      conditional      1 ? b:c        error, "expected ':'"
+    /// 1 ? b :c       conditional      1 ? b: c       error, "expected ':'"
+    /// 1 ? "0":"1"    conditional      1 ? f():g()    conditional
+    /// 1 ? L[1]:z     conditional      1 ? 1:2        conditional
+    /// </code>
+    /// So both halves matter: whitespace before the colon, and whether what precedes it is a name
+    /// that could take a member. This is the only place in DM where spacing changes a parse.
     /// </remarks>
     private bool IsTernaryColon()
     {
@@ -124,7 +147,13 @@ public sealed class ExpressionParser
             return false;
 
         int start = CurrentSpan.Start;
-        return start > 0 && char.IsWhiteSpace(_text[start - 1]);
+
+        if (start > 0 && char.IsWhiteSpace(_text[start - 1]))
+            return true;
+
+        // Tight against a bare identifier is the one shape where member access wins.
+        TokenKind previous = _position > 0 ? _tokens[_position - 1].Kind : TokenKind.EndOfFile;
+        return !IsNameLike(previous);
     }
 
     // -- precedence --------------------------------------------------------
@@ -335,6 +364,13 @@ public sealed class ExpressionParser
                     expression = ParseIndex(expression, start);
                     break;
 
+                // A trailing `.` before the end of an interpolation hole collapses, the same way a
+                // trailing path separator does. `world << "chasing [who.]"` compiles with 0 errors
+                // on dm.exe 516.1666, and is in shipped game code.
+                case TokenKind.Dot when Peek() == TokenKind.InterpolationEnd:
+                    _position++;
+                    break;
+
                 case TokenKind.Dot:
                 case TokenKind.QuestionDot:
                 case TokenKind.QuestionColon:
@@ -344,7 +380,7 @@ public sealed class ExpressionParser
 
                 // A tight `b:c` is member access even inside a conditional; only a colon with
                 // whitespace before it closes the conditional.
-                case TokenKind.Colon when !IsTernaryColon():
+                case TokenKind.Colon when !_colonTerminates && !IsTernaryColon():
                     expression = ParseMemberAccess(expression, start);
                     break;
 
@@ -626,6 +662,16 @@ public sealed class ExpressionParser
             case TokenKind.KeywordUsr:
             case TokenKind.KeywordWorld:
             case TokenKind.KeywordGlobal:
+
+            // The contextual keywords are ordinary names in operand position, and `step` is also a
+            // BYOND builtin proc, so `step(src, dir)` is a call rather than a loop clause. They only
+            // reach here when an operand was expected, since `a in b` and `1 to 10 step 2` consume
+            // them as operators before this point.
+            case TokenKind.KeywordStep:
+            case TokenKind.KeywordTo:
+            case TokenKind.KeywordIn:
+            case TokenKind.KeywordSet:
+            case TokenKind.KeywordAs:
             {
                 string name = TextOf(_position);
                 TextSpan span = CurrentSpan;
@@ -686,9 +732,14 @@ public sealed class ExpressionParser
             if (Current is not (TokenKind.Slash or TokenKind.Dot))
                 break;
 
-            // A trailing separator is legal and collapses: `/obj/item/` means `/obj/item`.
+            // Doubled and trailing separators collapse, so `/obj/item/` means `/obj/item` — see
+            // PLAN.md §4a. The trailing one must still be consumed: left behind, `istype(a, /mob/)`
+            // reads it as division and then fails looking for a right operand.
             if (!IsNameLike(Peek()))
+            {
+                _position++;
                 break;
+            }
 
             _position++;
         }
@@ -718,6 +769,15 @@ public sealed class ExpressionParser
                 hasHole = true;
                 int holeStart = _position;
                 _position++;
+
+                // An empty hole is legal and positional: `text("<b>[][]</b>", a, b)` takes its
+                // values from the arguments.
+                if (Current == TokenKind.InterpolationEnd)
+                {
+                    _position++;
+                    parts.Add(new InterpolatedStringPartSyntax(null, null, SpanFrom(holeStart)));
+                    continue;
+                }
 
                 // A hole is ordinary expression context, which is what `"[src.name] hit"` needs.
                 _groupDepth++;

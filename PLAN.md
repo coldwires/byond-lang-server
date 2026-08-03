@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M3 complete (CI outstanding) · M4 declarations done** · Last updated: 2026-08-03
+> Status: **M0–M4 complete except the ABI export for document symbols** · Last updated: 2026-08-03
 
 ---
 
@@ -367,7 +367,9 @@ reason — a per-file outline needs the AST, not the object tree.
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
 - ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.02 MB, 6 exports) via NativeAOT.
-- ✅ `tests/abi-smoke` — CMake C++ program, 14 checks. Reference integration for the Qt client.
+- ✅ `tests/abi-smoke` — CMake C++ program, 42 checks as of ABI 0.3. Reference integration for the
+  Qt client, and the only thing that proves the published binary links and runs from C++ rather
+  than merely that the managed side behaves.
 - ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 350 today. Handle validation, UTF-8
   marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
@@ -533,7 +535,7 @@ order — the same ordering that decides override resolution and the §4a path a
   all land on the wrong line in macro-heavy code, which is most real DM.
 - Snapshot the preprocessor's exit state (define-table hash) at each file boundary. M9 depends on it.
 
-### M4 — Parser, syntax diagnostics, document symbols *(declarations done)*
+### M4 — Parser, syntax diagnostics, document symbols ✅ *(ABI export outstanding)*
 
 - ✅ `DeclarationParser` — types, vars and proc signatures, with line-oriented recovery. Handles the
   DM-specific shapes: `var`/`proc` as ordinary path segments, bare `var`/`proc`/`var/const` block
@@ -545,9 +547,25 @@ order — the same ordering that decides override resolution and the §4a path a
   literals, `new` with and without a type, modified-type initialisers, `..()`, the bare `.`, the
   four `::` forms, associative arguments, interpolation holes, and `as` clauses. Wired into var
   initialisers; `VarDeclarationSyntax.Initializer` now carries the tree.
+- ✅ `StatementParser` covering every form in this milestone, wired into proc bodies:
+  `ProcDeclarationSyntax.Body` now carries them. Both `switch` grammars, all four `for` shapes,
+  `try`/`catch`, `spawn`, labels, `set`, brace blocks, inline bodies, and the local `var` forms
+  including the modifier-headed block and its nested groups.
+- ✅ `#pragma syntax` mode tracking via `SyntaxModes`, shared between the declaration and statement
+  parsers because the pragma sits at file level while the grammar it changes is used inside bodies.
+  The mode is read where a statement **starts**, so a later `#pragma pop` cannot retroactively
+  change how it parsed.
 - ⬜ Parameter defaults still come from the range scan in `ReadParameter`, not the expression parser.
-- ⬜ Statement parser, with `#pragma syntax` mode tracking.
 - ⬜ Parse the preprocessed stream rather than raw per-file tokens.
+- ✅ `DocumentSymbolService`, value-shaped and taking an explicit position encoding, with a
+  selection range covering the name alone so an outline can navigate and a rename knows what to
+  replace. `dmc symbols` drives it. No ABI export yet.
+- ✅ Two modelling fixes the outline exposed. A bare `var`/`proc` block header is marked
+  `IsGroupHeader` and contributes no symbol of its own — it says what kind its children are, and
+  left in it produced an entry called `var`. A bare assignment at type level (`world/maxx = 3`,
+  stddef.dm's `_dm_interface = ...`) is a var override rather than a type, which would otherwise
+  have put `maxx` in the object tree as a subtype of `/world`. Total declaration counts across the
+  corpus are unchanged; 1018 nodes in mlaas moved from type to var.
 
 `A::B()` is a proc **reference**, so the trailing parens are part of the member access rather than an
 invocation — `MemberAccessExpressionSyntax.IsProcReference` records it. A conditional's `:` is
@@ -721,6 +739,8 @@ dm_status   dm_workspace_root(dm_workspace*, char** out_root);
 dm_status   dm_set_buffer(dm_workspace*, const char* file, const char* utf8, int32_t len);
 dm_status   dm_classify_range(dm_workspace*, const char* file, int32_t start_line,
                               int32_t end_line, dm_span_list** out);          /* M2 */
+dm_status   dm_document_symbols(dm_workspace*, const char* file, int32_t encoding,
+                                char** out_json);                              /* M4 */
 dm_status   dm_complete_at(dm_workspace*, const char* file, int32_t line, int32_t col,
                            dm_completion_list** out);                          /* M6 */
 ```
@@ -761,6 +781,11 @@ Recorded 2026-08-02 on the primary dev machine.
   123 — while reporting a `link.exe` failure, even though `link.exe` was found. Prepend
   `C:\Program Files (x86)\Microsoft Visual Studio\Installer`.
 - CMake is not on PATH; VS bundles a copy under `Common7\IDE\CommonExtensions\Microsoft\CMake`.
+- **Windows Defender quarantines the freshly published `dm_core.dll`** as a false positive. The
+  publish reports success and then the file is gone from both `publish/` and `native/`, so the
+  CMake post-build copy fails with an MSB3073 wall that never mentions antivirus. Confirmed via
+  `Get-MpThreatDetection`, which named our own build output twice in consecutive publishes. A
+  repo-directory exclusion is the fix, and CI on Windows runners will need the same.
 - BYOND installed at `C:\Program Files (x86)\BYOND`. No `stddef.dm` ships in the install directory.
 - **`stddef.dm` is generated on demand.** Creating a file named `stddef.dm` in a project and
   compiling causes Dream Maker to emit the code it auto-compiles at the start of every project.
@@ -797,7 +822,10 @@ that the two candidate behaviours produce different compiler output.
 | **`defined` requires parentheses.** | `defined FIVE` fails with "expected (". |
 | **Names may contain `\` escapes.** | `\~Admin_Chat(T as text)` compiles, as do `D\~E` mid-name and `var/\~G`. `\a`, `\the` and `\1` prefixes are all accepted, so the rule is "backslash plus any one character", not a table of known macros. These control how a verb or var is presented to players. A bare `\~` in *expression* position is rejected — that distinction is the parser's to make. |
 | **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
-| **Whitespace before a `:` decides whether it closes a conditional.** | With `b:c` a valid member access, `1 ? b : c` and `1 ? b :c` compile as conditionals, while `1 ? b:c` and `1 ? b: c` fail with *"expected ':'"* — the tight colon is taken as member access, leaving the conditional without its separator. Only the space **before** the colon matters. This is the one place in DM where spacing changes a parse. |
+| **A conditional's `:` is member access only when tight against a bare identifier.** | With `b:c` a valid member access, `1 ? b : c` and `1 ? b :c` compile, while `1 ? b:c` and `1 ? b: c` fail with *"expected ':'"*. Changing what precedes the tight colon instead: `1 ? "0":"1"`, `1 ? f():g()`, `1 ? L[1]:z`, `1 ? 1:2` and `1 ? (y):z` all compile. So both halves matter — the space before it, and whether a member access is possible there at all. The one place in DM where spacing changes a parse. |
+| **`?[]` guards a null list, not the index.** | `L?[i]` is `isnull(L) ? null : L[i]`, so an out-of-range numeric index still raises *"list index out of bounds"* — it is **not** the `L?.len >= i ? L[i] : null` bounds check it is sometimes described as. Verified across in-range, out-of-range, zero, negative and null-list cases. `L[?i]`, with the `?` inside the bracket, does not compile at all. On an assoc list a missing key is already null, which is where the operator earns its keep. |
+| **`1#INF` and `1#IND` are number literals.** | Found in ter13's HudLib as `showing.tick_lag<1#INF`. A lexer that stops the number at `#` produces a number, a directive and a name, and the parse then fails. Undocumented in the reference. |
+| **A trailing `.` inside an interpolation hole is legal.** | `world << "chasing [who.]"` compiles with 0 errors, and is in shipped game code. It collapses like a trailing path separator. |
 | **`**` is left-associative, and unary minus binds tighter than it.** | `2 ** 3 ** 2` is 64, not 512. `-2 ** 2` is 4, not -4, which matches §4c putting unary at level 4 and `**` at level 5. |
 | **Preprocessor directives carry no indentation of their own.** | Inside a one-tab proc body, `#ifdef` at column 0, at one tab, and at three tabs all compile clean. A directive between a header and its body therefore emits no `Indent`, and the parser must look past it for the one the next code line emits. |
 | **A bare `;` at file scope is legal.** | A lone `;` at column 0 between two proc declarations compiles with 0 errors, with a `#warn` after it printing. |
@@ -927,5 +955,8 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   conditional evaluation, macro expansion with source maps, `Preprocessor.Run`. Resolved open
   questions 2 and 11.
 - **2026-08-03** — M4 declarations landed: `DeclarationParser` and `dmc outline`; proc bodies are
-  skipped. Added §4c with the reference's precedence table. Expressions, statements and
-  `#pragma syntax` mode tracking remain.
+  skipped. Added §4c with the reference's precedence table.
+- **2026-08-03** — M4 expressions landed: `ExpressionParser` over §4c, wired into var initialisers.
+- **2026-08-03** — M4 statements landed: `StatementParser` with both `switch` grammars, all four
+  `for` shapes, and `#pragma syntax` mode tracking through `SyntaxModes`. Proc bodies are parsed
+  rather than skipped. Nine parser gaps and one lexer gap came out of running it over the corpus.

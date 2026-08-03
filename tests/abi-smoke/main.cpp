@@ -256,6 +256,60 @@ static void test_encodings_differ_only_for_non_ascii(const fs::path &dme)
     dm_workspace_close(ws);
 }
 
+// ---------------------------------------------------------------------------
+// Document symbols. The outline crosses as JSON rather than as a packed block,
+// so what matters here is that the buffer is well formed, that the caller owns
+// it, and that the name-only selection range is present - that range is what an
+// outline pane navigates with.
+// ---------------------------------------------------------------------------
+static void test_document_symbols(const fs::path &dme)
+{
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "symbols: workspace opens");
+
+    const char *src =
+        "/obj/item\n"
+        "\tvar/hp = 1\n"
+        "\tproc/use()\n"
+        "\t\treturn\n";
+
+    check(dm_set_buffer(ws, "outline.dm", src, (int32_t)std::strlen(src)) == DM_OK,
+          "symbols: buffer pushed");
+
+    char *json = nullptr;
+    check(dm_document_symbols(ws, "outline.dm", DM_ENCODING_UTF16, &json) == DM_OK,
+          "symbols: call succeeds");
+    check(json != nullptr, "symbols: json returned");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"symbols\":") != std::string::npos, "symbols: has a symbols array");
+        check(doc.find("\"diagnostics\":") != std::string::npos, "symbols: has a diagnostics array");
+        check(doc.find("\"name\":\"item\"") != std::string::npos, "symbols: the type is present");
+        check(doc.find("\"name\":\"hp\"") != std::string::npos, "symbols: the var is present");
+        check(doc.find("\"name\":\"use\"") != std::string::npos, "symbols: the proc is present");
+        check(doc.find("\"kind\":2") != std::string::npos, "symbols: proc carries DM_SYMBOL_PROC");
+        check(doc.find("\"selStartChar\":") != std::string::npos, "symbols: selection range present");
+        check(doc.find("\"children\":[{") != std::string::npos, "symbols: members nest as children");
+
+        // We hand it back, the caller frees it. Anything else leaks across the boundary.
+        dm_free(json);
+    }
+
+    // A bad encoding is rejected before any work, and the out-param is cleared so an
+    // ignored error leaves the caller holding NULL rather than a stale pointer.
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_document_symbols(ws, "outline.dm", 99, &rejected) == DM_ERR_INVALID_ARG,
+          "symbols: unknown encoding rejected");
+    check(rejected == nullptr, "symbols: out-param cleared on failure");
+
+    check(dm_document_symbols(nullptr, "outline.dm", DM_ENCODING_UTF16, &rejected) == DM_ERR_INVALID_HANDLE,
+          "symbols: null workspace rejected");
+
+    dm_workspace_close(ws);
+}
+
 int main()
 {
     const fs::path dir = fs::temp_directory_path() / "dm_abi_smoke";
@@ -276,6 +330,7 @@ int main()
     test_free_null();
     test_classification(dme);
     test_encodings_differ_only_for_non_ascii(dme);
+    test_document_symbols(dme);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);

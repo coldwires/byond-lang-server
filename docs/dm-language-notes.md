@@ -314,8 +314,24 @@ Only the space *before* the colon matters. Without one, `b:c` is taken as member
 conditional is left with no separator, which is what the error is complaining about — it is not
 complaining about the branch.
 
+But whitespace is only half of it. Vary what sits *before* the colon instead, keeping it tight:
+
+| Written | Result |
+|---|---|
+| `1 ? b:c` — after a bare name | **compile error** |
+| `1 ? "0":"1"` — after a string | conditional |
+| `1 ? f():g()` — after `)` | conditional |
+| `1 ? L[1]:z` — after `]` | conditional |
+| `1 ? 1:2` — after a number | conditional |
+| `1 ? (y):z` — after a parenthesised group | conditional |
+
+So the rule has two halves: a tight colon is member access **only when it directly follows a bare
+identifier**, which is the one position where `a:b` is a member access to begin with. Everywhere
+else the colon closes the conditional however it is spaced.
+
 The practical consequence: `x = cond ? a:b` does not mean what it looks like, and the error message
-points at the wrong thing. Any tool that lexes `:` uniformly will disagree with the compiler here.
+points at the wrong thing, while the visually identical `x = cond ? "a":"b"` is fine. Any tool that
+lexes `:` uniformly will disagree with the compiler on one of those two.
 
 ## 16. A preprocessor directive carries no indentation of its own
 
@@ -343,6 +359,51 @@ and read the body as though it were top-level code.
 A bare `;` at file scope is legal too, for much the same reason — it is an empty declaration and
 carries no structure. Real code leaves them behind when the statement they terminated is commented
 out.
+
+## 17. `?[]` guards a null list, not an out-of-range index
+
+The spelling is `L?[i]`, with the `?` **outside** the bracket. `L[?i]` does not compile on
+516.1666 — it fails with *"i: missing comma ',' or right-paren ')'"*.
+
+It is easy to find it described as shorthand for a bounds check:
+
+```dm
+x = L?.len >= i ? L[i] : null    // NOT what it does
+```
+
+That is wrong, and the difference shows up exactly where it matters. `?[]` reuses the `?.` logic,
+so it is `isnull(L) ? null : L[i]` — a guard on the **list**, not on the index:
+
+| `L = list("a","b","c")` | `L?[i]` | `L?.len >= i ? L[i] : null` |
+|---|---|---|
+| `i = 1` | `a` | `a` |
+| `i = 3` | `c` | `c` |
+| `i = 4` — past the end | **runtime error**, list index out of bounds | `null` |
+| `i = 0` | runtime error | runtime error |
+| `L` is null | `null` | `null` |
+
+```
+L?[4] -> runtime: list index out of bounds   null-list?[1] -> null   long form -> null
+```
+
+So it removes the *"cannot read from list"* error you get from indexing a null list, and nothing
+else. An out-of-range numeric index still crashes, which is what makes the shorthand description
+dangerous — it reads as a bounds check and is not one.
+
+Where it does pay off is associative lists, because a missing key is already null there:
+
+| `A = list("a" = 1, "b" = 2)` | result |
+|---|---|
+| `A?["a"]` | `1` |
+| `A?["zzz"]` — missing key | `null` |
+| `A?["a"]` where `A` is null | `null` |
+| `A?[1]` — numeric index on an assoc list | `a`, the **key**, not the value |
+| `A?[9]` | runtime error |
+
+For an assoc lookup, then, `?[]` makes the read null-safe end to end: a missing key was already
+null, and the `?` covers the null list. For a numeric index into a plain list it buys much less
+than it appears to. BYOND's maintainer describes it the same way — it hijacks the `?.` operator's
+logic, and there is no bounds checking on the index.
 
 ---
 
@@ -415,7 +476,10 @@ removed.
 backslash escapes in names (§11); `//` inside a block comment hiding both `/*` and `*/`; a backslash
 continuing a `//` comment; the "inconsistent indentation" error, or any indentation specification at
 all; hexadecimal and scientific number literal syntax; the whitespace rule on a conditional's `:`
-(§15); that a directive line carries no indentation of its own (§16).
+(§15); that a directive line carries no indentation of its own (§16); what `?[]` actually
+guards (§17); the infinity and
+indeterminate literals `1#INF` and `1#IND`, which appear in shipped library code and which a lexer
+splitting on `#` will read as a number, a directive, and a name.
 
 The precedence table also cannot express §15, since that distinction is lexical rather than a matter
 of binding strength. Reading the table alone will not tell you that `cond ? a:b` fails to compile.
@@ -581,6 +645,20 @@ two"
 // A bare `;` at file scope is legal. This line is the proof.
 ;
 
+// ---- 17. `?[]` guards a null list, not an out-of-range index -----------
+/proc/t_null_index()
+	var/list/L = list("a","b","c")
+	var/list/N = null
+	var/oob = "?"
+	try
+		var/v = L?[4]
+		oob = isnull(v) ? "null" : "[v]"
+	catch(var/exception/e)
+		oob = "runtime: [e.name]"
+	var/guarded = N?[1]
+	var/longform = N?.len >= 4 ? N[4] : null
+	return "L?\[4\] -> [oob]   null-list?\[1\] -> [isnull(guarded) ? "null" : "value"]   long form -> [isnull(longform) ? "null" : "value"]"
+
 world/New()
 	var/datum/child/C = new
 	world.log << " 1 in-precedence   : [t_in_precedence()]"
@@ -600,6 +678,7 @@ world/New()
 	world.log << "14 exponent        : [t_exponent()]"
 	world.log << "15 conditional \:   : [t_conditional_colon()]"
 	world.log << "16 directive indent: [t_directive_indent()]"
+	world.log << "17 null index      : [t_null_index()]"
 	del src
 ```
 
@@ -623,6 +702,7 @@ world/New()
 14 exponent        : 2 ** 3 ** 2 = 64    -2 ** 2 = 4
 15 conditional :   : conditional (b), not member access
 16 directive indent: the guarded block parsed and ran
+17 null index      : L?[4] -> runtime: list index out of bounds   null-list?[1] -> null   long form -> null
 ```
 
 The file compiles with 0 errors and 0 warnings, and the run above is its actual output.

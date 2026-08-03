@@ -297,6 +297,20 @@ public class DeclarationParserTests
         Assert.Equal(LiteralKind.String, Assert.IsType<LiteralExpressionSyntax>(sibling.Initializer).Kind);
     }
 
+    /// <summary>
+    /// A bare assignment at type level overrides an inherited var. stddef.dm relies on it for
+    /// <c>_dm_interface = _DM_datum|_DM_sound</c>, and every <c>world/maxx = 3</c> is one.
+    /// </summary>
+    [Fact]
+    public void A_bare_assignment_declares_a_var_not_a_type()
+    {
+        VarDeclarationSyntax declaration =
+            Assert.IsType<VarDeclarationSyntax>(Assert.Single(Parse("maxx = 3\n").Root.Declarations));
+
+        Assert.Equal("maxx", declaration.Name);
+        Assert.True(declaration.HasInitializer);
+    }
+
     // -- robustness --------------------------------------------------------
 
     [Fact]

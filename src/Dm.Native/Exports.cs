@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Dm.Core;
 using Dm.Core.Services;
+using Dm.Core.Syntax;
 using Dm.Core.Text;
 
 namespace Dm.Native;
@@ -186,6 +187,57 @@ internal static unsafe class Exports
                 ClassificationService.ClassifyLines(document.Lex, startLine, endLine);
 
             *outClassification = HandleTable.Alloc(Pack(document.Text, spans, (PositionEncoding)encoding));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Returns the file's outline, and its syntax diagnostics, as a UTF-8 JSON document.
+    /// </summary>
+    /// <remarks>
+    /// Serialized rather than handle-based: symbols carry names and details, so a packed block would
+    /// need a string table on both sides of the boundary. An outline is rebuilt per edit rather than
+    /// per scroll, so the per-item cost matters far less than it does for classification.
+    ///
+    /// The caller owns the returned buffer and releases it with <c>dm_free</c>.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_document_symbols")]
+    public static int DocumentSymbols(
+        IntPtr workspace,
+        byte* filePath,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+            ParseResult parse = document.Parse;
+
+            IReadOnlyList<DocumentSymbol> symbols =
+                DocumentSymbolService.GetSymbols(parse, includeParameters: false, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(
+                SymbolJson.Write(symbols, parse.Diagnostics, document.Text, (PositionEncoding)encoding));
+
             return Ok();
         }
         catch (Exception ex)
