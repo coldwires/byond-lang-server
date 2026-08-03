@@ -278,7 +278,7 @@ public sealed class DeclarationParser
         // `maxx = 3` on `world`, or stddef.dm's `_dm_interface = _DM_datum|_DM_sound`. It declares a
         // value, not a type, so modelling it as a type node would put `maxx` in the object tree.
         if (Current == TokenKind.Assign)
-            return ParseVar(path, varIndex: -1, start);
+            return ParseVar(path, varIndex: -1, start, inVarContext: false);
 
         ConsumeLineEnd();
         List<DeclarationSyntax> children = ParseIndentedBlock(BlockContext.Any);
@@ -336,7 +336,7 @@ public sealed class DeclarationParser
     /// declares <c>X</c> with no type. Splitting these correctly is what makes <c>t.</c> completion
     /// possible at M6.
     /// </remarks>
-    private VarDeclarationSyntax ParseVar(PathSyntax path, int varIndex, int start)
+    private VarDeclarationSyntax ParseVar(PathSyntax path, int varIndex, int start, bool inVarContext = true)
     {
         List<string> modifiers = new();
         List<string> typeSegments = new();
@@ -403,7 +403,8 @@ public sealed class DeclarationParser
                 siblingInitializer,
                 siblingValue,
                 Array.Empty<VarDeclarationSyntax>(),
-                SpanFrom(siblingStart)));
+                SpanFrom(siblingStart),
+                inVarContext));
         }
 
         ConsumeLineEnd();
@@ -412,7 +413,7 @@ public sealed class DeclarationParser
         SkipIndentedBlock();
 
         return new VarDeclarationSyntax(
-            path, modifiers, declaredType, hasInitializer, initializer, siblings, SpanFrom(start));
+            path, modifiers, declaredType, hasInitializer, initializer, siblings, SpanFrom(start), inVarContext);
     }
 
     // -- paths -------------------------------------------------------------

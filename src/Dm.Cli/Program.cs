@@ -2,10 +2,12 @@
 using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Diagnostics;
+using Dm.Core;
 using Dm.Core.Includes;
 using Dm.Core.Preprocessing;
 using System.Linq;
 using Dm.Core.Services;
+using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -39,6 +41,8 @@ internal static class Program
                 "preprocess" => Preprocess(args),
                 "outline" => Outline(args),
                 "symbols" => Symbols(args),
+                "tree" => Tree(args),
+                "complete" => Complete(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -64,6 +68,12 @@ internal static class Program
         Console.Error.WriteLine("  symbols <file>           the document outline, as the ABI returns it");
         Console.Error.WriteLine("      --params             include proc parameters");
         Console.Error.WriteLine("      --utf8               columns in UTF-8 bytes instead of UTF-16 units");
+        Console.Error.WriteLine("  tree <file.dme>          build the object tree in compile order");
+        Console.Error.WriteLine("      --under <path>       list what is declared under a type path");
+        Console.Error.WriteLine("      --members <path>     show one type's vars and procs, inherited too");
+        Console.Error.WriteLine("      --no-builtins        project declarations only");
+        Console.Error.WriteLine("  complete <dme> <file> <line> <col>   what can be typed there");
+        Console.Error.WriteLine("      lines and columns are 1-based here, unlike the ABI");
         Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
         Console.Error.WriteLine("      --macros             show tokens that came from a macro");
         Console.Error.WriteLine("      --dump               print every token");
@@ -291,6 +301,177 @@ internal static class Program
             count += 1 + Total(symbol.Children);
 
         return count;
+    }
+
+    /// <summary>
+    /// Builds the object tree for a project and reports what is in it.
+    /// </summary>
+    /// <remarks>
+    /// Driven off the include graph rather than a directory glob, because DM resolves overrides by
+    /// compile order — the same files in a different order are a different program.
+    /// </remarks>
+    private static int Tree(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: tree needs a .dme file");
+            return 1;
+        }
+
+        IncludeGraph graph = IncludeGraph.Build(args[1]);
+        List<(string, ParseResult)> parsed = new();
+        int problems = 0;
+
+        foreach (IncludedFile file in graph.Files)
+        {
+            if (file.Kind != IncludeKind.DmSource)
+                continue;
+
+            ParseResult parse = DeclarationParser.Parse(LexFile(file.Path));
+            parsed.Add((file.Path, parse));
+
+            if (parse.Diagnostics.Count > 0)
+                problems++;
+        }
+
+        // Builtins first: a project reopens /mob to add its own members, and the two merge.
+        ObjectTree tree = new();
+
+        bool withBuiltins = !args.Contains("--no-builtins");
+        if (withBuiltins)
+            Builtins.Seed(tree);
+
+        foreach ((string path, ParseResult parse) in parsed)
+            TypeTreeBuilder.AddFile(tree, path, parse);
+
+        string? under = OptionValue(args, "--under");
+        if (under is not null)
+        {
+            TypeSymbol? root = tree.Find(under);
+
+            if (root is null)
+            {
+                Console.Error.WriteLine($"error: no type '{under}'");
+                return 1;
+            }
+
+            PrintSubtree(root, 0);
+        }
+
+        string? members = OptionValue(args, "--members");
+        if (members is not null)
+        {
+            TypeSymbol? type = tree.Find(members);
+
+            if (type is null)
+            {
+                Console.Error.WriteLine($"error: no type '{members}'");
+                return 1;
+            }
+
+            foreach (TypeSymbol step in tree.InheritanceChain(type))
+            {
+                Console.Out.WriteLine($"  from {step.Path}:");
+
+                foreach (VarSymbol variable in step.Vars.OrderBy(v => v.Name, StringComparer.Ordinal))
+                    Console.Out.WriteLine($"      var  {variable}");
+
+                foreach (ProcSymbol proc in step.Procs.OrderBy(p => p.Name, StringComparer.Ordinal))
+                    Console.Out.WriteLine($"      {(proc.IsVerb ? "verb" : "proc")} {proc}");
+            }
+        }
+
+        int declared = 0, vars = 0, procs = 0, overrides = 0;
+
+        foreach (TypeSymbol type in tree.Types)
+        {
+            if (type.IsDeclared)
+                declared++;
+
+            vars += type.Vars.Count;
+
+            foreach (ProcSymbol proc in type.Procs)
+            {
+                procs++;
+                overrides += proc.Sites.Count - proc.DeclaringCount;
+            }
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine(
+            withBuiltins ? $"builtins: BYOND {Builtins.Version}" : "builtins: not loaded");
+        Console.Out.WriteLine(
+            $"{parsed.Count} file(s): {tree.Count} type node(s), {declared} declared, " +
+            $"{vars} var(s), {procs} proc(s), {overrides} override(s), {problems} file(s) with problems");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Completes at a position, the way an editor would.
+    /// </summary>
+    /// <remarks>
+    /// Takes 1-based line and column because that is what an editor's status bar shows. The ABI and
+    /// the services underneath are 0-based.
+    /// </remarks>
+    private static int Complete(string[] args)
+    {
+        if (args.Length < 5)
+        {
+            Console.Error.WriteLine("error: complete needs <dme> <file> <line> <col>");
+            return 1;
+        }
+
+        if (!int.TryParse(args[3], out int line) || !int.TryParse(args[4], out int column))
+        {
+            Console.Error.WriteLine("error: line and column must be numbers");
+            return 1;
+        }
+
+        IncludeGraph graph = IncludeGraph.Build(args[1]);
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+
+        foreach (IncludedFile file in graph.Files)
+        {
+            if (file.Kind == IncludeKind.DmSource)
+                TypeTreeBuilder.AddFile(tree, file.Path, DeclarationParser.Parse(LexFile(file.Path)));
+        }
+
+        Document document = Document.FromText(args[2], SourceText.From(File.ReadAllText(args[2]), args[2]));
+        CompletionResult result = CompletionService.CompleteAt(tree, document, line - 1, column - 1);
+
+        Console.Out.WriteLine($"context: {result.Context}");
+
+        foreach (CompletionItem item in result.Items)
+        {
+            string mark = item.IsBuiltin ? "*" : " ";
+            string detail = string.IsNullOrEmpty(item.Detail) ? string.Empty : $"   {item.Detail}";
+            Console.Out.WriteLine($" {mark} {item.Kind.ToString().ToLowerInvariant(),-9} {item.Name}{detail}");
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{result.Items.Count} item(s)   (* = BYOND builtin)");
+        return 0;
+    }
+
+    private static void PrintSubtree(TypeSymbol type, int depth)
+    {
+        Console.Out.WriteLine($"{new string(' ', depth * 2)}{type.Path}{(type.IsDeclared ? string.Empty : "   (implied)")}");
+
+        foreach (TypeSymbol child in type.Children.OrderBy(c => c.Path.Text, StringComparer.Ordinal))
+            PrintSubtree(child, depth + 1);
+    }
+
+    private static string? OptionValue(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (string.Equals(args[i], name, StringComparison.Ordinal))
+                return args[i + 1];
+        }
+
+        return null;
     }
 
     private static int Outline(string[] args)

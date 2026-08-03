@@ -209,6 +209,62 @@ void dm_classification_free(dm_classification classification);
 dm_status dm_document_symbols(dm_workspace workspace, const char *file,
                               dm_position_encoding encoding, char **out_json);
 
+/* -- completion ---------------------------------------------------------- */
+
+/*
+ * What can be typed at a position, as a UTF-8 JSON document. Added in ABI 0.4.
+ *
+ * You own the buffer. Release it with dm_free.
+ *
+ * Line and character are ZERO-BASED and follow the encoding you pass, as everywhere
+ * else. Point them at the caret: the word being typed is not the trigger, whatever
+ * precedes it is, so "mob.he" completes against /mob just like "mob." does.
+ *
+ * Shape:
+ *
+ *   {
+ *     "context": "Member",
+ *     "items": [
+ *       { "name": "loc", "detail": "/atom", "kind": 1, "builtin": true }
+ *     ]
+ *   }
+ *
+ * context tells you why the list is what it is:
+ *   "Identifier"      a bare word: locals, parameters, src members, globals
+ *   "Member"          after `.` - the declared type and what it inherits
+ *   "SubtypeMember"   after `:` - the above PLUS members declared on subtypes
+ *   "TypePath"        after `/` - type paths
+ *   "None"            nothing useful here
+ *
+ * `.` and `:` differ on purpose and both are checked. `:` widens the check to the
+ * subtype tree rather than removing it, so neither list contains members of an
+ * unrelated type. Do not merge the two.
+ *
+ * An empty list after `.` means the receiver has no declared type - a call result or
+ * an index. That is the case where DM itself stops checking; offering everything
+ * there would be noise.
+ *
+ * kind is the dm_completion_kind values below. builtin is true for BYOND's own
+ * members rather than anything the project declared, so you can style them apart.
+ *
+ * COST: the first call after an edit rebuilds the project's object tree. Debounce
+ * this on a keystroke path rather than calling it per character.
+ */
+dm_status dm_complete_at(dm_workspace workspace, const char *file,
+                         int32_t line, int32_t character,
+                         dm_position_encoding encoding, char **out_json);
+
+typedef int32_t dm_completion_kind;
+
+#define DM_COMPLETION_TYPE      0
+#define DM_COMPLETION_VARIABLE  1
+#define DM_COMPLETION_PROC      2
+#define DM_COMPLETION_VERB      3
+#define DM_COMPLETION_PARAMETER 4
+#define DM_COMPLETION_LOCAL     5
+#define DM_COMPLETION_MACRO     6
+#define DM_COMPLETION_KEYWORD   7
+
 /*
  * Values are a permanent contract and are never reused. Handle an unknown kind by
  * falling back to a neutral icon, so a library update cannot break your outline.

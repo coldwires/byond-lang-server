@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M4 complete except the ABI export for document symbols** · Last updated: 2026-08-03
+> Status: **M0–M5 complete · M6 completion ships through ABI 0.4; inference remains** · Last updated: 2026-08-03
 
 ---
 
@@ -163,6 +163,21 @@ var.list.L = new
 
 The space form is legal as a statement but rejected inside a `for` header, so the parser cannot
 treat the two positions identically.
+
+**The leading segments mean different things depending on whether a `var` introduced them**, and
+the two readings put the variable on different types:
+
+```dm
+mob
+    var
+        atom/movable/locker    // var `locker` of type /atom/movable, ON /mob
+/obj/item/hp = 3               // var `hp`, ON /obj/item — a bare override
+```
+
+Compiler-verified: assigning `locker` inside a proc on `/mob` compiles, and declaring
+`/mob/atom/movable/unrelated` alongside it is not a duplicate — so the var block declared a
+variable, not a type. Reading the first form as a path invents `/mob/atom/movable`, which is
+exactly what the object tree did until it was fixed.
 
 ### Context 3 — an expression
 
@@ -630,7 +645,39 @@ declarations, so statement parsing slots in later without disturbing this.
 - **Syntax diagnostics** fall out of recovery; surface them through `DiagnosticService`.
 - **Document symbols** — a per-file outline needs the AST only, not the object tree. Ship here.
 
-### M5 — Object tree and builtins
+### M5 — Object tree and builtins ✅
+
+- ✅ `TypePath` — normalised, comparable, path-keyed so `/mob/client` never collides with the
+  builtin `/client`. Holds the normalised string rather than an intern-table handle; interning is a
+  performance change and belongs with M9 if profiling asks for it.
+- ✅ `TypeSymbol` / `VarSymbol` / `ProcSymbol`, merging declarations across files in include order.
+  Every declaration site is kept, proc override chains are ordered, and `DeclaringCount` records how
+  many sites used `proc/` so M11 can diagnose a duplicate definition.
+- ✅ `ObjectTree` with inheritance resolution: implicit by path, redirected by `parent_type`, and
+  cycle-guarded because `parent_type` is an ordinary assignment that a project can point in a loop.
+- ✅ `TypeTreeBuilder`, driven off the include graph so files arrive in compile order.
+- ✅ `dmc tree`, with `--under` and `--members`.
+- ✅ `tools/builtins-gen` and `Resources/builtins.txt`, embedded in `Dm.Core`. 732 entries for
+  BYOND 516.1666: 630 scraped from the reference, 88 parsed out of `stddef.dm`, 14 inheritance
+  links. `Builtins.Seed` puts them in a tree before the project's own files.
+- ✅ The acceptance target works. `mob.` resolves through `/mob` → `/atom/movable` → `/atom` →
+  `/datum`, so it offers `loc`, `Move()` and `MouseMove()` — none of which appear in any file.
+
+**Written as `builtins.txt`, not `builtins.json`.** `Dm.Core` is a NativeAOT target, so a
+reflection-based deserializer is out and JSON would mean source generators for a fixed, read-only
+schema. The line format needs a dozen lines to read and diffs cleanly when a BYOND release moves
+something.
+
+**The reference documents only four of the inheritance links** (`/mob`, `/obj`, `/turf`, `/area`).
+The rest were read off the compiler with `initial(T:parent_type)` and are listed in the generator
+with that provenance. Nothing in a path encodes them: `/mob` is a child of the root by path, and
+without the link `mob.` offers nothing from `/atom`.
+
+**The root is not part of the inheritance chain.** Global procs live there, and global scope is not
+a base type — `istype(x)` is a call but `mob.istype()` is not valid DM. A test caught the first
+version walking into the root, which would have put every global proc in the language into the
+completion list after `mob.`.
+
 
 - `TypePath` as an interned, comparable value type. The hottest key in the system.
 - One `TypeSymbol` per path node, merging declarations across files in include order. Each type
@@ -654,7 +701,30 @@ declarations, so statement parsing slots in later without disturbing this.
   Do not vendor `stddef.dm` into the repo — it is BYOND-generated output and this repo is public.
   `tools/builtins-gen` locates or regenerates it from the local install.
 
-### M6 — Binder, semantic model, completion
+### M6 — Binder, semantic model, completion *(completion works)*
+
+- ✅ `CompletionService.CompleteAt`, with the scope chain: locals, then the enclosing proc's
+  parameters, then the members of the type it is on including everything inherited, then globals.
+- ✅ The `.` / `:` distinction. `.` offers the declared type and its ancestors; `:` also offers
+  members declared on **subtypes**. Neither offers an unrelated type's members, because `:` widens
+  the check rather than removing it.
+- ✅ Receivers that carry a type without inference: `src`, a typed local, a typed parameter, and a
+  written path. An unresolvable receiver returns an empty list rather than everything.
+- ✅ Builtins marked in the list, so a client can style them differently.
+- ✅ `dmc complete <dme> <file> <line> <col>`. On mlaas, `other.` for a `/mob/pc` local returns 361
+  items mixing the project's procs with inherited builtins.
+- ⬜ Inference through `new /path`, `as` casts, and assignment from a typed source.
+- ⬜ Leading-`.` relative path resolution (§4a).
+- ⬜ Macros in the bare-identifier list.
+- ⬜ Semantic classification refinement — M2's reserved kinds 12–15.
+- ✅ `dm_complete_at`, ABI 0.4, verified from C++.
+- ✅ `Workspace.GetObjectTree` — the include graph, the builtins and the pushed buffers, wired
+  together at last. Invalidated whole on any buffer change, which is M9's problem to make cheap.
+
+**Globals are offered for a bare identifier but never after `.`.** They live on the root, and the
+root is deliberately outside the inheritance chain: `istype(x)` is a call, `mob.istype()` is not
+valid DM.
+
 
 - Scope chain: locals → proc parameters → `src` type members (walking the inheritance chain) → globals.
 - `var/mob/test/t` → split path into type `/mob/test` and name `t`. Modifier keywords sit inside the
@@ -741,8 +811,8 @@ dm_status   dm_classify_range(dm_workspace*, const char* file, int32_t start_lin
                               int32_t end_line, dm_span_list** out);          /* M2 */
 dm_status   dm_document_symbols(dm_workspace*, const char* file, int32_t encoding,
                                 char** out_json);                              /* M4 */
-dm_status   dm_complete_at(dm_workspace*, const char* file, int32_t line, int32_t col,
-                           dm_completion_list** out);                          /* M6 */
+dm_status   dm_complete_at(dm_workspace*, const char* file, int32_t line, int32_t character,
+                           int32_t encoding, char** out_json);                 /* M6 */
 ```
 
 **Bulk path — serialized:**
@@ -823,6 +893,8 @@ that the two candidate behaviours produce different compiler output.
 | **Names may contain `\` escapes.** | `\~Admin_Chat(T as text)` compiles, as do `D\~E` mid-name and `var/\~G`. `\a`, `\the` and `\1` prefixes are all accepted, so the rule is "backslash plus any one character", not a table of known macros. These control how a verb or var is presented to players. A bare `\~` in *expression* position is rejected — that distinction is the parser's to make. |
 | **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
 | **A conditional's `:` is member access only when tight against a bare identifier.** | With `b:c` a valid member access, `1 ? b : c` and `1 ? b :c` compile, while `1 ? b:c` and `1 ? b: c` fail with *"expected ':'"*. Changing what precedes the tight colon instead: `1 ? "0":"1"`, `1 ? f():g()`, `1 ? L[1]:z`, `1 ? 1:2` and `1 ? (y):z` all compile. So both halves matter — the space before it, and whether a member access is possible there at all. The one place in DM where spacing changes a parse. |
+| **`/client`, `/list` and `/savefile` have no parent type.** | Printing `initial(T:parent_type)` for each builtin gives `/datum` for `/sound`, `/icon`, `/image`, `/matrix`, `/regex`, `/database` and `/exception`, `/atom` for `/turf` and `/area`, `/atom/movable` for `/mob` and `/obj`, and `/image` for `/mutable_appearance` — but nothing at all for `/client`, `/list`, `/savefile` and `/datum` itself. Assuming everything descends from `/datum` is wrong. |
+| **A typed var in a `var` block does not create a type.** | `mob` / `var` / `atom/movable/locker` declares `locker` on `/mob` with type `/atom/movable`. Verified by assigning `locker` in a proc on `/mob`, and by declaring `/mob/atom/movable/unrelated` in the same file without a duplicate error. Without a `var`, the same shape is a bare override and the leading segments *are* the owning type. |
 | **`?[]` guards a null list, not the index.** | `L?[i]` is `isnull(L) ? null : L[i]`, so an out-of-range numeric index still raises *"list index out of bounds"* — it is **not** the `L?.len >= i ? L[i] : null` bounds check it is sometimes described as. Verified across in-range, out-of-range, zero, negative and null-list cases. `L[?i]`, with the `?` inside the bracket, does not compile at all. On an assoc list a missing key is already null, which is where the operator earns its keep. |
 | **`1#INF` and `1#IND` are number literals.** | Found in ter13's HudLib as `showing.tick_lag<1#INF`. A lexer that stops the number at `#` produces a number, a directive and a name, and the parse then fails. Undocumented in the reference. |
 | **A trailing `.` inside an interpolation hole is legal.** | `world << "chasing [who.]"` compiles with 0 errors, and is in shipped game code. It collapses like a trailing path separator. |

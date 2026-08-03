@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Text;
+using System.Threading;
+using Dm.Core.Includes;
+using Dm.Core.Symbols;
 
 namespace Dm.Core;
 
@@ -17,6 +20,7 @@ namespace Dm.Core;
 public sealed class Workspace : IDisposable
 {
     private readonly Dictionary<string, Document> _documents;
+    private ObjectTree? _tree;
     private bool _disposed;
 
     private Workspace(string dmePath, string rootDirectory)
@@ -78,11 +82,64 @@ public sealed class Workspace : IDisposable
         string key = NormalisePath(path);
         Document document = new(key, SourceText.From(content, key), fromBuffer: true);
         _documents[key] = document;
+
+        // The tree was built from the previous text, so it no longer describes the project.
+        _tree = null;
+
         return document;
     }
 
     /// <summary>Drops a client buffer. Later reads for that path fall back to disk.</summary>
-    public bool CloseBuffer(string path) => _documents.Remove(NormalisePath(path));
+    public bool CloseBuffer(string path)
+    {
+        _tree = null;
+        return _documents.Remove(NormalisePath(path));
+    }
+
+    // -- object tree -------------------------------------------------------
+
+    /// <summary>
+    /// The project's object tree, with the BYOND builtins beneath it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Built from the include graph so files arrive in compile order, which is what decides override
+    /// resolution — a directory walk would silently produce a different program. Pushed buffers win
+    /// over disk for the files that have them, so the tree describes what the client is looking at.
+    /// </para>
+    /// <para>
+    /// Rebuilt whole whenever a buffer changes. That is the wrong shape for a large project on every
+    /// keystroke and is what M9 exists to fix; the boundary snapshots from M3 are the intended lever.
+    /// A client that wants to control the cost can build its own tree from
+    /// <see cref="Symbols.TypeTreeBuilder"/>.
+    /// </para>
+    /// </remarks>
+    public ObjectTree GetObjectTree(CancellationToken cancellationToken = default)
+    {
+        if (_tree is not null)
+            return _tree;
+
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+
+        IncludeGraph graph = IncludeGraph.Build(DmePath);
+
+        foreach (IncludedFile file in graph.Files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (file.Kind != IncludeKind.DmSource)
+                continue;
+
+            if (!TryGetDocument(file.Path, out Document document))
+                continue;
+
+            TypeTreeBuilder.AddFile(tree, file.Path, document.Parse, cancellationToken);
+        }
+
+        _tree = tree;
+        return tree;
+    }
 
     /// <summary>
     /// Returns the document for a path, using a pushed buffer if there is one and reading from disk
