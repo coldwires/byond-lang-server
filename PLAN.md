@@ -300,6 +300,9 @@ Two traps for anyone with C instincts:
 - **`in` binds looser than everything, including `=`.** `has_thing = thing in src` parses as
   `(has_thing = thing) in src`, and `!A in L` parses as `(!A) in L`. The reference calls both out.
 - **Unary `*` and `&` are pointer operators** at level 4, while binary `*` and `&` are at 6 and 11.
+- **A conditional's `:` must have whitespace before it.** `1 ? b:c` reads `b:c` as member access and
+  then fails for want of a separator. Compiler-verified across all four spacings, see §8. The table
+  cannot express this, since it is a lexical distinction rather than a precedence one.
 
 `A #= B` is shorthand for `A = A # B` **except** for `~=` and `:=`. Note `~=` is an equivalence
 *test* at level 10, not a compound assignment — easy to mis-bucket from the `=` suffix.
@@ -537,9 +540,19 @@ order — the same ordering that decides override resolution and the §4a path a
   headers, comma- and semicolon-separated names, bracket declarations `var/L[]`, and reassembling
   overloaded operator names from the tokens the lexer emits.
 - ✅ `dmc outline`, per file or across a tree.
-- ⬜ Expression parser over §4c's precedence table.
+- ✅ `ExpressionParser` over §4c's precedence table. Precedence climbing, with `in` at the bottom,
+  the unary/binary split for `*` and `&`, right-associative assignment, and the DM primaries: path
+  literals, `new` with and without a type, modified-type initialisers, `..()`, the bare `.`, the
+  four `::` forms, associative arguments, interpolation holes, and `as` clauses. Wired into var
+  initialisers; `VarDeclarationSyntax.Initializer` now carries the tree.
+- ⬜ Parameter defaults still come from the range scan in `ReadParameter`, not the expression parser.
 - ⬜ Statement parser, with `#pragma syntax` mode tracking.
 - ⬜ Parse the preprocessed stream rather than raw per-file tokens.
+
+`A::B()` is a proc **reference**, so the trailing parens are part of the member access rather than an
+invocation — `MemberAccessExpressionSyntax.IsProcReference` records it. A conditional's `:` is
+recognised only when whitespace precedes it, matching the compiler; both that rule and `**`
+associativity were probed rather than assumed, and are recorded in §8.
 
 Proc **bodies are skipped**, not parsed. Everything an outline and the object tree need lives in
 declarations, so statement parsing slots in later without disturbing this.
@@ -784,6 +797,8 @@ that the two candidate behaviours produce different compiler output.
 | **`defined` requires parentheses.** | `defined FIVE` fails with "expected (". |
 | **Names may contain `\` escapes.** | `\~Admin_Chat(T as text)` compiles, as do `D\~E` mid-name and `var/\~G`. `\a`, `\the` and `\1` prefixes are all accepted, so the rule is "backslash plus any one character", not a table of known macros. These control how a verb or var is presented to players. A bare `\~` in *expression* position is rejected — that distinction is the parser's to make. |
 | **A `\` at the end of a `//` comment continues it onto the next line.** | A comment ending in `\` followed by a line of garbage compiles clean. Used in real code to wrap long explanations. |
+| **Whitespace before a `:` decides whether it closes a conditional.** | With `b:c` a valid member access, `1 ? b : c` and `1 ? b :c` compile as conditionals, while `1 ? b:c` and `1 ? b: c` fail with *"expected ':'"* — the tight colon is taken as member access, leaving the conditional without its separator. Only the space **before** the colon matters. This is the one place in DM where spacing changes a parse. |
+| **`**` is left-associative, and unary minus binds tighter than it.** | `2 ** 3 ** 2` is 64, not 512. `-2 ** 2` is 4, not -4, which matches §4c putting unary at level 4 and `**` at level 5. |
 | **Preprocessor directives carry no indentation of their own.** | Inside a one-tab proc body, `#ifdef` at column 0, at one tab, and at three tabs all compile clean. A directive between a header and its body therefore emits no `Indent`, and the parser must look past it for the one the next code line emits. |
 | **A bare `;` at file scope is legal.** | A lone `;` at column 0 between two proc declarations compiles with 0 errors, with a `#warn` after it printing. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |

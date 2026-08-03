@@ -330,6 +330,7 @@ public sealed class DeclarationParser
                 typeSpans);
 
         bool hasInitializer = false;
+        ExpressionSyntax? initializer = null;
         List<VarDeclarationSyntax> siblings = new();
 
         // The bracket declaration forms: `var/L[]` is a list, `var/M[10]` presizes it, and
@@ -339,7 +340,7 @@ public sealed class DeclarationParser
         if (Current == TokenKind.Assign)
         {
             hasInitializer = true;
-            SkipInitializer();
+            initializer = ParseInitializer();
         }
 
         // Several names can share one `var/`, separated by commas — `var/a = 1, b = 2` — or by
@@ -356,10 +357,11 @@ public sealed class DeclarationParser
             SkipDeclarationBrackets();
 
             bool siblingInitializer = false;
+            ExpressionSyntax? siblingValue = null;
             if (Current == TokenKind.Assign)
             {
                 siblingInitializer = true;
-                SkipInitializer();
+                siblingValue = ParseInitializer();
             }
 
             siblings.Add(new VarDeclarationSyntax(
@@ -367,6 +369,7 @@ public sealed class DeclarationParser
                 modifiers,
                 declaredType,
                 siblingInitializer,
+                siblingValue,
                 Array.Empty<VarDeclarationSyntax>(),
                 SpanFrom(siblingStart)));
         }
@@ -376,7 +379,8 @@ public sealed class DeclarationParser
         // A var may still open a block, as in a type with initialised members beneath it.
         SkipIndentedBlock();
 
-        return new VarDeclarationSyntax(path, modifiers, declaredType, hasInitializer, siblings, SpanFrom(start));
+        return new VarDeclarationSyntax(
+            path, modifiers, declaredType, hasInitializer, initializer, siblings, SpanFrom(start));
     }
 
     // -- paths -------------------------------------------------------------
@@ -570,7 +574,29 @@ public sealed class DeclarationParser
         }
     }
 
-    private void SkipInitializer()
+    /// <summary>Parses the expression after an <c>=</c>, then resynchronises to the element's end.</summary>
+    /// <remarks>
+    /// The expression parser stops at the first token it cannot continue from, which for a construct
+    /// it does not yet cover can be short of the real end. Discarding the remainder keeps the
+    /// enclosing declaration parseable, so one odd initialiser cannot cost the rest of a var list.
+    /// </remarks>
+    private ExpressionSyntax? ParseInitializer()
+    {
+        _position++;
+
+        (ExpressionSyntax expression, int next) =
+            ExpressionParser.Parse(_tokens, _lex.Text, _diagnostics, _position);
+
+        // Guarantee progress even when the expression consumed nothing.
+        _position = next > _position ? next : _position + 1;
+
+        SkipToElementEnd();
+
+        return expression is ErrorExpressionSyntax ? null : expression;
+    }
+
+    /// <summary>Discards what is left of a var-list element, stopping before its separator.</summary>
+    private void SkipToElementEnd()
     {
         int depth = 0;
 

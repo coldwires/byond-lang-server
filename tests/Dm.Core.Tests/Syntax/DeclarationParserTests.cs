@@ -275,6 +275,28 @@ public class DeclarationParserTests
         Assert.Equal("v", Assert.Single(type.Members).Name);
     }
 
+    /// <summary>A var initialiser is parsed as an expression rather than skipped.</summary>
+    [Fact]
+    public void A_var_initializer_is_parsed()
+    {
+        VarDeclarationSyntax declaration = Assert.IsType<VarDeclarationSyntax>(Single("/mob/var/hp = 1 + 2\n"));
+
+        Assert.True(declaration.HasInitializer);
+        Assert.Equal(TokenKind.Plus, Assert.IsType<BinaryExpressionSyntax>(declaration.Initializer).OperatorToken);
+    }
+
+    /// <summary>Each name in a comma-separated var list keeps its own initialiser.</summary>
+    [Fact]
+    public void Each_var_in_a_list_keeps_its_own_initializer()
+    {
+        VarDeclarationSyntax declaration = Assert.IsType<VarDeclarationSyntax>(Single("/mob/var/a = 1, b = \"two\"\n"));
+
+        Assert.Equal(LiteralKind.Number, Assert.IsType<LiteralExpressionSyntax>(declaration.Initializer).Kind);
+
+        VarDeclarationSyntax sibling = Assert.Single(declaration.Siblings);
+        Assert.Equal(LiteralKind.String, Assert.IsType<LiteralExpressionSyntax>(sibling.Initializer).Kind);
+    }
+
     // -- robustness --------------------------------------------------------
 
     [Fact]

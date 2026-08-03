@@ -265,6 +265,85 @@ for(i=0, j=100; i<3; i++, j+=10)
 // ends at i=3 j=130
 ```
 
+## 14. `**` binds left, and unary minus binds tighter than it
+
+```dm
+2 ** 3 ** 2    // 64
+-2 ** 2        // 4
+```
+
+```
+2 ** 3 ** 2 = 64    -2 ** 2 = 4
+```
+
+Left-associative, so it is `(2**3)**2` and not the `2**(3**2)` that most languages with an exponent
+operator give you. And the unary minus is applied first, so `-2 ** 2` is `(-2)**2` rather than
+`-(2**2)`. Both follow from the reference's precedence table — unary sits one level tighter than
+`**` — but both are the opposite of what C or Python instincts suggest.
+
+## 15. A conditional's `:` needs whitespace before it
+
+This is the only place in DM where **spacing changes a parse**.
+
+Declare `c` on a datum so that `b:c` is a valid member access, then write a conditional whose false
+branch is also named `c`:
+
+```dm
+/datum/holder
+	var/c = "MEMBER"
+
+var/datum/holder/b = new
+var/c = "LOCAL"
+var/r = 1 ? b : c
+```
+
+```
+conditional (b), not member access
+```
+
+Now vary only the whitespace around that colon:
+
+| Written | Result |
+|---|---|
+| `1 ? b : c` | conditional |
+| `1 ? b :c` | conditional |
+| `1 ? b:c` | **compile error** — "expected `:`" |
+| `1 ? b: c` | **compile error** — "expected `:`" |
+
+Only the space *before* the colon matters. Without one, `b:c` is taken as member access and the
+conditional is left with no separator, which is what the error is complaining about — it is not
+complaining about the branch.
+
+The practical consequence: `x = cond ? a:b` does not mean what it looks like, and the error message
+points at the wrong thing. Any tool that lexes `:` uniformly will disagree with the compiler here.
+
+## 16. A preprocessor directive carries no indentation of its own
+
+```dm
+/proc/guarded()
+	#ifdef POOFING
+	var
+		seen = "the guarded block parsed and ran"
+	#endif
+	return seen
+```
+
+```
+the guarded block parsed and ran
+```
+
+The directive sits between the proc header and its body without opening or closing anything. Inside
+a one-tab body, `#ifdef` written at column 0, at one tab, and at three tabs all compile identically —
+the line's indentation is simply not part of the block structure.
+
+This matters more than it looks for anything that tracks indentation. A directive line emits no
+indent, so a tool that expects the body to start on the very next line will miss the block entirely
+and read the body as though it were top-level code.
+
+A bare `;` at file scope is legal too, for much the same reason — it is an empty declaration and
+carries no structure. Real code leaves them behind when the statement they terminated is commented
+out.
+
 ---
 
 ## Compile-only: `.` versus `:` — neither is unchecked
@@ -335,7 +414,11 @@ removed.
 **Silent on several real behaviours.** None of the following appear anywhere in `info.html`:
 backslash escapes in names (§11); `//` inside a block comment hiding both `/*` and `*/`; a backslash
 continuing a `//` comment; the "inconsistent indentation" error, or any indentation specification at
-all; hexadecimal and scientific number literal syntax.
+all; hexadecimal and scientific number literal syntax; the whitespace rule on a conditional's `:`
+(§15); that a directive line carries no indentation of its own (§16).
+
+The precedence table also cannot express §15, since that distinction is lexical rather than a matter
+of binding strength. Reading the table alone will not tell you that `cond ? a:b` fails to compile.
 
 **Nesting it does get right:** "Multi-line comments may be nested" is documented and true.
 
@@ -473,6 +556,31 @@ two"
 		else
 			return "many"
 
+// ---- 14. `**` binds left, and unary minus binds tighter ----------------
+/proc/t_exponent()
+	return "2 ** 3 ** 2 = [2 ** 3 ** 2]    -2 ** 2 = [-2 ** 2]"
+
+// ---- 15. a conditional's `:` needs whitespace before it ----------------
+/datum/holder
+	var/c = "MEMBER"
+/proc/t_conditional_colon()
+	var/datum/holder/b = new
+	var/c = "LOCAL"
+	var/r = 1 ? b : c
+	return istype(r, /datum/holder) ? "conditional (b), not member access" : "member access (got [r], local c is [c])"
+
+// ---- 16. a directive carries no indentation of its own -----------------
+#define POOFING
+/proc/t_directive_indent()
+	#ifdef POOFING
+	var
+		seen = "the guarded block parsed and ran"
+	#endif
+	return seen
+
+// A bare `;` at file scope is legal. This line is the proof.
+;
+
 world/New()
 	var/datum/child/C = new
 	world.log << " 1 in-precedence   : [t_in_precedence()]"
@@ -489,6 +597,9 @@ world/New()
 	world.log << "12 C switch n=1    : [t_c_switch(1)]"
 	world.log << "12 C switch n=2    : [t_c_switch(2)]"
 	world.log << "13 DM switch n=3   : [t_dm_switch(3)]"
+	world.log << "14 exponent        : [t_exponent()]"
+	world.log << "15 conditional \:   : [t_conditional_colon()]"
+	world.log << "16 directive indent: [t_directive_indent()]"
 	del src
 ```
 
@@ -509,7 +620,12 @@ world/New()
 12 C switch n=1    : one two
 12 C switch n=2    : two
 13 DM switch n=3   : a few
+14 exponent        : 2 ** 3 ** 2 = 64    -2 ** 2 = 4
+15 conditional :   : conditional (b), not member access
+16 directive indent: the guarded block parsed and ran
 ```
+
+The file compiles with 0 errors and 0 warnings, and the run above is its actual output.
 
 One caveat if you edit the file: do not put a `\~` inside a DM string literal. In string context a
 backslash begins a text macro, and `\~escaped_name` fails with *"undefined text macro or escape
