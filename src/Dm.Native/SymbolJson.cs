@@ -45,9 +45,9 @@ internal static class SymbolJson
             LinePosition end = text.GetLinePosition(diagnostic.Span.End, encoding);
 
             json.Append("{\"id\":");
-            WriteString(json, diagnostic.Id);
+            AppendString(json, diagnostic.Id);
             json.Append(",\"message\":");
-            WriteString(json, diagnostic.Message);
+            AppendString(json, diagnostic.Message);
             json.Append(",\"startLine\":").Append(start.Line);
             json.Append(",\"startChar\":").Append(start.Character);
             json.Append(",\"endLine\":").Append(end.Line);
@@ -71,9 +71,9 @@ internal static class SymbolJson
             DocumentSymbol symbol = symbols[i];
 
             json.Append("{\"name\":");
-            WriteString(json, symbol.Name);
+            AppendString(json, symbol.Name);
             json.Append(",\"detail\":");
-            WriteString(json, symbol.Detail);
+            AppendString(json, symbol.Detail);
             json.Append(",\"kind\":").Append((int)symbol.Kind);
             json.Append(",\"startLine\":").Append(symbol.Start.Line);
             json.Append(",\"startChar\":").Append(symbol.Start.Character);
@@ -100,7 +100,7 @@ internal static class SymbolJson
     /// escapes (<c>\~Admin_Chat</c>), so the backslash case is reached by real code, not just by
     /// string literals.
     /// </remarks>
-    private static void WriteString(StringBuilder json, string? value)
+    internal static void AppendString(StringBuilder json, string? value)
     {
         json.Append('"');
 

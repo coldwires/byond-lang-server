@@ -246,6 +246,56 @@ internal static unsafe class Exports
         }
     }
 
+    /// <summary>
+    /// Returns what can be typed at a position, as a UTF-8 JSON document.
+    /// </summary>
+    /// <remarks>
+    /// Serialized for the same reason as document symbols: entries carry names and details. The
+    /// caller owns the buffer and releases it with <c>dm_free</c>.
+    ///
+    /// Building the answer needs the whole project, so the first call after an edit rebuilds the
+    /// object tree. That cost is what M9 addresses.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_complete_at")]
+    public static int CompleteAt(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            CompletionResult result = CompletionService.CompleteAt(
+                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(CompletionJson.Write(result));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "dm_classification_count")]
     public static int ClassificationCount(IntPtr classification)
         => HandleTable.TryGet(classification, out ClassificationBuffer buffer) ? buffer.Count : -1;

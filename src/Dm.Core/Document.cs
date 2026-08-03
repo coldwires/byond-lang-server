@@ -1,3 +1,4 @@
+using System;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -25,6 +26,22 @@ public sealed class Document
         Path = path;
         Text = text;
         IsFromBuffer = fromBuffer;
+    }
+
+    /// <summary>
+    /// Builds a standalone document, outside any workspace.
+    /// </summary>
+    /// <remarks>
+    /// For analysing one file on its own — a CLI run, a test, or a consumer that already holds the
+    /// text. A workspace is still what enforces the pushed-buffer rule across a project, so open one
+    /// when the answer depends on more than this file.
+    /// </remarks>
+    public static Document FromText(string path, SourceText text)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(text);
+
+        return new Document(path, text, fromBuffer: false);
     }
 
     /// <summary>Normalised absolute path.</summary>

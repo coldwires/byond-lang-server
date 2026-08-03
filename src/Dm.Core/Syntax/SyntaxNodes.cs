@@ -123,7 +123,8 @@ public sealed class VarDeclarationSyntax : DeclarationSyntax
         bool hasInitializer,
         ExpressionSyntax? initializer,
         IReadOnlyList<VarDeclarationSyntax> siblings,
-        TextSpan span)
+        TextSpan span,
+        bool inVarContext = true)
         : base(path, span)
     {
         Modifiers = modifiers;
@@ -131,7 +132,21 @@ public sealed class VarDeclarationSyntax : DeclarationSyntax
         HasInitializer = hasInitializer;
         Initializer = initializer;
         Siblings = siblings;
+        InVarContext = inVarContext;
     }
+
+    /// <summary>
+    /// True when a <c>var</c> introduced this, either as a path segment or as the block heading it.
+    /// </summary>
+    /// <remarks>
+    /// Decides what the leading path segments mean, and the two readings put the variable on
+    /// different types. In var context they are its <b>declared type</b>, so a
+    /// <c>var</c> block holding <c>atom/movable/locker</c> declares <c>locker</c> on the enclosing
+    /// type. Without it the declaration is a bare assignment overriding an inherited var, and the
+    /// leading segments are the <b>owning type</b> — <c>/obj/item/hp = 3</c> sets <c>hp</c> on
+    /// <c>/obj/item</c>.
+    /// </remarks>
+    public bool InVarContext { get; }
 
     /// <summary>Modifiers found inside the path: <c>const</c>, <c>tmp</c>, <c>global</c>, <c>static</c>, <c>final</c>.</summary>
     public IReadOnlyList<string> Modifiers { get; }

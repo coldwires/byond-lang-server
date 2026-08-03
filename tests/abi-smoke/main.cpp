@@ -310,6 +310,55 @@ static void test_document_symbols(const fs::path &dme)
     dm_workspace_close(ws);
 }
 
+// ---------------------------------------------------------------------------
+// Completion. The interesting part is that `.` and `:` are different lists: `:`
+// widens the check to the subtype tree rather than removing it, so neither one
+// reaches an unrelated type.
+// ---------------------------------------------------------------------------
+static void test_completion(const fs::path &dir)
+{
+    // A project of one file, so the tree has something to resolve against.
+    const fs::path dme = dir / "complete.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"complete.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "complete.dm");
+        out << "/mob/test\n\tvar/base_var = 1\n";
+        out << "/mob/test/special\n\tvar/subtype_var = 2\n";
+        out << "/datum/unrelated\n\tvar/elsewhere = 3\n";
+        out << "/proc/f()\n\tvar/mob/test/t = new\n\tt.\n";
+    }
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "complete: workspace opens");
+
+    char *json = nullptr;
+    // Line 8 (0-based) is `\tt.`; character 3 is just past the dot.
+    check(dm_complete_at(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "complete: call succeeds");
+    check(json != nullptr, "complete: json returned");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"context\":\"Member\"") != std::string::npos, "complete: member context");
+        check(doc.find("\"name\":\"base_var\"") != std::string::npos, "complete: declared member offered");
+        check(doc.find("subtype_var") == std::string::npos, "complete: `.` excludes subtype members");
+        check(doc.find("elsewhere") == std::string::npos, "complete: `.` excludes unrelated types");
+        check(doc.find("\"builtin\":") != std::string::npos, "complete: builtin flag present");
+        dm_free(json);
+    }
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_complete_at(ws, "complete.dm", 8, 3, 99, &rejected) == DM_ERR_INVALID_ARG,
+          "complete: unknown encoding rejected");
+    check(rejected == nullptr, "complete: out-param cleared on failure");
+
+    dm_workspace_close(ws);
+}
+
 int main()
 {
     const fs::path dir = fs::temp_directory_path() / "dm_abi_smoke";
@@ -331,6 +380,7 @@ int main()
     test_classification(dme);
     test_encodings_differ_only_for_non_ascii(dme);
     test_document_symbols(dme);
+    test_completion(dir);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);
