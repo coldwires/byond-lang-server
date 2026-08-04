@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.5  (15 exports)
+ ABI version at last update: 0.11  (19 exports)
  Last updated: 2026-08-03
 ================================================================================
 
@@ -43,24 +43,30 @@ WHAT YOU GET TODAY
       compiler makes. A receiver resolves when its type is written down -
       src, a typed local, a typed parameter, a literal path - and otherwise
       by inference from new / as / assignment. See the note in section 4.
+    - Go to definition via dm_definition_at. Type paths, members through
+      their receiver, and bare names. Returns EVERY declaration - see
+      section 4, this is the part most likely to surprise you.
+    - Workspace symbol search via dm_workspace_symbols. Ranked and capped,
+      so a two-character query stays usable.
+    - Hover via dm_hover_at. The resolved path, the declaration as written,
+      and any doc comment above it - both /// runs and /** */ blocks.
+    - Semantic highlighting. Colour IDs 12-15 distinguish a type name, a
+      proc name, a var name and a macro name. See COLOURS below.
     - Document outline / symbols, with syntax diagnostics, via
       dm_document_symbols. Types, vars, procs and verbs, nested, each with a
       range for the whole declaration and a second range for the name alone.
+    - Object tree browsing via dm_query_json. A node and its children to a
+      depth, every subtype of a path, or one type's members with inheritance
+      resolved. This is what a tree panel runs on. Request and response
+      shapes are frozen in abi/schema/.
 
   NOT YET - do not design around these being absent, they are coming
-    - Go to definition                (M7)
-    - Hover                           (M7)
-    - Object tree browsing            (M7)
     - .dmi icon states                (M8)
     - Semantic error squiggles        (M11)
 
   Syntax errors already arrive with the outline, in the same
   dm_document_symbols call. What is missing is the semantic layer - unknown
   types, bad member access, duplicate definitions. That is M11.
-
-  Semantic highlighting (telling a type from a proc from a var) is the rest of
-  M6. The colour IDs for it are already reserved - see COLOURS below. Map them
-  now and they start working with no changes on your side.
 
 
 --------------------------------------------------------------------------------
@@ -91,11 +97,12 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.5. It
-  covers version negotiation, string ownership, handle lifetime including
-  use-after-close, classification in both encodings, document symbols,
-  completion and injected defines. The include and link lines in its CMakeLists.txt are meant to be
-  copied verbatim. If you are stuck on build setup, build that first and
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.11 and
+  passing 110 checks. It covers version negotiation, string ownership, handle
+  lifetime including use-after-close, classification in both encodings,
+  document symbols, completion, injected defines, go-to-definition, hover and
+  workspace symbols. The include and link lines in its CMakeLists.txt are meant
+  to be copied verbatim. If you are stuck on build setup, build that first and
   confirm it runs - it is 30 seconds and it separates "my build is wrong" from
   "my code is wrong".
 
@@ -253,6 +260,19 @@ WHAT YOU GET TODAY
       Diagnostics in the same document are the syntax errors for that file -
       enough for squiggles. Semantic errors arrive at M11.
 
+      ** ONE WARNING ALREADY ARRIVES HERE: DM0300 **
+      A proc block indented one level too far, into a var block, declares
+      nothing at all - dm.exe compiles it with 0 errors and silently drops
+      every proc under it, so calling one is a runtime error on a code path
+      with a clean build. We match the compiler and declare nothing, which
+      means those procs are NOT in the outline, and we warn on the header,
+      which the compiler never does.
+
+      Severity is warning, not error: the file does compile. DM03xx is that
+      class - code that compiles and does not mean what it looks like -
+      and more of them arrive at M11. Render them differently from the
+      syntax errors if you can; this one is usually a real bug in the game.
+
   dm_complete_at(ws, file, line, character, encoding, &json)
       What can be typed at a position, as UTF-8 JSON. YOU FREE IT with
       dm_free. Line and character are ZERO-BASED.
@@ -305,11 +325,89 @@ WHAT YOU GET TODAY
       Everything else in the list agrees with the compiler. This is the one
       exception, and it is confined to completion.
 
+      "documentation" carries the /// comment above the declaration, so a
+      popup can show what a proc is for without a second call. Empty for
+      builtins - nothing declares them - and empty when there is no comment.
+      Both DM forms are read: a run of /// lines, and a /** ... */ block.
+      A plain // or /* is NOT documentation - treating one as such would
+      attach commented-out code to the declaration below it.
+
+      Tags like @param pass through as text. DM has no doc-comment standard
+      and real code spells them several ways, so render them yourself if you
+      want them highlighted.
+
       "builtin": true marks BYOND's own members rather than the project's.
       Style them apart if you like; the flag is there for that.
 
       ** COST ** The first call after an edit rebuilds the object tree for
       the whole project. Debounce it. Do not call it per keystroke.
+
+  dm_workspace_symbols(ws, query, limit, encoding, &json)       NEW in 0.8
+      Every symbol in the project whose name matches, as UTF-8 JSON. YOU
+      FREE IT with dm_free.
+
+      RANKED AND CAPPED, not exhaustive. A two-character query on a real
+      project matches tens of thousands of symbols; unranked that is a wall,
+      not a picker. Order is exact name, then prefix, then substring, with
+      shorter names first inside each band. Matching is case-insensitive.
+
+      Pass 0 for limit to take the default of 200. Ask for what you will
+      actually display.
+
+      Builtins are never returned - nothing declares them, so a hit could
+      not be opened.
+
+      "detail" is the owning path, which is what tells two `New`s apart in a
+      list. Each hit carries the same two ranges as dm_document_symbols plus
+      its file; navigate with the sel* range.
+
+  dm_hover_at(ws, file, line, character, encoding, &json)        NEW in 0.7
+      What to show in a tooltip, as UTF-8 JSON. YOU FREE IT with dm_free.
+
+      Returns {} - an EMPTY OBJECT - with DM_OK when nothing resolves. A
+      pointer resting on a local, a keyword or whitespace is the ordinary
+      case, not a failure, so test for the "detail" key rather than the
+      status code.
+
+      Keys: detail (the resolved path), signature (the declaration as
+      written), documentation (the doc comment above it, markers stripped,
+      joined with newlines), and the range of the token you hovered so you
+      can highlight it.
+
+      Both DM doc forms are read: a run of /// lines and a /** ... */ block.
+      A blank line or a plain // comment ends the doc run, which matches
+      what a reader takes to be attached to the declaration. A plain // or
+      /* is not documentation - treating one as such would attach
+      commented-out code to whatever follows it.
+
+      Where a symbol has several declarations this renders the NEAREST.
+      Hover is a glance; dm_definition_at is what returns the whole chain.
+
+  dm_definition_at(ws, file, line, character, encoding, &json)   NEW in 0.6
+      Where the symbol at a position is declared, as UTF-8 JSON. YOU FREE IT
+      with dm_free. Line and character are ZERO-BASED.
+
+      ** IT RETURNS A LIST, AND SEVERAL RESULTS IS NORMAL **
+      DM declares one symbol in several places routinely: a type is reopened
+      across files, and a proc has an override chain. We report all of them
+      instead of picking one, because the pick would be arbitrary and the
+      rest are exactly what a reader wants in an override-heavy codebase.
+
+      Order is NEAREST FIRST - the nearest override is what a call actually
+      reaches - so if your editor insists on a single destination, take the
+      first and offer the rest rather than dropping them.
+
+      An empty array means nothing resolved. That is normal and not an
+      error: locals, parameters and macros are not in the object tree.
+
+      Each entry has the same two ranges as dm_document_symbols. Navigate
+      with the sel* range so the caret lands on the name.
+
+      "file" is an absolute path, and it is often NOT the file you asked
+      about - that is the point.
+
+      ** COST ** Same as dm_complete_at: the first call after an edit
+      rebuilds the object tree. Debounce it.
 
   dm_classification_count(spans)     -> N, or -1 if the handle is invalid
   dm_classification_data(spans)      -> pointer to 3*N int32s, or NULL
@@ -317,6 +415,50 @@ WHAT YOU GET TODAY
 
       The data block is (offset, length, kind) repeated N times, contiguous.
       memcpy it if you want, it is plain int32s. Valid until you call free.
+
+  dm_query_json(ws, request, &json)                            NEW in 0.11
+      A bulk question about the object tree, as UTF-8 JSON in and out. YOU
+      FREE IT with dm_free. The full shapes are in abi/dm_core.h and frozen
+      in abi/schema/; this is what they are for.
+
+      THIS IS WHAT YOUR TREE PANEL RUNS ON. The position-shaped calls answer
+      about a caret; these answer about a PATH, and return a lot at once.
+
+        {"query":"objectTree","path":"/obj","depth":1}
+            one node and its children. depth 1 is a node the user just
+            expanded, depth 0 is a single-row refresh
+        {"query":"subtypesOf","path":"/obj","limit":500}
+            everything beneath a path, flat, in tree order
+        {"query":"members","path":"/mob","inherited":true}
+            a type's vars and procs, with inheritance already resolved -
+            each one says which type it came from
+
+      Two fields exist so you do not have to make a second call or a wrong
+      guess:
+
+        "childCount" is how many children EXIST, which is not the length of
+        "children" when depth cut the response short. Draw your expander
+        arrow from this. Without it, every collapsed row costs a round trip.
+
+        "truncated" says the limit cut the list. A list exactly as long as
+        the limit looks identical to one that was cut, so do not infer it
+        from the count - if you do, your picker will claim a type has 500
+        subtypes when it has 4,000.
+
+      "parentType" is where a type INHERITS from, which is not always its
+      path parent: /mob is a child of the root by path and inherits from
+      /atom/movable. Draw the tree by path and show parentType separately,
+      or your panel will describe a different program from the one that runs.
+
+      Unknown members in a request are ignored, so a client written against
+      a later schema still gets an answer from an older library. An unknown
+      query name or a malformed request is DM_ERR_INVALID_ARG; a path that
+      is not in the tree is DM_ERR_NOT_FOUND. An empty array with DM_OK is
+      an answer - a type with no subtypes.
+
+      ** COST ** Same as dm_complete_at: the first call after an edit
+      rebuilds the object tree. Debounce it, and prefer one deep query to
+      many shallow ones while typing.
 
   dm_workspace_close(ws)
       Done. Safe to call on an already-closed handle.
@@ -566,6 +708,22 @@ WHAT YOU GET TODAY
         design your outline pane against it today
         --utf8   columns in UTF-8 bytes, to check your encoding choice
 
+    dotnet run --project src/Dm.Cli -- query <dme> --path /obj --depth 2
+        the same answers dm_query_json gives, rendered as a tree
+        --subtypes <path> / --members <path> for the other two queries
+
+    dotnet run --project src/Dm.Cli -- complete <dme> <file> <line> <col>
+    dotnet run --project src/Dm.Cli -- definition <dme> <file> <line> <col>
+    dotnet run --project src/Dm.Cli -- hover <dme> <file> <line> <col>
+    dotnet run --project src/Dm.Cli -- wsymbols <dme> <query>
+        the same answers dm_complete_at, dm_definition_at, dm_hover_at and
+        dm_workspace_symbols give you.
+        ** LINES AND COLUMNS ARE 1-BASED IN THE CLI AND 0-BASED IN THE ABI **
+        so add one when reproducing what your editor asked for.
+
+    Every command that reads a .dme takes -DNAME as well, so you can
+    reproduce a query with the same defines you pass to dm_set_defines.
+
   RULE OF THUMB: if the CLI reproduces the problem, it is ours - report it.
   If the CLI looks right and your editor does not, it is in your integration.
 
@@ -580,10 +738,14 @@ WHAT YOU GET TODAY
     M4   parser -> document outline, real syntax errors      DONE
     M5   object tree + BYOND builtins                        DONE
     M6   autocomplete                                        DONE
-         type inference through new/as/assignment, macros in the list, and
-         semantic highlighting (colour IDs 12-15) are the remainder
-    M7   go to definition, hover, workspace symbols, object tree queries
+         including type inference through new/as/assignment, macros in the
+         bare-identifier list, and semantic highlighting (colour IDs 12-15)
+    M7   go to definition, hover, workspace symbols,
+         object tree bulk queries                            DONE
+         that is team v1: everything an IDE needs for its panels
     M8   .dmi icon states                   (independent, could come earlier)
+    M9   incremental reparse + performance
+    M10  LSP server, for editors that speak it
     M11  semantic diagnostics, find-references, rename
 
   If your ordering needs differ from this, say so. M8 in particular is a small

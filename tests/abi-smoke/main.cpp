@@ -297,6 +297,36 @@ static void test_document_symbols(const fs::path &dme)
         dm_free(json);
     }
 
+    // A proc block indented into a var block declares nothing - dm.exe compiles it
+    // with 0 errors and drops it - so the outline must not list `vanished`, and the
+    // warning must be distinguishable from a syntax error. Both halves matter: the
+    // first keeps us honest with the compiler, the second is what stops a client
+    // painting "this compiles but does nothing" in the same red as a parse failure.
+    const char *swallowed =
+        "/datum/swallowed\n"
+        "\tvar\n"
+        "\t\tkept = 1\n"
+        "\t\tproc\n"
+        "\t\t\tvanished()\n";
+
+    check(dm_set_buffer(ws, "swallowed.dm", swallowed, (int32_t)std::strlen(swallowed)) == DM_OK,
+          "symbols: discarded-proc buffer pushed");
+
+    char *discarded = nullptr;
+    check(dm_document_symbols(ws, "swallowed.dm", DM_ENCODING_UTF16, &discarded) == DM_OK,
+          "symbols: discarded-proc call succeeds");
+
+    if (discarded)
+    {
+        const std::string doc(discarded);
+        check(doc.find("\"name\":\"kept\"") != std::string::npos, "symbols: the sibling var survives");
+        check(doc.find("\"name\":\"vanished\"") == std::string::npos, "symbols: the discarded proc is absent");
+        check(doc.find("\"id\":\"DM0300\"") != std::string::npos, "symbols: DM0300 reported");
+        check(doc.find("\"severity\":\"warning\"") != std::string::npos, "symbols: severity is warning, not error");
+
+        dm_free(discarded);
+    }
+
     // A bad encoding is rejected before any work, and the out-param is cleared so an
     // ignored error leaves the caller holding NULL rather than a stale pointer.
     char *rejected = reinterpret_cast<char *>(0x1);
@@ -408,6 +438,266 @@ static void test_defines(const fs::path &dir)
     dm_workspace_close(ws);
 }
 
+// ---------------------------------------------------------------------------
+// Go to definition. The point of interest is that several results is normal
+// rather than an error: a proc override chain is genuinely two declarations,
+// and a client that shows only the first should do so knowingly.
+// ---------------------------------------------------------------------------
+static void test_definition(const fs::path &dir)
+{
+    const fs::path dme = dir / "define.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"define.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "define.dm");
+        out << "/mob/base\n\tvar/health = 1\n\tproc/attack()\n\t\treturn\n";
+        out << "/mob/base/child\n\tattack()\n\t\treturn\n";
+        out << "/proc/f()\n\tvar/mob/base/child/c = new\n\tc.health = 2\n\tc.attack()\n";
+    }
+
+    std::printf("definition\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "definition: workspace opens");
+
+    // Line 9 (0-based) is `\tc.health = 2`; character 4 is inside `health`.
+    char *json = nullptr;
+    check(dm_definition_at(ws, "define.dm", 9, 4, DM_ENCODING_UTF16, &json) == DM_OK,
+          "definition: call succeeds");
+    check(json != nullptr, "definition: json returned");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"definitions\":") != std::string::npos, "definition: has a definitions array");
+        check(doc.find("/mob/base/health") != std::string::npos, "definition: resolved to the base");
+        check(doc.find("\"selStartLine\":") != std::string::npos, "definition: selection range present");
+        dm_free(json);
+    }
+
+    // Line 10 is `\tc.attack()`; the override and the base declaration are both real.
+    json = nullptr;
+    check(dm_definition_at(ws, "define.dm", 10, 4, DM_ENCODING_UTF16, &json) == DM_OK,
+          "definition: override chain call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        size_t first = doc.find("\"file\":");
+        size_t second = first == std::string::npos
+            ? std::string::npos
+            : doc.find("\"file\":", first + 1);
+
+        check(second != std::string::npos, "definition: an override chain reports both");
+        dm_free(json);
+    }
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_definition_at(ws, "define.dm", 9, 4, 99, &rejected) == DM_ERR_INVALID_ARG,
+          "definition: unknown encoding rejected");
+    check(rejected == nullptr, "definition: out-param cleared on failure");
+
+    dm_workspace_close(ws);
+}
+
+// ---------------------------------------------------------------------------
+// Hover. Nothing-to-show is an empty object with DM_OK, not an error, because a
+// pointer resting on whitespace is the ordinary case.
+// ---------------------------------------------------------------------------
+static void test_hover(const fs::path &dir)
+{
+    const fs::path dme = dir / "hover.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"hover.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "hover.dm");
+        out << "/mob/guy\n\t/// How much damage it can take.\n\tvar/health = 1\n";
+        out << "/proc/f()\n\tvar/mob/guy/g = new\n\tg.health = 2\n";
+    }
+
+    std::printf("hover\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "hover: workspace opens");
+
+    // Line 5 (0-based) is `\tg.health = 2`; character 4 is inside `health`.
+    char *json = nullptr;
+    check(dm_hover_at(ws, "hover.dm", 5, 4, DM_ENCODING_UTF16, &json) == DM_OK,
+          "hover: call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("/mob/guy/health") != std::string::npos, "hover: resolved the member");
+        check(doc.find("var/health = 1") != std::string::npos, "hover: rendered the declaration");
+        check(doc.find("How much damage") != std::string::npos, "hover: carried the doc comment");
+        dm_free(json);
+    }
+
+    // Whitespace resolves to nothing, and that is DM_OK with an empty object.
+    json = nullptr;
+    check(dm_hover_at(ws, "hover.dm", 3, 0, DM_ENCODING_UTF16, &json) == DM_OK,
+          "hover: an unresolved position still succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("detail") == std::string::npos,
+              "hover: nothing to show is an empty object");
+        dm_free(json);
+    }
+
+    dm_workspace_close(ws);
+}
+
+// ---------------------------------------------------------------------------
+// Workspace symbol search. Ranking is the feature: a short query in a real
+// project matches far too much to show unranked.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Bulk queries. This is what a tree-browser panel runs on, so the checks are the
+// ones a panel actually depends on: that a depth-limited node still says how many
+// children it has, that a capped list admits it was capped, and that a path which
+// is not in the tree is NOT_FOUND rather than an empty success.
+// ---------------------------------------------------------------------------
+static void test_query_json(const fs::path &dir)
+{
+    const fs::path dme = dir / "query.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"query.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "query.dm");
+        out << "/obj/item\n\tvar/hp = 1\n/obj/item/sword\n\tvar/damage = 5\n/obj/item/sword/magic\n";
+    }
+
+    std::printf("bulk queries\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "query: workspace opens");
+
+    char *json = nullptr;
+    check(dm_query_json(ws, "{\"query\":\"objectTree\",\"path\":\"/obj/item\"}", &json) == DM_OK,
+          "query: objectTree succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"path\":\"/obj/item\"") != std::string::npos, "query: the node is the one asked for");
+        check(doc.find("\"path\":\"/obj/item/sword\"") != std::string::npos, "query: one level of children");
+
+        // Depth 1 by default, so the grandchild is counted and not included.
+        check(doc.find("/obj/item/sword/magic") == std::string::npos, "query: depth stops at one level");
+        check(doc.find("\"childCount\":1") != std::string::npos, "query: childCount describes what exists");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_query_json(ws, "{\"query\":\"subtypesOf\",\"path\":\"/obj/item\",\"limit\":1}", &json) == DM_OK,
+          "query: subtypesOf succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"truncated\":true") != std::string::npos, "query: a capped listing says so");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_query_json(ws, "{\"query\":\"members\",\"path\":\"/obj/item/sword\"}", &json) == DM_OK,
+          "query: members succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"name\":\"damage\"") != std::string::npos, "query: the type's own var is present");
+
+        // Inherited by default, and it says where from rather than pretending it is local.
+        check(doc.find("\"name\":\"hp\"") != std::string::npos, "query: an inherited var is present");
+        check(doc.find("\"inherited\":true") != std::string::npos, "query: inheritance is marked");
+        check(doc.find("\"owner\":\"/obj/item\"") != std::string::npos, "query: the owner is named");
+        dm_free(json);
+    }
+
+    // A path that is not in the tree is NOT_FOUND. An empty success would read as
+    // "this type has no members", which is a different answer.
+    char *missing = reinterpret_cast<char *>(0x1);
+    check(dm_query_json(ws, "{\"query\":\"members\",\"path\":\"/obj/nothing\"}", &missing) == DM_ERR_NOT_FOUND,
+          "query: an unknown path is NOT_FOUND");
+    check(missing == nullptr, "query: out-param cleared for an unknown path");
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_query_json(ws, "{\"query\":\"nonsense\"}", &rejected) == DM_ERR_INVALID_ARG,
+          "query: an unknown query name is rejected");
+    check(dm_query_json(ws, "not json at all", &rejected) == DM_ERR_INVALID_ARG,
+          "query: a malformed request is rejected");
+    check(rejected == nullptr, "query: out-param cleared on failure");
+
+    check(dm_query_json(nullptr, "{\"query\":\"objectTree\"}", &rejected) == DM_ERR_INVALID_HANDLE,
+          "query: null workspace rejected");
+
+    dm_workspace_close(ws);
+}
+
+static void test_workspace_symbols(const fs::path &dir)
+{
+    const fs::path dme = dir / "wsym.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"wsym.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "wsym.dm");
+        out << "/obj/unhit\n/obj/hitbox\n/obj/hit\n\tvar/hitpoints = 1\n";
+    }
+
+    std::printf("workspace symbols\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "wsymbols: workspace opens");
+
+    char *json = nullptr;
+    check(dm_workspace_symbols(ws, "hit", 0, DM_ENCODING_UTF16, &json) == DM_OK,
+          "wsymbols: call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"symbols\":") != std::string::npos, "wsymbols: has a symbols array");
+
+        // Exact before prefix before substring: /obj/hit must precede /obj/hitbox.
+        const size_t exact = doc.find("/obj/hit\"");
+        const size_t prefix = doc.find("/obj/hitbox");
+        check(exact != std::string::npos && prefix != std::string::npos && exact < prefix,
+              "wsymbols: an exact match is ranked before a prefix");
+        check(doc.find("\"file\":") != std::string::npos, "wsymbols: hits carry a file");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_workspace_symbols(ws, "hit", 1, DM_ENCODING_UTF16, &json) == DM_OK,
+          "wsymbols: a limit is accepted");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"name\":", doc.find("\"name\":") + 1) == std::string::npos,
+              "wsymbols: the limit is honoured");
+        dm_free(json);
+    }
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_workspace_symbols(ws, "", 0, DM_ENCODING_UTF16, &rejected) == DM_ERR_INVALID_ARG,
+          "wsymbols: an empty query is rejected");
+    check(rejected == nullptr, "wsymbols: out-param cleared on failure");
+
+    dm_workspace_close(ws);
+}
+
 int main()
 {
     const fs::path dir = fs::temp_directory_path() / "dm_abi_smoke";
@@ -431,6 +721,11 @@ int main()
     test_document_symbols(dme);
     test_completion(dir);
     test_defines(dir);
+    test_definition(dir);
+    test_hover(dir);
+    test_workspace_symbols(dir);
+
+    test_query_json(dir);
 
     std::error_code ignored;
     fs::remove_all(dir, ignored);

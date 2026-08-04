@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/byond-lang-server/abi/schema/query-response.schema.json",
+  "title": "dm_query_json response",
+  "description": "What dm_query_json returns for each query. A failure is a dm_status with a message on dm_last_error rather than an error object here: DM_ERR_INVALID_ARG for a malformed request or unknown query, DM_ERR_NOT_FOUND for a path that is not in the tree. An empty result is DM_OK with an empty array, since a type with no subtypes is an answer.",
+  "oneOf": [
+    { "$ref": "#/$defs/objectTreeResponse" },
+    { "$ref": "#/$defs/subtypesOfResponse" },
+    { "$ref": "#/$defs/membersResponse" }
+  ],
+  "$defs": {
+    "objectTreeResponse": {
+      "type": "object",
+      "required": ["query", "node"],
+      "properties": {
+        "query": { "const": "objectTree" },
+        "node": { "$ref": "#/$defs/node" }
+      }
+    },
+    "subtypesOfResponse": {
+      "type": "object",
+      "required": ["query", "path", "truncated", "types"],
+      "properties": {
+        "query": { "const": "subtypesOf" },
+        "path": { "type": "string" },
+        "truncated": {
+          "description": "True when the limit cut the list short. Reported rather than inferred from the count, because a list exactly as long as the limit looks identical to one that was cut.",
+          "type": "boolean"
+        },
+        "types": {
+          "description": "Flat and in tree order. The type asked about is not included.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        }
+      }
+    },
+    "membersResponse": {
+      "type": "object",
+      "required": ["query", "path", "vars", "procs"],
+      "properties": {
+        "query": { "const": "members" },
+        "path": { "type": "string" },
+        "vars": { "type": "array", "items": { "$ref": "#/$defs/member" } },
+        "procs": { "type": "array", "items": { "$ref": "#/$defs/member" } }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "path", "name", "declared", "builtin", "parentType",
+        "childCount", "varCount", "procCount", "children"
+      ],
+      "properties": {
+        "path": { "type": "string" },
+        "name": { "type": "string" },
+        "declared": {
+          "description": "False for a node that exists only because something deeper was declared: /obj/item/sword alone brings /obj/item into being.",
+          "type": "boolean"
+        },
+        "builtin": { "type": "boolean" },
+        "parentType": {
+          "description": "Where the type INHERITS from, which is not always its path parent - /mob is a child of the root by path and inherits from /atom/movable. Null at the root.",
+          "type": ["string", "null"]
+        },
+        "childCount": {
+          "description": "How many children exist, which is not the length of \"children\" when depth cut the response short. This is what lets a panel draw an expander without a second call.",
+          "type": "integer"
+        },
+        "varCount": { "type": "integer" },
+        "procCount": { "type": "integer" },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      }
+    },
+    "member": {
+      "type": "object",
+      "required": ["name", "detail", "kind", "builtin", "inherited", "owner", "file"],
+      "properties": {
+        "name": { "type": "string" },
+        "detail": {
+          "description": "The declaration as written: a signature for a proc, the declared type for a var.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "dm_symbol_kind, the same values dm_document_symbols uses.",
+          "type": "integer"
+        },
+        "builtin": { "type": "boolean" },
+        "inherited": {
+          "description": "True when the member is declared on an ancestor rather than on the type asked about.",
+          "type": "boolean"
+        },
+        "owner": {
+          "description": "The type the member is declared on.",
+          "type": "string"
+        },
+        "file": {
+          "description": "Empty for a builtin, since nothing in the project declares it.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

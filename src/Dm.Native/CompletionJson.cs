@@ -29,6 +29,8 @@ internal static class CompletionJson
             SymbolJson.AppendString(json, item.Detail);
             json.Append(",\"kind\":").Append((int)item.Kind);
             json.Append(",\"builtin\":").Append(item.IsBuiltin ? "true" : "false");
+            json.Append(",\"documentation\":");
+            SymbolJson.AppendString(json, item.Documentation);
             json.Append('}');
         }
 

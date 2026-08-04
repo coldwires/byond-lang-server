@@ -407,4 +407,36 @@ public class TypeTreeBuilderTests
 
         Assert.Equal("/toplevel", tree.InheritanceParent(thing)!.Path.Text);
     }
+
+    // -- proc signatures -----------------------------------------------------
+
+    /// <summary>
+    /// A signature keeps each parameter's type and <c>as</c> clause, not just its name.
+    /// </summary>
+    /// <remarks>
+    /// The parser has both and the symbol used to discard them, which left completion showing
+    /// <c>heal(target, amount)</c> for a proc whose source reads
+    /// <c>heal(mob/target, amount as num)</c>. This is why DM needs no <c>@param</c> convention:
+    /// the information is in the declaration, so a signature built from it cannot go stale.
+    /// </remarks>
+    [Fact]
+    public void A_proc_signature_keeps_parameter_types()
+    {
+        ObjectTree tree = Build(
+            "/mob/guy\n\tproc/heal(mob/target, amount as num, obj/item/with_item)\n\t\treturn\n");
+
+        ProcSymbol heal = tree.Find("/mob/guy")!.FindProc("heal")!;
+
+        Assert.Equal(
+            new[] { "/mob/target", "amount as num", "/obj/item/with_item" },
+            heal.Parameters);
+    }
+
+    [Fact]
+    public void An_untyped_parameter_is_just_its_name()
+    {
+        ObjectTree tree = Build("/mob/guy\n\tproc/f(amount)\n\t\treturn\n");
+
+        Assert.Equal(new[] { "amount" }, tree.Find("/mob/guy")!.FindProc("f")!.Parameters);
+    }
 }

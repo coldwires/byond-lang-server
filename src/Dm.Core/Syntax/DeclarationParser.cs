@@ -284,6 +284,29 @@ public sealed class DeclarationParser
                 continue;
             }
 
+            // A brace block can hold indentation-structured sub-blocks, and the two nest freely.
+            // Compiler-verified (PLAN.md §8): `/obj/x {` with an indented `var` block under it
+            // declares exactly what the all-indented form declares, byte for byte in `-o`. The
+            // lexer emits those Indent and Dedent tokens inside the braces, so reading them is all
+            // this takes; ignoring them cost the members and reported an error per line.
+            if (Current == TokenKind.Indent)
+            {
+                _position++;
+                declarations.AddRange(ParseBlock(context));
+
+                if (Current == TokenKind.Dedent)
+                    _position++;
+
+                continue;
+            }
+
+            // The dedent back to the level the `{` was written at, which is where `}` usually sits.
+            if (Current == TokenKind.Dedent)
+            {
+                _position++;
+                continue;
+            }
+
             int before = _position;
 
             if (ParseDeclaration(context) is { } declaration)
@@ -356,6 +379,32 @@ public sealed class DeclarationParser
         bool modifierBlock = varIndex >= 0
                              && path.Segments.Count > varIndex + 1
                              && Modifiers.Contains(path.Segments[^1]);
+
+        // A `proc` or `verb` block indented inside a `var` block declares nothing at all. dm.exe
+        // takes it with 0 errors and 0 warnings and then drops everything under it: the name is not
+        // a proc, not a var, and absent from `vars`, so calling it is a runtime "undefined proc or
+        // verb" the first time that line is reached. Verified in PLAN.md §8 and runnable as §18 of
+        // the language notes.
+        //
+        // Matching the compiler means declaring nothing. But we still know the author wrote it, and
+        // nothing else in a DM toolchain reports it — it was found in a shipped game where four
+        // mission procs were declared this way and one is called from another file — so the
+        // declarations are dropped with a warning rather than in silence.
+        if (endsWithProc && context == BlockContext.Var)
+        {
+            TextSpan header = SpanFrom(start);
+
+            ConsumeLineEnd();
+            SkipIndentedBlock();
+
+            Warn(
+                "DM0300",
+                header,
+                $"`{path.Segments[^1]}` is inside a `var` block, so everything under it is discarded: "
+                + "dm.exe declares no proc here and calling one is a runtime error. Dedent it one level.");
+
+            return null;
+        }
 
         // `var` or `proc` heading a bare block: every child inherits that kind.
         if (endsWithVar || endsWithProc || modifierBlock || context != BlockContext.Any)
@@ -810,6 +859,14 @@ public sealed class DeclarationParser
                     depth++;
                     break;
 
+                // A `}` with nothing open belongs to the brace block this declaration sits in, so it
+                // ends the element rather than closing something of ours. Decrementing past zero
+                // consumed it, and ParseBraceBlock then never saw its own terminator: everything
+                // after `/datum/x { name = "n" }` was parsed as a member of `/datum/x`, nesting
+                // deeper with each subsequent brace block in the file.
+                case TokenKind.CloseBrace when depth <= 0:
+                    return;
+
                 case TokenKind.CloseParen or TokenKind.CloseBracket or TokenKind.CloseBrace:
                     depth--;
                     break;
@@ -826,10 +883,24 @@ public sealed class DeclarationParser
         }
     }
 
+    /// <summary>
+    /// Consumes whatever remains of the current line.
+    /// </summary>
+    /// <remarks>
+    /// A <c>}</c> ends the line as surely as a newline does, and stopping on it is what keeps a
+    /// brace block from swallowing the file after it: `/datum/x { name = "n" }` followed by an
+    /// unrelated type used to run past the brace, and the next declaration was parsed as a member of
+    /// `/datum/x`. The object tree hid that — it attributes by full path, so a wrongly nested
+    /// absolute path still lands in the right place — and only the outline showed it. The brace is
+    /// left for <see cref="ParseBraceBlock"/> to consume.
+    /// </remarks>
     private void ConsumeLineEnd()
     {
-        while (Current is not (TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent) && !AtEnd)
+        while (Current is not (TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent
+                               or TokenKind.CloseBrace) && !AtEnd)
+        {
             _position++;
+        }
 
         if (Current == TokenKind.Newline)
             _position++;
@@ -860,9 +931,14 @@ public sealed class DeclarationParser
         _modes.Apply(words);
     }
 
+    /// <summary>Discards a line the parser could not make sense of.</summary>
+    /// <remarks>
+    /// Stops at <c>}</c> for the same reason <see cref="ConsumeLineEnd"/> does: recovery inside a
+    /// brace block must not escape the block it is recovering in.
+    /// </remarks>
     private void RecoverToNextLine()
     {
-        while (!AtEnd && Current is not (TokenKind.Newline or TokenKind.Dedent))
+        while (!AtEnd && Current is not (TokenKind.Newline or TokenKind.Dedent or TokenKind.CloseBrace))
             _position++;
 
         if (Current == TokenKind.Newline)
@@ -882,6 +958,17 @@ public sealed class DeclarationParser
 
     private void Report(string id, TextSpan span, string message)
         => _diagnostics.Add(Diagnostic.Error(id, span, message));
+
+    /// <summary>
+    /// Reports something the compiler accepts and then does not honour.
+    /// </summary>
+    /// <remarks>
+    /// DM0001–DM0006 are lexical, DM01xx preprocessing, DM02xx syntax errors. DM03xx is this:
+    /// code that compiles clean and means something other than it looks like, which the build output
+    /// never mentions. An error here would be wrong — the file does compile.
+    /// </remarks>
+    private void Warn(string id, TextSpan span, string message)
+        => _diagnostics.Add(Diagnostic.Warning(id, span, message));
 
     /// <summary>Appends one path's segments to another, keeping the first's anchor.</summary>
     private static PathSyntax Join(PathSyntax first, PathSyntax second)

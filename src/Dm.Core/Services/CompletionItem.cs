@@ -55,12 +55,14 @@ public enum CompletionContext
 /// <summary>One entry in a completion list.</summary>
 public sealed class CompletionItem
 {
-    public CompletionItem(string name, CompletionKind kind, string detail, bool isBuiltin)
+    public CompletionItem(
+        string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "")
     {
         Name = name;
         Kind = kind;
         Detail = detail;
         IsBuiltin = isBuiltin;
+        Documentation = documentation;
     }
 
     public string Name { get; }
@@ -72,6 +74,15 @@ public sealed class CompletionItem
 
     /// <summary>True for a BYOND builtin rather than something the project declared.</summary>
     public bool IsBuiltin { get; }
+
+    /// <summary>
+    /// The <c>///</c> comment above the declaration, or empty.
+    /// </summary>
+    /// <remarks>
+    /// Only populated when the caller supplied a way to read other files — the text lives wherever
+    /// the member was declared, which is rarely the file being completed in.
+    /// </remarks>
+    public string Documentation { get; }
 
     public override string ToString() => $"{Kind} {Name}";
 }

@@ -46,6 +46,8 @@ internal static class SymbolJson
 
             json.Append("{\"id\":");
             AppendString(json, diagnostic.Id);
+            json.Append(",\"severity\":");
+            AppendString(json, SeverityName(diagnostic.Severity));
             json.Append(",\"message\":");
             AppendString(json, diagnostic.Message);
             json.Append(",\"startLine\":").Append(start.Line);
@@ -58,6 +60,23 @@ internal static class SymbolJson
         json.Append("]}");
         return json.ToString();
     }
+
+    /// <summary>
+    /// The severity as a word rather than a number.
+    /// </summary>
+    /// <remarks>
+    /// LSP numbers these 1–4 and our enum starts at 0, so shipping either integer would invite a
+    /// client to map it with the other scheme's table and silently paint warnings as errors. A word
+    /// cannot be misread, and this document is already full of strings.
+    /// </remarks>
+    private static string SeverityName(DiagnosticSeverity severity)
+        => severity switch
+        {
+            DiagnosticSeverity.Error => "error",
+            DiagnosticSeverity.Warning => "warning",
+            DiagnosticSeverity.Information => "information",
+            _ => "hint",
+        };
 
     private static void WriteSymbols(StringBuilder json, IReadOnlyList<DocumentSymbol> symbols)
     {

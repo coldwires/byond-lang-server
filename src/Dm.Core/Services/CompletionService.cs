@@ -60,6 +60,26 @@ public static class CompletionService
         IReadOnlyCollection<string>? macros,
         PositionEncoding encoding = PositionEncoding.Utf16,
         CancellationToken cancellationToken = default)
+        => CompleteAt(tree, document, line, character, macros, null, encoding, cancellationToken);
+
+    /// <summary>
+    /// Builds the completion list, also attaching each member's <c>///</c> comment.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="fileText"/> reads a file the caller can reach. A member's documentation lives
+    /// where it was declared, which is rarely the file being completed in, so without it the list
+    /// still comes back — just undocumented. Supplied by the workspace, which already caches
+    /// documents, so the cost is span arithmetic rather than repeated file reads.
+    /// </remarks>
+    public static CompletionResult CompleteAt(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        IReadOnlyCollection<string>? macros,
+        Func<string, SourceText?>? fileText,
+        PositionEncoding encoding = PositionEncoding.Utf16,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(document);
@@ -73,7 +93,7 @@ public static class CompletionService
         int index = IndexBefore(tokens, offset);
 
         if (index < 0)
-            return Identifiers(tree, document, offset, macros);
+            return Identifiers(tree, document, offset, macros, fileText);
 
         // A partly typed word is not context; the trigger is whatever sits before it.
         if (tokens[index].Kind == TokenKind.Identifier && tokens[index].Span.End >= offset)
@@ -85,22 +105,22 @@ public static class CompletionService
         {
             case TokenKind.Dot:
             case TokenKind.QuestionDot:
-                return Members(tree, document, tokens, index, offset, widen: false, cancellationToken);
+                return Members(tree, document, tokens, index, offset, false, fileText, cancellationToken);
 
             case TokenKind.Colon:
             case TokenKind.QuestionColon:
-                return Members(tree, document, tokens, index, offset, widen: true, cancellationToken);
+                return Members(tree, document, tokens, index, offset, true, fileText, cancellationToken);
 
             case TokenKind.Slash:
                 return TypePaths(tree, tokens, index);
 
             default:
-                return Identifiers(tree, document, offset, macros);
+                return Identifiers(tree, document, offset, macros, fileText);
         }
     }
 
     /// <summary>The last token starting at or before the cursor.</summary>
-    private static int IndexBefore(IReadOnlyList<Token> tokens, int offset)
+    internal static int IndexBefore(IReadOnlyList<Token> tokens, int offset)
     {
         int found = -1;
 
@@ -132,6 +152,7 @@ public static class CompletionService
         int operatorIndex,
         int offset,
         bool widen,
+        Func<string, SourceText?>? fileText,
         CancellationToken cancellationToken)
     {
         TypeSymbol? receiver = ResolveReceiver(tree, document, tokens, operatorIndex - 1, offset);
@@ -147,7 +168,7 @@ public static class CompletionService
         foreach (TypeSymbol step in tree.InheritanceChain(receiver))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            AddMembers(items, step);
+            AddMembers(items, step, fileText);
         }
 
         // `:` also reaches members declared on subtypes, which is what makes it a wider check
@@ -157,7 +178,7 @@ public static class CompletionService
             foreach (TypeSymbol descendant in Descendants(receiver))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                AddMembers(items, descendant);
+                AddMembers(items, descendant, fileText);
             }
         }
 
@@ -175,12 +196,17 @@ public static class CompletionService
         }
     }
 
-    private static void AddMembers(Dictionary<string, CompletionItem> items, TypeSymbol type)
+    private static void AddMembers(
+        Dictionary<string, CompletionItem> items, TypeSymbol type, Func<string, SourceText?>? fileText)
     {
         foreach (VarSymbol variable in type.Vars)
         {
             items.TryAdd(variable.Name, new CompletionItem(
-                variable.Name, CompletionKind.Variable, type.Path.Text, variable.IsBuiltin));
+                variable.Name,
+                CompletionKind.Variable,
+                type.Path.Text,
+                variable.IsBuiltin,
+                DocumentationFor(variable.Site, variable.IsBuiltin, fileText)));
         }
 
         foreach (ProcSymbol proc in type.Procs)
@@ -189,8 +215,27 @@ public static class CompletionService
                 proc.Name,
                 proc.IsVerb ? CompletionKind.Verb : CompletionKind.Proc,
                 $"{type.Path.Text}  ({string.Join(", ", proc.Parameters)})",
-                proc.IsBuiltin));
+                proc.IsBuiltin,
+                proc.Sites.Count > 0
+                    ? DocumentationFor(proc.Sites[0], proc.IsBuiltin, fileText)
+                    : string.Empty));
         }
+    }
+
+    /// <summary>
+    /// The <c>///</c> comment above a declaration site, when the caller can reach the file.
+    /// </summary>
+    /// <remarks>
+    /// Builtins are skipped outright: nothing declares them, so there is no file and no comment.
+    /// </remarks>
+    private static string DocumentationFor(
+        DeclarationSite site, bool isBuiltin, Func<string, SourceText?>? fileText)
+    {
+        if (isBuiltin || fileText is null || string.IsNullOrEmpty(site.File))
+            return string.Empty;
+
+        SourceText? text = fileText(site.File);
+        return text is null ? string.Empty : DocComments.AboveOffset(text, site.NameSpan.Start);
     }
 
     /// <summary>
@@ -202,7 +247,7 @@ public static class CompletionService
     /// local that was declared without one. A call result or an index still resolves to nothing,
     /// which is where DM itself gives up and lets <c>.</c> behave like <c>:</c>.
     /// </remarks>
-    private static TypeSymbol? ResolveReceiver(
+    internal static TypeSymbol? ResolveReceiver(
         ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset)
     {
         if (index < 0)
@@ -264,14 +309,18 @@ public static class CompletionService
         return tree.Find(TypePath.Root.Append(name));
     }
 
-    private static bool IsName(TokenKind kind) => kind
+    internal static bool IsName(TokenKind kind) => kind
         is TokenKind.Identifier or TokenKind.KeywordSrc or TokenKind.KeywordUsr
         or TokenKind.KeywordWorld or TokenKind.KeywordGlobal;
 
     // -- scope --------------------------------------------------------------
 
     private static CompletionResult Identifiers(
-        ObjectTree tree, Document document, int offset, IReadOnlyCollection<string>? macros)
+        ObjectTree tree,
+        Document document,
+        int offset,
+        IReadOnlyCollection<string>? macros,
+        Func<string, SourceText?>? fileText)
     {
         Dictionary<string, CompletionItem> items = new(StringComparer.Ordinal);
 
@@ -294,11 +343,11 @@ public static class CompletionService
         if (EnclosingType(tree, document, offset) is { } enclosing)
         {
             foreach (TypeSymbol step in tree.InheritanceChain(enclosing))
-                AddMembers(items, step);
+                AddMembers(items, step, fileText);
         }
 
         // Globals last. These are the root's procs and vars, which is where the builtins live.
-        AddMembers(items, tree.Root);
+        AddMembers(items, tree.Root, fileText);
 
         // Macros do not live on any type - the preprocessor has removed them long before the parser
         // runs - so they are carried in separately and go last, behind anything really in scope.
@@ -493,7 +542,7 @@ public static class CompletionService
     }
 
     /// <summary>The type whose members <c>src</c> reaches at this position.</summary>
-    private static TypeSymbol? EnclosingType(ObjectTree tree, Document document, int offset)
+    internal static TypeSymbol? EnclosingType(ObjectTree tree, Document document, int offset)
     {
         TypePath path = TypePath.Root;
         bool found = false;
@@ -555,7 +604,7 @@ public static class CompletionService
         }
     }
 
-    private static ProcDeclarationSyntax? FindEnclosingProc(Document document, int offset)
+    internal static ProcDeclarationSyntax? FindEnclosingProc(Document document, int offset)
     {
         ProcDeclarationSyntax? found = null;
         Walk(document.Parse.Root.Declarations);

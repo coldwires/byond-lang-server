@@ -444,6 +444,65 @@ code path, with nothing in the build output to suggest it.
 
 ---
 
+## Compile-only: braces and indentation nest freely
+
+DM has both `{ ... }` blocks and significant indentation, and the obvious assumption is that a brace
+block turns indentation off inside it — the way a C-style block would. It does not. Indentation
+keeps its full meaning inside braces, and the two forms nest in either order.
+
+Three shapes, each written once with a brace body and once with indentation alone:
+
+```dm
+/obj/one {
+	var
+		a = 1
+		b = 2
+}
+
+/obj/two {
+	proc/f()
+		return 1
+}
+
+/obj/three {
+	sub
+		var/c = 1
+}
+```
+
+`dm.exe -o` prints the braced and the indented versions **identically**: `a` and `b` are vars on
+`/obj/one`, `f` is a proc on `/obj/two`, and `/obj/three/sub` is a subtype carrying `c`.
+
+```xml
+<obj file="braces.dm:8">one
+	<var file="braces.dm:10">a <val>1</val></var>
+	<var file="braces.dm:11">b <val>2</val></var>
+</obj>
+<obj file="braces.dm:15">two
+	<proc file="braces.dm:16">f</proc>
+</obj>
+<obj file="braces.dm:21">three
+	<obj file="braces.dm:22">sub
+		<var file="braces.dm:23">c <val>1</val></var>
+	</obj>
+</obj>
+```
+
+This has to be read off `-o` rather than from whether the file compiles, because every candidate
+behaviour compiles: a tool that ignored the indentation inside the braces would produce a type with
+no members and no error to show for it.
+
+The practical consequence is for anything that consumes both. A lexer emits `Indent` and `Dedent`
+inside the braces exactly as it does outside, so a parser that treats a brace block as a flat list
+of `;`-separated members silently drops everything written across indented lines.
+
+One more trap in the same area, since macro-generated code writes `{ ... };` runs on one logical
+line: the `}` ends the declaration in front of it. Skipping "to the end of the line" past a `}`
+runs into whatever follows the block, and the declarations after it are then read as members of the
+braced type. That produces no diagnostic — the paths still resolve, so only an outline shows it.
+
+---
+
 ## Compile-only: `.` versus `:` — neither is unchecked
 
 These cannot go in the runtime file because the failing cases do not compile. Each needs its own
@@ -785,9 +844,9 @@ continuing a `//` comment; the "inconsistent indentation" error, or any indentat
 all; hexadecimal and scientific number literal syntax; the whitespace rule on a conditional's `:`
 (§15); that a directive line carries no indentation of its own (§16); what `?[]` actually
 guards (§17); that a `proc` block misplaced inside a `var` block is discarded without a warning
-(§18); the infinity and
-indeterminate literals `1#INF` and `1#IND`, which appear in shipped library code and which a lexer
-splitting on `#` will read as a number, a directive, and a name.
+(§18); that indentation keeps its meaning inside a brace block, so the two nest freely; the infinity
+and indeterminate literals `1#INF` and `1#IND`, which appear in shipped library code and which a
+lexer splitting on `#` will read as a number, a directive, and a name.
 
 The precedence table also cannot express §15, since that distinction is lexical rather than a matter
 of binding strength. Reading the table alone will not tell you that `cond ? a:b` fails to compile.

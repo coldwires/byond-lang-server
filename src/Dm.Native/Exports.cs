@@ -303,6 +303,195 @@ internal static unsafe class Exports
     /// Building the answer needs the whole project, so the first call after an edit rebuilds the
     /// object tree. That cost is what M9 addresses.
     /// </remarks>
+    /// <summary>
+    /// Where the symbol at a position is declared. Added in ABI 0.6.
+    /// </summary>
+    /// <remarks>
+    /// Returns every declaration rather than one. DM reopens types across files and overrides procs
+    /// as a matter of course, so a single answer would be an arbitrary pick among several correct
+    /// ones.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_definition_at")]
+    public static int DefinitionAt(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
+                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(DefinitionJson.Write(ws, found, (PositionEncoding)encoding));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The declaration behind the symbol at a position, for a tooltip. Added in ABI 0.7.
+    /// </summary>
+    /// <remarks>
+    /// An empty JSON object rather than an error when nothing resolves: a pointer resting on a
+    /// local, a keyword or whitespace is the common case, not a failure.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_hover_at")]
+    public static int HoverAt(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            HoverResult? hover = HoverService.HoverAt(
+                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(
+                HoverJson.Write(hover, document.Text, (PositionEncoding)encoding));
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Searches the whole project for symbols by name. Added in ABI 0.8.
+    /// </summary>
+    /// <remarks>
+    /// Ranked and capped rather than exhaustive: a two-character query on a large project matches
+    /// tens of thousands of symbols, and an unranked wall of them is useless to a picker.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_workspace_symbols")]
+    public static int WorkspaceSymbols(
+        IntPtr workspace,
+        byte* query,
+        int limit,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? needle = NativeStrings.Read(query);
+            if (string.IsNullOrWhiteSpace(needle))
+                return Fail(DmStatus.InvalidArgument, "query is null or empty");
+
+            IReadOnlyList<WorkspaceSymbol> hits = WorkspaceSymbolService.Search(
+                ws.GetObjectTree(),
+                needle,
+                limit > 0 ? limit : WorkspaceSymbolService.DefaultLimit);
+
+            *outJson = NativeStrings.Allocate(
+                WorkspaceSymbolJson.Write(ws, hits, (PositionEncoding)encoding));
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Answers a bulk query about the object tree: a JSON request in, a JSON response out.
+    /// </summary>
+    /// <remarks>
+    /// The panels beside an editor ask about a path rather than a caret, and they ask for a lot at
+    /// once, so this is one export carrying a named query rather than an export per question. The
+    /// same shapes become <c>dm/objectTree</c> and friends at M10, which is what keeps the two shells
+    /// answering identically.
+    /// </remarks>
+    [UnmanagedCallersOnly(EntryPoint = "dm_query_json")]
+    public static int QueryJsonExport(IntPtr workspace, byte* request, byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            string? text = NativeStrings.Read(request);
+            if (string.IsNullOrWhiteSpace(text))
+                return Fail(DmStatus.InvalidArgument, "request is null or empty");
+
+            string? response = QueryJson.Answer(ws, text, out QueryError error);
+
+            if (response is null)
+            {
+                return error == QueryError.NoSuchPath
+                    ? Fail(DmStatus.NotFound, "no such type path in this workspace")
+                    : Fail(DmStatus.InvalidArgument, "request is malformed or names an unknown query");
+            }
+
+            *outJson = NativeStrings.Allocate(response);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "dm_complete_at")]
     public static int CompleteAt(
         IntPtr workspace,
@@ -337,6 +526,7 @@ internal static unsafe class Exports
                 line,
                 character,
                 ws.GetMacroNames(),
+                ws.GetFileText,
                 (PositionEncoding)encoding);
 
             *outJson = NativeStrings.Allocate(CompletionJson.Write(result));

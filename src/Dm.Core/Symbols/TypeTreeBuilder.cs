@@ -151,12 +151,42 @@ public static class TypeTreeBuilder
             new DeclarationSite(file, variable.Span, variable.NameSpan)));
     }
 
+    /// <summary>
+    /// Renders a parameter with its type, so a signature is more than a list of names.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The declared type and the <c>as</c> clause are the two things a caller most needs and the
+    /// parser already has them; keeping only the name threw that away and left a signature reading
+    /// <c>heal(target, amount)</c> when the source says <c>heal(mob/target, amount as num)</c>.
+    /// </para>
+    /// <para>
+    /// This is why DM needs no <c>@param</c> convention: the types are in the declaration, so a
+    /// signature derived from it cannot drift out of date the way a comment can.
+    /// </para>
+    /// </remarks>
+    private static string Render(ParameterSyntax parameter)
+    {
+        // The path is rendered resolved, so `mob/target` in source shows as `/mob/target`. That is
+        // the type it actually names, and a leading separator is what distinguishes a type from a
+        // bare name at a glance.
+        string rendered = parameter.DeclaredType is { } type && type.Segments.Count > 0
+            ? $"{type.Text}/{parameter.Name}"
+            : parameter.Name;
+
+        // `as num`, `as text|null` - an input filter rather than a type, but part of the signature.
+        if (parameter.InputType is { Length: > 0 } inputType)
+            rendered += $" as {inputType}";
+
+        return rendered;
+    }
+
     private static void AddProc(ObjectTree tree, string file, ProcDeclarationSyntax proc, TypePath enclosing)
     {
         List<string> parameters = new(proc.Parameters.Count);
 
         foreach (ParameterSyntax parameter in proc.Parameters)
-            parameters.Add(parameter.Name);
+            parameters.Add(Render(parameter));
 
         tree.GetOrAdd(ProcOwner(enclosing, proc.Path))
             .GetOrAddProc(proc.Name, proc.IsVerb)
