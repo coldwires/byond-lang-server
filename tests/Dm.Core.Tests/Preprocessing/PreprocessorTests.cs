@@ -246,4 +246,92 @@ public class PreprocessorTests
         // The one that used to end up on the root.
         Assert.NotNull(mob.FindProc("g"));
     }
+
+    // -- #pragma syntax has to survive preprocessing -------------------------
+
+    /// <summary>
+    /// A C-style <c>switch</c>, which only parses under the pragma. Written as one string because
+    /// the pragma and the body it governs are the whole point.
+    /// </summary>
+    private const string CSwitch =
+        "#pragma push\n"
+        + "#pragma syntax C switch\n"
+        + "/proc/f(n)\n"
+        + "\tswitch(n)\n"
+        + "\t\tcase 1:\n"
+        + "\t\t\treturn \"one\"\n"
+        + "\t\tcase 2:\n"
+        + "\t\t\treturn \"two\"\n"
+        + "#pragma pop\n";
+
+    /// <remarks>
+    /// Every other directive is consumed by preprocessing. This one changes the grammar the parser
+    /// reads the stream with, and the parser only ever sees the stream, so it has to survive as
+    /// data. Without it the body above parses under DM's own switch grammar and reports errors on
+    /// code dm.exe compiles with none.
+    /// </remarks>
+    [Fact]
+    public void A_grammar_pragma_survives_into_the_stream()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", CSwitch);
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Contains("pragma", Text(result));
+        Assert.Contains("syntax", Text(result));
+    }
+
+    [Fact]
+    public void A_body_under_a_syntax_pragma_parses_from_the_preprocessed_stream()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", CSwitch);
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        foreach ((string _, TokenSource source) in PreprocessedSplitter.Split(result))
+            Assert.Empty(DeclarationParser.Parse(source).Diagnostics);
+    }
+
+    /// <summary>
+    /// The pragma is still not a declaration. It has to be stepped over, not parsed, and it carries
+    /// no indentation of its own — so the proc under it is a sibling of what came before, not a
+    /// child of the directive line.
+    /// </summary>
+    [Fact]
+    public void The_kept_pragma_does_not_become_a_declaration()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", CSwitch);
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+        Dm.Core.Symbols.ObjectTree tree = new();
+
+        foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(result))
+            Dm.Core.Symbols.TypeTreeBuilder.AddFile(tree, file, DeclarationParser.Parse(source));
+
+        Assert.NotNull(tree.Find("/")!.FindProc("f"));
+        Assert.Null(tree.Find("/pragma"));
+        Assert.Null(tree.Find("/syntax"));
+    }
+
+    /// <summary>
+    /// Pragmas the parser has no use for stay consumed. <c>multiple</c> is the preprocessor's own,
+    /// and leaving it in the stream would put a stray directive in front of the parser for nothing.
+    /// </summary>
+    [Fact]
+    public void A_pragma_the_parser_does_not_need_is_still_consumed()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write("code.dm", "#pragma multiple\nvar/x = 1\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal("var / x = 1", Text(result));
+    }
 }

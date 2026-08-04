@@ -194,6 +194,16 @@ public sealed class Workspace : IDisposable
     public Services.SemanticContext GetSemanticContext() => new(_tree, _macroNames);
 
     /// <summary>
+    /// Reads a file through the document store, for services that need text from another file.
+    /// </summary>
+    /// <remarks>
+    /// Goes through <see cref="TryGetDocument"/> so a pushed buffer wins and results are cached,
+    /// which is what keeps attaching documentation to a few hundred completion items cheap.
+    /// </remarks>
+    public SourceText? GetFileText(string file)
+        => TryGetDocument(file, out Document document) ? document.Text : null;
+
+    /// <summary>
     /// Every macro the project defines, for a completion list.
     /// </summary>
     /// <remarks>

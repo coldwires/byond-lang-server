@@ -141,9 +141,15 @@ typedef int32_t dm_position_encoding;
 
 /*
  * Colouring categories. These are a stable numeric contract; values are never reused.
- * Members from DM_CLASS_TYPE_NAME onward are reserved for semantic classification and
- * are not produced yet -- they are declared now so client colour tables do not have to
- * be renumbered when M6 lands.
+ *
+ * DM_CLASS_TYPE_NAME onward are the semantic kinds, and they ARE produced now. They only
+ * ever refine a span the lexical pass already made - none is added, removed or moved - so
+ * a client that ignores them sees exactly the pre-0.7 output.
+ *
+ * DM_CLASS_TYPE_NAME needs the object tree, and classification will not build one: that is
+ * a whole-project walk and this runs on every scroll. Type names stay plain identifiers
+ * until something else has built a tree (dm_complete_at, dm_document_symbols), then light
+ * up. Call dm_complete_at once after opening if you want them immediately.
  */
 #define DM_CLASS_NONE                    0
 #define DM_CLASS_COMMENT                 1
@@ -157,10 +163,10 @@ typedef int32_t dm_position_encoding;
 #define DM_CLASS_PUNCTUATION             9
 #define DM_CLASS_PREPROCESSOR            10
 #define DM_CLASS_ERROR                   11
-#define DM_CLASS_TYPE_NAME               12  /* reserved, M6 */
-#define DM_CLASS_PROC_NAME               13  /* reserved, M6 */
-#define DM_CLASS_VAR_NAME                14  /* reserved, M6 */
-#define DM_CLASS_MACRO_NAME              15  /* reserved, M6 */
+#define DM_CLASS_TYPE_NAME               12  /* a path segment naming a real type   */
+#define DM_CLASS_PROC_NAME               13  /* a name followed by (                */
+#define DM_CLASS_VAR_NAME                14  /* a member read with no call parens   */
+#define DM_CLASS_MACRO_NAME              15  /* a name the project #defines         */
 
 typedef void *dm_classification;
 
@@ -219,10 +225,23 @@ void dm_classification_free(dm_classification classification);
  *       }
  *     ],
  *     "diagnostics": [
- *       { "id": "DM0200", "message": "expected a declaration",
+ *       { "id": "DM0200", "severity": "error",
+ *         "message": "expected a declaration",
  *         "startLine": 4, "startChar": 0, "endLine": 4, "endChar": 3 }
  *     ]
  *   }
+ *
+ * "severity" is "error", "warning", "information" or "hint" - a word rather than a
+ * number, because LSP numbers these from 1 and our own enum from 0, and shipping
+ * either integer invites a client to decode it with the other scheme's table.
+ * Added in ABI 0.10; treat a missing key as "error", which is what every
+ * diagnostic was before it. Handle an unknown word as "information".
+ *
+ * Not every diagnostic here is a syntax error. DM0300 marks code that COMPILES
+ * CLEAN and does not mean what it looks like - a proc block indented into a var
+ * block, which dm.exe accepts and then declares nothing for. Those declarations
+ * are absent from "symbols" for the same reason: the compiler does not create
+ * them either.
  *
  * Use the sel* range to highlight or navigate: it covers the name, so clicking an
  * outline entry puts the caret on the identifier rather than on the whole block.
@@ -277,6 +296,186 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
 dm_status dm_complete_at(dm_workspace workspace, const char *file,
                          int32_t line, int32_t character,
                          dm_position_encoding encoding, char **out_json);
+
+/* -- workspace symbols ---------------------------------------------------- */
+
+/*
+ * Every symbol in the project whose name matches a query. Added in ABI 0.8.
+ *
+ * You own the buffer. Release it with dm_free.
+ *
+ * RANKED AND CAPPED, not exhaustive. A two-character query on a large project matches
+ * tens of thousands of symbols; an unranked wall of them is useless in a picker. Order
+ * is exact name, then prefix, then substring, with shorter names first inside each
+ * band. Matching is case-insensitive.
+ *
+ * Pass 0 for limit to take the default (200). Ask for what you will display.
+ *
+ * Builtins are never returned: nothing declares them, so a hit could not be opened.
+ *
+ * Shape - the same two ranges as dm_document_symbols, plus the file:
+ *
+ *   {
+ *     "symbols": [
+ *       {
+ *         "name": "sharpness",
+ *         "detail": "/obj/sword/sharpness",   the owning path, so two `New`s differ
+ *         "kind": 1,                          dm_symbol_kind
+ *         "file": "C:/game/code/sword.dm",
+ *         "startLine": 4, "startChar": 1,
+ *         "endLine": 4,   "endChar": 20,
+ *         "selStartLine": 4, "selStartChar": 5,
+ *         "selEndLine": 4,   "selEndChar": 14
+ *       }
+ *     ]
+ *   }
+ *
+ * COST: the first call after an edit rebuilds the object tree, same as dm_complete_at.
+ */
+dm_status dm_workspace_symbols(dm_workspace workspace, const char *query, int32_t limit,
+                               dm_position_encoding encoding, char **out_json);
+
+/* -- hover ---------------------------------------------------------------- */
+
+/*
+ * The declaration behind the symbol at a position, for a tooltip. Added in ABI 0.7.
+ *
+ * You own the buffer. Release it with dm_free. Line and character are ZERO-BASED.
+ *
+ * Returns an EMPTY JSON OBJECT - {} - when nothing resolves, and DM_OK with it. A
+ * pointer resting on a local, a keyword or whitespace is the ordinary case rather than
+ * a failure, so check for the "detail" key instead of the status.
+ *
+ * Where a symbol has several declarations this renders the NEAREST one. Hover is a
+ * glance; a reader who wants the whole override chain is asking dm_definition_at.
+ *
+ * Shape:
+ *
+ *   {
+ *     "detail": "/mob/guy/health",           the resolved path
+ *     "signature": "var/health = 1",         the declaration as written
+ *     "documentation": "How much ...",       preceding /// lines, markers stripped
+ *     "startLine": 9, "startChar": 3,        the token you hovered, to highlight
+ *     "endLine": 9,   "endChar": 9
+ *   }
+ *
+ * documentation is a run of `///` lines directly above the declaration, joined with
+ * newlines. A blank line or a plain `//` comment ends the run, matching what a reader
+ * takes to be attached to the declaration.
+ */
+dm_status dm_hover_at(dm_workspace workspace, const char *file,
+                      int32_t line, int32_t character,
+                      dm_position_encoding encoding, char **out_json);
+
+/* -- go to definition ---------------------------------------------------- */
+
+/*
+ * Where the symbol at a position is declared, as a UTF-8 JSON document. Added in ABI 0.6.
+ *
+ * You own the buffer. Release it with dm_free. Line and character are ZERO-BASED and
+ * follow the encoding you pass, as everywhere else.
+ *
+ * ** THIS RETURNS A LIST, AND SEVERAL RESULTS IS NORMAL **
+ * DM declares one symbol in several places as a matter of course: a type is reopened
+ * across files, and a proc has an override chain. We report all of them rather than
+ * picking one, because the pick would be arbitrary and the rest are what a reader in an
+ * override-heavy codebase actually wants. Order is nearest first - the nearest override
+ * is what a call reaches - so a client that insists on one destination should take the
+ * first and offer the rest.
+ *
+ * An empty array means nothing resolved. That is normal for a local, a parameter or a
+ * macro: those are not in the object tree.
+ *
+ * Shape:
+ *
+ *   {
+ *     "definitions": [
+ *       {
+ *         "file": "C:/game/code/mob.dm",
+ *         "detail": "/mob/proc/attack",   what was found, for a picker
+ *         "startLine": 12, "startChar": 1,     the whole declaration
+ *         "endLine": 15,   "endChar": 0,
+ *         "selStartLine": 12, "selStartChar": 6,   the NAME alone
+ *         "selEndLine": 12,   "selEndChar": 12
+ *       }
+ *     ]
+ *   }
+ *
+ * Navigate with the sel* range, exactly as with dm_document_symbols.
+ *
+ * COST: the first call after an edit rebuilds the object tree, same as dm_complete_at.
+ */
+dm_status dm_definition_at(dm_workspace workspace, const char *file,
+                           int32_t line, int32_t character,
+                           dm_position_encoding encoding, char **out_json);
+
+/* -- bulk queries --------------------------------------------------------- */
+
+/*
+ * A question about the object tree that is too big for a position-shaped call, as
+ * a UTF-8 JSON request and response. Added in ABI 0.11.
+ *
+ * You own the response. Release it with dm_free.
+ *
+ * This is what the tree browser beside your editor runs on: it asks about a PATH
+ * rather than a caret, and it asks for a lot at once. One export carrying a named
+ * query keeps the ABI and the later LSP shell describable by one schema, which is
+ * why there is no dm_object_tree / dm_subtypes_of / dm_members trio.
+ *
+ * Requests. Everything except "query" has a default, and unknown members are
+ * ignored, so a client written against a later schema still gets an answer:
+ *
+ *   { "query": "objectTree", "path": "/obj", "depth": 1, "includeBuiltins": true }
+ *   { "query": "subtypesOf", "path": "/obj", "limit": 500, "includeBuiltins": true }
+ *   { "query": "members", "path": "/mob", "inherited": true, "includeBuiltins": true }
+ *
+ *   path             defaults to "/", the root
+ *   depth            levels of children to include. 1 is one level, which is what
+ *                    a panel needs for a node the user just expanded. 0 is the
+ *                    node alone - a single-row refresh
+ *   limit            cap on subtypesOf. Defaults to 500
+ *   inherited        members: include everything the type inherits. Default true
+ *   includeBuiltins  include BYOND's own types and members. Default true
+ *
+ * Responses:
+ *
+ *   { "query": "objectTree", "node": <node> }
+ *   { "query": "subtypesOf", "path": "/obj", "truncated": false, "types": [<node>] }
+ *   { "query": "members", "path": "/mob",
+ *     "vars":  [<member>], "procs": [<member>] }
+ *
+ *   <node>   { "path": "/obj/item", "name": "item",
+ *              "declared": true,        false = the node exists only because
+ *                                       something deeper was declared
+ *              "builtin": false,
+ *              "parentType": "/atom",   where it INHERITS from, which is not
+ *                                       always the path parent. null at the root
+ *              "childCount": 12,        what exists, not what "children" holds -
+ *                                       so a depth-limited node still tells you
+ *                                       whether to draw an expander
+ *              "varCount": 3, "procCount": 4,
+ *              "children": [<node>] }
+ *
+ *   <member> { "name": "hp", "detail": "/obj/item",   signature for a proc
+ *              "kind": 1,               dm_symbol_kind, as in dm_document_symbols
+ *              "builtin": false,
+ *              "inherited": true,       declared on an ancestor, not on the type
+ *                                       you asked about
+ *              "owner": "/atom",        which ancestor
+ *              "file": "code/mob.dm" }
+ *
+ * "truncated" is reported rather than left to be inferred from the count, because
+ * a list exactly as long as the limit looks identical to one that was cut. Show
+ * it, or your picker will quietly claim a type has 500 subtypes.
+ *
+ * Returns DM_ERR_INVALID_ARG for a malformed request or an unknown query name, and
+ * DM_ERR_NOT_FOUND when the path is not in the tree. An empty result is DM_OK with
+ * an empty array - a type with no subtypes is an answer, not a failure.
+ *
+ * ** COST ** Same as dm_complete_at: the first call after an edit rebuilds the
+ * object tree for the whole project.
+ */
+dm_status dm_query_json(dm_workspace workspace, const char *request, char **out_json);
 
 typedef int32_t dm_completion_kind;
 

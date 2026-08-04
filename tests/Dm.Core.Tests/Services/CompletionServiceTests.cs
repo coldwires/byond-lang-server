@@ -350,6 +350,54 @@ public class CompletionServiceTests
         Assert.Empty(result.Items);
     }
 
+    // -- documentation --------------------------------------------------------
+
+    /// <summary>
+    /// A member carries the <c>///</c> comment above its declaration, so a popup can show it.
+    /// </summary>
+    /// <remarks>
+    /// Only when the caller supplies a file reader: a member's documentation lives where it was
+    /// declared, which is rarely the file being completed in.
+    /// </remarks>
+    [Fact]
+    public void A_member_carries_its_doc_comment()
+    {
+        const string WithCaret =
+            "/mob/guy\n\t/// Restores health.\n\t/// Safe on a dead mob.\n\tproc/heal(amount)\n"
+            + "\t\treturn amount\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n";
+
+        int caret = WithCaret.IndexOf('|');
+        string source = WithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+
+        CompletionResult result = CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character, null, _ => document.Text);
+
+        CompletionItem heal = result.Items.First(i => i.Name == "heal");
+
+        Assert.Equal("Restores health.\nSafe on a dead mob.", heal.Documentation);
+    }
+
+    /// <summary>Without a file reader the list still works, just undocumented.</summary>
+    [Fact]
+    public void Documentation_is_empty_when_no_reader_is_supplied()
+    {
+        CompletionResult result = Complete(
+            "/mob/guy\n\t/// Restores health.\n\tproc/heal(amount)\n\t\treturn amount\n"
+            + "/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n");
+
+        CompletionItem heal = result.Items.First(i => i.Name == "heal");
+
+        Assert.Empty(heal.Documentation);
+        Assert.Equal("heal", heal.Name);
+    }
+
     // -- macros --------------------------------------------------------------
 
     /// <summary>

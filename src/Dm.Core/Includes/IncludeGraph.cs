@@ -361,6 +361,8 @@ public sealed class IncludeGraph
                         // the compiler's include-once rule.
                         if (directive.HasArguments && lex.GetText(lex.Tokens[directive.ArgumentStart]) == "multiple")
                             _reincludable.Add(path);
+
+                        KeepIfGrammarPragma(text, lex, directive);
                         break;
 
                     case DirectiveKind.Include when conditionals.IsActive:
@@ -386,6 +388,51 @@ public sealed class IncludeGraph
                     new TextSpan(text.Length, 0),
                     $"{conditionals.Depth} unterminated conditional block(s) at end of file"));
             }
+        }
+
+        /// <summary>
+        /// Puts a <c>#pragma</c> that changes the grammar back into the output stream.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Every other directive is the preprocessor's business and is consumed here.
+        /// <c>#pragma syntax C for</c> and <c>#pragma syntax C switch</c> are not: they change what
+        /// the <b>parser's</b> grammar is from that line onward, and the parser runs on this stream
+        /// after every directive has been stripped out of it. The mode therefore has to ride the
+        /// stream as data, or a body written under a pragma is parsed under the default grammar and
+        /// reports errors on code dm.exe compiles with none.
+        /// </para>
+        /// <para>
+        /// <c>push</c> and <c>pop</c> come along because they scope it. Emitting the <c>syntax</c>
+        /// lines alone would leave a pop unmatched, and the mode would then leak into the rest of
+        /// the file instead of ending where the author ended it.
+        /// </para>
+        /// <para>
+        /// The tokens go out unexpanded and carry no <see cref="MacroExpansion"/>: they are the
+        /// author's own text at their own position, so a diagnostic on the line points at the line.
+        /// A directive carries no indentation of its own (PLAN.md §8), so nothing is emitted into
+        /// the Indent/Dedent bookkeeping — only the trailing Newline the parser needs to know where
+        /// the directive's words stop.
+        /// </para>
+        /// </remarks>
+        private void KeepIfGrammarPragma(SourceText text, LexResult lex, Directive directive)
+        {
+            if (Tokens is null || !directive.HasArguments)
+                return;
+
+            string first = lex.GetText(lex.Tokens[directive.ArgumentStart]);
+
+            if (first is not ("syntax" or "push" or "pop"))
+                return;
+
+            for (int i = directive.HashIndex; i < directive.ArgumentEnd; i++)
+            {
+                Token token = lex.Tokens[i];
+                Tokens.Add(new ExpandedToken(token.Kind, text, token.Span, null));
+            }
+
+            Token last = lex.Tokens[directive.ArgumentEnd - 1];
+            Tokens.Add(new ExpandedToken(TokenKind.Newline, text, new TextSpan(last.Span.End, 0), null));
         }
 
         /// <summary>

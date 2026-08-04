@@ -43,6 +43,10 @@ internal static class Program
                 "symbols" => Symbols(args),
                 "tree" => Tree(args),
                 "complete" => Complete(args),
+                "definition" => Definition(args),
+                "hover" => Hover(args),
+                "wsymbols" => WorkspaceSymbols(args),
+                "query" => Query(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -70,6 +74,8 @@ internal static class Program
         Console.Error.WriteLine("  includes <file.dme>      walk the include graph in compile order");
         Console.Error.WriteLine("      --tree               show nesting instead of a flat list");
         Console.Error.WriteLine("      --orphans            also list .dm files on disk that nothing includes");
+        Console.Error.WriteLine("  outline <file-or-dir>    the declaration structure: types, vars, proc");
+        Console.Error.WriteLine("                           signatures, with any parse problems");
         Console.Error.WriteLine("  symbols <file>           the document outline, as the ABI returns it");
         Console.Error.WriteLine("      --params             include proc parameters");
         Console.Error.WriteLine("      --utf8               columns in UTF-8 bytes instead of UTF-16 units");
@@ -84,6 +90,19 @@ internal static class Program
         Console.Error.WriteLine("      --verbose            with --problems, name a file per problem");
         Console.Error.WriteLine("  complete <dme> <file> <line> <col>   what can be typed there");
         Console.Error.WriteLine("      lines and columns are 1-based here, unlike the ABI");
+        Console.Error.WriteLine("  hover <dme> <file> <line> <col>      the declaration, as a tooltip");
+        Console.Error.WriteLine("  wsymbols <dme> <query>               search the project by name");
+        Console.Error.WriteLine("      --limit <n>          how many hits to show (default 200)");
+        Console.Error.WriteLine("  definition <dme> <file> <line> <col> where the symbol is declared");
+        Console.Error.WriteLine("      several results is normal: types reopen and procs override");
+        Console.Error.WriteLine("  query <file.dme>         browse the tree, as dm_query_json answers it");
+        Console.Error.WriteLine("      --path <path>        the node to browse (default /)");
+        Console.Error.WriteLine("      --depth <n>          levels of children (default 1)");
+        Console.Error.WriteLine("      --subtypes <path>    flat list of everything beneath a path");
+        Console.Error.WriteLine("      --members <path>     a type's vars and procs, inherited included");
+        Console.Error.WriteLine("      --own                with --members, skip what it inherits");
+        Console.Error.WriteLine("      --limit <n>          cap on --subtypes (default 500)");
+        Console.Error.WriteLine("      --no-builtins        the project's own declarations only");
         Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
         Console.Error.WriteLine("      --macros             show tokens that came from a macro");
         Console.Error.WriteLine("      --dump               print every token");
@@ -521,6 +540,229 @@ internal static class Program
     /// Takes 1-based line and column because that is what an editor's status bar shows. The ABI and
     /// the services underneath are 0-based.
     /// </remarks>
+    /// <summary>
+    /// Prints every declaration of the symbol under a position.
+    /// </summary>
+    /// <remarks>
+    /// Several results is the normal case rather than an error: a type is reopened across files and
+    /// a proc has an override chain, and a reader usually wants to see all of them.
+    /// </remarks>
+    /// <summary>
+    /// Browses the object tree the way an IDE panel does, through the same service
+    /// <c>dm_query_json</c> answers with.
+    /// </summary>
+    /// <remarks>
+    /// Rendered as a tree rather than as the raw JSON, because the point of the CLI is to show what
+    /// the library believes. A client comparing bytes should read <c>abi/schema/</c>, which is the
+    /// frozen contract.
+    /// </remarks>
+    private static int Query(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: query needs a .dme");
+            return 1;
+        }
+
+        string path = OptionValue(args, "--path") ?? "/";
+        bool noBuiltins = Array.IndexOf(args, "--no-builtins") >= 0;
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        ObjectTree tree = workspace.GetObjectTree();
+
+        if (OptionValue(args, "--members") is { } memberPath)
+        {
+            TypeMembers? members = TreeQueryService.Members(
+                tree, memberPath, inherited: Array.IndexOf(args, "--own") < 0, includeBuiltins: !noBuiltins);
+
+            if (members is null)
+            {
+                Console.Error.WriteLine($"error: no type '{memberPath}'");
+                return 1;
+            }
+
+            foreach (MemberEntry member in members.Vars)
+                PrintMember(member);
+
+            foreach (MemberEntry member in members.Procs)
+                PrintMember(member);
+
+            Console.Out.WriteLine();
+            Console.Out.WriteLine($"{members.Vars.Count} var(s), {members.Procs.Count} proc(s)");
+            return 0;
+        }
+
+        if (OptionValue(args, "--subtypes") is { } subtypePath)
+        {
+            int limit = OptionValue(args, "--limit") is { } given && int.TryParse(given, out int parsed)
+                ? parsed
+                : TreeQueryService.DefaultSubtypeLimit;
+
+            SubtypeListing? listing = TreeQueryService.Subtypes(
+                tree, subtypePath, limit, includeBuiltins: !noBuiltins);
+
+            if (listing is null)
+            {
+                Console.Error.WriteLine($"error: no type '{subtypePath}'");
+                return 1;
+            }
+
+            foreach (TreeNode node in listing.Types)
+                Console.Out.WriteLine(node.Path);
+
+            Console.Out.WriteLine();
+            Console.Out.WriteLine(
+                $"{listing.Types.Count} subtype(s){(listing.Truncated ? $", CAPPED at {limit}" : string.Empty)}");
+
+            return 0;
+        }
+
+        int depth = OptionValue(args, "--depth") is { } text && int.TryParse(text, out int levels)
+            ? levels
+            : TreeQueryService.DefaultDepth;
+
+        TreeNode? root = TreeQueryService.Browse(tree, path, depth, includeBuiltins: !noBuiltins);
+
+        if (root is null)
+        {
+            Console.Error.WriteLine($"error: no type '{path}'");
+            return 1;
+        }
+
+        PrintNode(root, 0);
+        return 0;
+
+        static void PrintNode(TreeNode node, int indent)
+        {
+            string counts = $"{node.VarCount}v {node.ProcCount}p";
+            string more = node.Children.Count < node.ChildCount ? $" (+{node.ChildCount - node.Children.Count})" : "";
+            string marks = (node.Declared ? "" : " [implied]") + (node.Builtin ? " [builtin]" : "");
+
+            Console.Out.WriteLine($"{new string(' ', indent * 2)}{node.Path}   {counts}{more}{marks}");
+
+            foreach (TreeNode child in node.Children)
+                PrintNode(child, indent + 1);
+        }
+
+        static void PrintMember(MemberEntry member)
+        {
+            string from = member.Inherited ? $"   from {member.Owner}" : string.Empty;
+            string builtin = member.Builtin ? "  [builtin]" : string.Empty;
+
+            Console.Out.WriteLine(
+                $"{member.Kind.ToString().ToLowerInvariant(),-8} {member.Detail}{from}{builtin}");
+        }
+    }
+
+    private static int WorkspaceSymbols(string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("error: wsymbols needs <dme> <query>");
+            return 1;
+        }
+
+        int limit = WorkspaceSymbolService.DefaultLimit;
+        if (OptionValue(args, "--limit") is { } given && int.TryParse(given, out int parsed))
+            limit = parsed;
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+
+        IReadOnlyList<WorkspaceSymbol> hits = WorkspaceSymbolService.Search(
+            workspace.GetObjectTree(), args[2], limit);
+
+        foreach (WorkspaceSymbol hit in hits)
+        {
+            SourceText text = workspace.GetDocument(hit.File).Text;
+            LinePosition at = text.GetLinePosition(hit.NameSpan.Start);
+
+            Console.Out.WriteLine(
+                $"{hit.Kind.ToString().ToLowerInvariant(),-8} {hit.Detail}"
+                + $"   {Relative(workspace.RootDirectory, hit.File)}({at.Line + 1},{at.Character + 1})");
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{hits.Count} hit(s)");
+        return 0;
+    }
+
+    private static int Hover(string[] args)
+    {
+        if (args.Length < 5)
+        {
+            Console.Error.WriteLine("error: hover needs <dme> <file> <line> <col>");
+            return 1;
+        }
+
+        if (!int.TryParse(args[3], out int line) || !int.TryParse(args[4], out int column))
+        {
+            Console.Error.WriteLine("error: line and column must be numbers");
+            return 1;
+        }
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        Document document = workspace.GetDocument(args[2]);
+
+        HoverResult? hover = HoverService.HoverAt(
+            workspace.GetObjectTree(), document, line - 1, column - 1);
+
+        if (hover is null)
+        {
+            Console.Out.WriteLine("nothing to show here");
+            return 0;
+        }
+
+        Console.Out.WriteLine(hover.Detail);
+        Console.Out.WriteLine(hover.Signature);
+
+        if (hover.Documentation.Length > 0)
+        {
+            Console.Out.WriteLine();
+            Console.Out.WriteLine(hover.Documentation);
+        }
+
+        return 0;
+    }
+
+    private static int Definition(string[] args)
+    {
+        if (args.Length < 5)
+        {
+            Console.Error.WriteLine("error: definition needs <dme> <file> <line> <col>");
+            return 1;
+        }
+
+        if (!int.TryParse(args[3], out int line) || !int.TryParse(args[4], out int column))
+        {
+            Console.Error.WriteLine("error: line and column must be numbers");
+            return 1;
+        }
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        Document document = workspace.GetDocument(args[2]);
+
+        IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
+            workspace.GetObjectTree(), document, line - 1, column - 1);
+
+        if (found.Count == 0)
+        {
+            Console.Out.WriteLine("no definition found");
+            return 0;
+        }
+
+        foreach (DefinitionLocation location in found)
+        {
+            SourceText text = workspace.GetDocument(location.File).Text;
+            LinePosition at = text.GetLinePosition(location.NameSpan.Start);
+
+            Console.Out.WriteLine($"{location.File}({at.Line + 1},{at.Character + 1}): {location.Detail}");
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{found.Count} declaration(s)");
+        return 0;
+    }
+
     private static int Complete(string[] args)
     {
         if (args.Length < 5)
@@ -545,7 +787,8 @@ internal static class Program
             document,
             line - 1,
             column - 1,
-            workspace.GetMacroNames());
+            workspace.GetMacroNames(),
+            workspace.GetFileText);
 
         Console.Out.WriteLine($"context: {result.Context}");
 
@@ -554,6 +797,13 @@ internal static class Program
             string mark = item.IsBuiltin ? "*" : " ";
             string detail = string.IsNullOrEmpty(item.Detail) ? string.Empty : $"   {item.Detail}";
             Console.Out.WriteLine($" {mark} {item.Kind.ToString().ToLowerInvariant(),-9} {item.Name}{detail}");
+
+            // The first line only: a completion list is a list, not a documentation browser.
+            if (item.Documentation.Length > 0)
+            {
+                string first = item.Documentation.Split('\n')[0];
+                Console.Out.WriteLine($"                  {first}");
+            }
         }
 
         Console.Out.WriteLine();

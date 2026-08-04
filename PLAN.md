@@ -3,7 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M5 complete · M6 completion ships through ABI 0.4; inference remains** · Last updated: 2026-08-03
+> Status: **M0–M7 complete · ABI 0.11 · next is M8 (`.dmi`) or M9 (incrementality)**
+> · Last updated: 2026-08-03
 
 ---
 
@@ -383,20 +384,23 @@ byond-lang-server/
       Syntax/      Lexer, DeclarationParser, ExpressionParser, StatementParser, TokenKind
       Preprocessing/  Preprocessor, MacroTable, MacroExpander, ConditionalEvaluator
       Includes/    IncludeGraph, IncludeDirective
-      Symbols/     ObjectTree, TypeSymbol, ProcSymbol, VarSymbol, TypePath, Builtins
-      Binding/     Binder, SemanticModel, Scope, TypeResolver                [M6/M7]
+      Symbols/     ObjectTree, TypeTreeBuilder, TypePath, RelativePath, Builtins,
+                   Symbols (TypeSymbol / ProcSymbol / VarSymbol)
+      Binding/     TypeInference
       Services/    ClassificationService, CompletionService, DocumentSymbolService,
-                   HoverService [M7], DefinitionService [M7], DiagnosticService [M11]
+                   DefinitionService, HoverService, WorkspaceSymbolService,
+                   TreeQueryService, SemanticContext, DocComments,
+                   DiagnosticService [M11]
       Resources/   builtins.txt   (BYOND stdlib type tree)
     Dm.Assets/     DmiReader (PNG zTXt -> icon states)                       [M8]
     Dm.Native/     Exports.cs, HandleTable.cs, marshal helpers -> dm_core.dll
     Dm.Lsp/        JSON-RPC server over Dm.Core                              [M10]
     Dm.Cli/        dev driver: scan / dump-tokens / classify / includes / preprocess /
-                   outline / symbols / tree / complete
+                   outline / symbols / tree / complete / definition / hover / wsymbols / query
   abi/
     dm_core.h      hand-written C header, source of truth for the ABI
     dm_core.hpp    optional C++ RAII wrapper for the Qt client               [M7]
-    schema/        JSON schemas for bulk query requests/responses            [M7]
+    schema/        JSON schemas for the bulk query requests and responses
   editors/
     vscode/        extension + TextMate grammar                              [M10]
   tools/
@@ -430,12 +434,12 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.49 MB, 14 exports) via NativeAOT.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.4. Reference integration for the
-  Qt client, and the only thing that proves the published binary links and runs from C++ rather
-  than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 523 today. Handle validation, UTF-8
-  marshalling, snapshot helper.
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.88 MB, 19 exports) via NativeAOT.
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.11 and passing 110 checks. Reference
+  integration for the Qt client, and the only thing that proves the published binary links and runs
+  from C++ rather than merely that the managed side behaves.
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 609 today (577 core, 32 native). Handle
+  validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
   platform-independent — while the native job runs per RID, since NativeAOT produces a separate
@@ -482,7 +486,8 @@ Deferred to the parser, not the lexer:
   `Identifier` followed by the operator tokens; the parser reassembles. This is why `operator:=`
   needs no special lexer handling.
 
-Still open: whether a brace block can contain indentation-structured sub-blocks (question 7).
+Question 7 is answered: a brace block **can** contain indentation-structured sub-blocks, and the
+two nest freely. See §8.
 
 ### M2 — Lexical classification ✅ → first visible feature
 
@@ -623,19 +628,21 @@ order — the same ordering that decides override resolution and the §4a path a
 - ✅ `#pragma syntax` mode tracking via `SyntaxModes`, shared between the declaration and statement
   parsers because the pragma sits at file level while the grammar it changes is used inside bodies.
   The mode is read where a statement **starts**, so a later `#pragma pop` cannot retroactively
-  change how it parsed.
+  change how it parsed. The pragma also **survives preprocessing**: it is the one directive kind the
+  parser rather than the preprocessor consumes, so `IncludeGraph` emits `syntax`, `push` and `pop`
+  back into the stream instead of stripping them with the rest. Otherwise a body written under one
+  is parsed with the default grammar and reports errors on code `dm.exe` accepts.
 - ⬜ Parameter defaults still come from the range scan in `ReadParameter`, not the expression parser.
 - ✅ Parse the preprocessed stream rather than raw per-file tokens, and it is now the default.
   `TokenSource` lets the parsers read tokens whose text and position come from different files,
   `PreprocessedSplitter` gathers the project stream back into per-file runs, and `dmc tree --raw`
   keeps the old path for comparison. **Exact on mlaas: 1493/1493 vars and 1153/1153 procs against
   `dm.exe -o`, with nothing invented.** §9 has the numbers and the three bugs it took to get there.
-- ⬜ Accept injected defines. `dm.exe -DNAME`, `-DNAME=value` and `-DFN(x)=...` all work, and bare
+- ✅ Accept injected defines. `dm.exe -DNAME`, `-DNAME=value` and `-DFN(x)=...` all work, and bare
   `-DNAME` defines it empty rather than `1` (§8). A project whose build passes `-D` flags compiles a
-  different program from the one we analyse without them, so `Workspace.Open` needs an optional
-  define set seeded into the `MacroTable` before the include walk, with a `dmc --define` flag and an
-  ABI parameter to match. Belongs with the preprocessed-stream work above, since both change what
-  the parser is fed.
+  different program from the one we analyse without them, so the set is seeded into the `MacroTable`
+  before the include walk: `IncludeOptions.Defines` is the library entry point, every `dmc` command
+  that reads a `.dme` takes `-DNAME`, and `dm_set_defines` carries it across the ABI at 0.5.
 - ✅ `DocumentSymbolService`, value-shaped and taking an explicit position encoding, with a
   selection range covering the name alone so an outline can navigate and a rename knows what to
   replace. `dmc symbols` drives it, and it ships through `dm_document_symbols` at ABI 0.3 with the
@@ -766,7 +773,7 @@ completion list after `mob.`.
   Do not vendor `stddef.dm` into the repo — it is BYOND-generated output and this repo is public.
   `tools/builtins-gen` locates or regenerates it from the local install.
 
-### M6 — Binder, semantic model, completion *(completion works)*
+### M6 — Binder, semantic model, completion ✅
 
 - ✅ `CompletionService.CompleteAt`, with the scope chain: locals, then the enclosing proc's
   parameters, then the members of the type it is on including everything inherited, then globals.
@@ -846,13 +853,58 @@ untyped, so `.` cannot compile here — write `var/obj/item/x`"*.
 - **Semantic classification refinement** — with the object tree available, upgrade M2's lexical
   spans to distinguish user types from builtins, procs from vars, and macro-introduced identifiers.
 
-### M7 — Workspace symbols, navigation, bulk queries → team v1
+### M7 — Workspace symbols, navigation, bulk queries → team v1 ✅
 
-- Workspace symbol search, go-to-definition on type paths and proc names, hover rendering the
-  declaration plus preceding `///` doc comment.
-- Bulk `dm_query_json` operations: full object tree, subtypes of a path, all symbols in a file.
-  These back the IDEs' tree-browser panels.
-- Freeze JSON schemas in `abi/schema/`, versioned separately from the binary.
+- ✅ Go-to-definition, in `DefinitionService`. Resolves a type path (absolute or the §4a relative
+  form), a member through its receiver, and a bare name against the enclosing type then globals.
+  `dmc definition <dme> <file> <line> <col>` drives it.
+
+  **It returns a list, never one location.** DM declares a symbol in several places as a matter of
+  course — a type is reopened across files, a proc has an override chain — and collapsing that would
+  pick one arbitrarily and hide the rest, in exactly the codebases that reopen most. The chain comes
+  back nearest-first, which is the order a reader wants since the nearest is what a call reaches.
+
+  Receiver resolution is shared with `CompletionService` rather than reimplemented, so the two agree
+  about what a receiver is by construction. A disagreement between them would be silent and awful to
+  track down; sharing makes it impossible.
+- ✅ Hover, in `HoverService`, shipping as `dm_hover_at` at ABI 0.7. Renders the resolved path, the
+  declaration as written, and the `///` run above it. Resolution goes through `DefinitionService`
+  rather than repeating it, so the two cannot disagree about which symbol a position means.
+  A blank line or a plain `//` ends the doc run, matching what a reader takes to be attached.
+  Nothing-to-show is an empty object with `DM_OK`, since a pointer on whitespace is the common case.
+- ✅ Workspace symbol search, in `WorkspaceSymbolService`, shipping as `dm_workspace_symbols` at
+  ABI 0.8. Ranked rather than merely filtered — exact, then prefix, then substring, shorter names
+  first — because a two-character query on a real project matches tens of thousands of symbols and
+  an unranked list of them is not a picker. Capped at 200 by default. Builtins are excluded: nothing
+  declares them, so a hit could not be opened.
+- ✅ `///` documentation on completion items as well as hover, sharing `DocComments`. Populated only
+  when the caller supplies a file reader, since a member's comment lives where it was declared
+  rather than in the file being completed in; the workspace supplies one and already caches
+  documents, so the cost is span arithmetic rather than repeated reads.
+- ✅ Bulk `dm_query_json` at ABI 0.11, with `abi/schema/` frozen. Three queries: `objectTree` for
+  one node and its children to a depth, `subtypesOf` for a flat capped listing, and `members` for a
+  type's vars and procs with inheritance resolved. `TreeQueryService` holds the shaping so the LSP
+  shell answers `dm/objectTree` from the same code; `QueryJson` is the boundary. `dmc query` drives
+  it.
+- ✅ `/** ... */` block doc comments as well as `///`. Measured on /tg/station before building:
+  4,870 files use `///` and **1,784 use blocks**, so recognising only the first returned nothing for
+  a large fraction of documented code. A plain `/*` is deliberately excluded — treating one as
+  documentation would attach commented-out code to whatever followed it.
+- ✅ Proc signatures keep each parameter's **type and `as` clause**, not just its name. The parser
+  had both and `TypeTreeBuilder` was discarding them, so completion showed `heal(target, amount)`
+  for a proc whose source reads `heal(mob/target, amount as num)`. This is the reason DM needs no
+  `@param` convention: the information is in the declaration, so a signature derived from it cannot
+  drift out of date the way a comment can.
+- ⬜ **Not doing `@param` tags.** Measured too: ~200 occurrences across 1.5M lines, spelled
+  `@param`/`@params` and `@return`/`@returns` — the codebase does not agree with itself, so parsing
+  them into structured fields would mean inventing a standard rather than matching one. The text
+  passes through verbatim, so a client that wants to render tags can. Revisit if a convention
+  settles.
+Two decisions worth keeping. A node reports `childCount` rather than only the children it carries,
+so a depth-limited response still tells a panel whether to draw an expander — without it every
+collapsed row costs a second call. And a capped listing reports `truncated` rather than leaving the
+caller to compare counts, because a list exactly as long as the limit is indistinguishable from one
+that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is lying.
 
 ### M8 — `.dmi` icon states *(independent; schedule anytime)*
 
@@ -894,17 +946,26 @@ because nothing else in a DM toolchain reports them. The parser has to model the
 
 | Construct | What DM does | Warning to raise |
 |---|---|---|
-| `proc` block indented inside a `var` block (§8) | accepts it, declares nothing; calling it is a runtime error | *"this proc is discarded — the `proc` block is inside a `var` block"* |
+| `proc` block indented inside a `var` block (§8) | accepts it, declares nothing; calling it is a runtime error | **shipped as `DM0300`** — the parser declares nothing there and warns instead |
 | A var name colliding with a builtin (`x`/`y` on an atom) | duplicate-definition **error** | already fatal; surface it early |
 | `proc/` declared twice on one type | duplicate-definition error | `ProcSymbol.DeclaringCount > 1` |
 | A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
 | `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | *"`x` is untyped, so `.` cannot compile here — write `var/obj/item/x`"*. This is the warning half of the M6 completion trade, and the fix is a quick-edit rather than prose. |
 
-The first one is worth ranking above the rest. It was found in a shipped game where four mission
-procs were declared that way and one is called from another file — a runtime error sitting on a code
-path, with a clean build. Our tree *saw* those four while the compiler reported nothing, so the
-information exists the moment the parser is correct; it must become a warning rather than being
-discarded to match.
+The first one is **done**, and it is the shape the rest should follow. It was found in a shipped game
+where four mission procs were declared that way and one is called from another file — a runtime
+error sitting on a code path, with a clean build. Our tree *saw* those four while the compiler
+reported nothing, so the information existed the moment the parser was correct.
+
+`DeclarationParser` now declares nothing under a `proc`/`verb` header reached inside a `var` block,
+which is what `dm.exe` does, and reports `DM0300` on the header, which is what `dm.exe` does not.
+The diagnostic rides along in `dm_document_symbols` with the syntax errors, so clients get it with
+no new call. It closed the last real gap on madridspy: **507/507 procs and 1231/1231 vars**, with
+the single remaining extra being `/icon ChangeOpacity` — the `-o` blind spot below, where ours is
+the correct answer.
+
+`DM03xx` is the range for this class: code that compiles clean and does not mean what it looks like.
+An error would be wrong, since the file does compile.
 
 **Diagnostics must join the compiler's warning vocabulary, not run beside it.** `#pragma
 ignore|warn|error <names>` and `-ignore/-warn/-error` share one set of identifiers, and a project
@@ -925,29 +986,41 @@ Daemon and is effectively a separate project.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.4, 14 exports: version, last error, free, workspace
-open/close/root, buffer set/close, classify plus its three accessors, document symbols, and
-completion. Everything listed below is implemented; `dm_query_json` is the one entry still ahead of
-the code, and lands at M7.
+`abi/dm_core.h` is the source of truth. ABI 0.11, 19 exports: version, last error, free, workspace
+open/close/root, injected defines, buffer set/close, classify plus its three accessors, document
+symbols, completion, definition, hover, workspace symbols and bulk queries. Everything listed below
+is implemented, and `abi/schema/` freezes the bulk request and response shapes.
 
 **Hot path — handles and accessors:**
 ```c
 int32_t     dm_abi_version(void);
-dm_status   dm_workspace_open(const char* dme_path, dm_workspace** out);
-void        dm_workspace_close(dm_workspace*);
-dm_status   dm_workspace_root(dm_workspace*, char** out_root);
-dm_status   dm_set_buffer(dm_workspace*, const char* file, const char* utf8, int32_t len);
-dm_status   dm_classify_range(dm_workspace*, const char* file, int32_t start_line,
-                              int32_t end_line, dm_span_list** out);          /* M2 */
-dm_status   dm_document_symbols(dm_workspace*, const char* file, int32_t encoding,
-                                char** out_json);                              /* M4 */
-dm_status   dm_complete_at(dm_workspace*, const char* file, int32_t line, int32_t character,
-                           int32_t encoding, char** out_json);                 /* M6 */
+dm_status   dm_workspace_open(const char* dme_path, dm_workspace* out_workspace);
+void        dm_workspace_close(dm_workspace);
+dm_status   dm_workspace_root(dm_workspace, char** out_root);
+dm_status   dm_set_defines(dm_workspace, const char* const* defines, int32_t count);   /* 0.5 */
+dm_status   dm_set_buffer(dm_workspace, const char* file, const char* content, int32_t length);
+dm_status   dm_close_buffer(dm_workspace, const char* file);
+dm_status   dm_classify_range(dm_workspace, const char* file, int32_t start_line,
+                              int32_t end_line, dm_position_encoding,
+                              dm_classification* out_classification);          /* M2, 0.2 */
+int32_t     dm_classification_count(dm_classification);
+const int32_t* dm_classification_data(dm_classification);
+void        dm_classification_free(dm_classification);
+dm_status   dm_document_symbols(dm_workspace, const char* file, dm_position_encoding,
+                                char** out_json);                              /* M4, 0.3 */
+dm_status   dm_complete_at(dm_workspace, const char* file, int32_t line, int32_t character,
+                           dm_position_encoding, char** out_json);             /* M6, 0.4 */
+dm_status   dm_definition_at(dm_workspace, const char* file, int32_t line, int32_t character,
+                             dm_position_encoding, char** out_json);           /* M7, 0.6 */
+dm_status   dm_hover_at(dm_workspace, const char* file, int32_t line, int32_t character,
+                        dm_position_encoding, char** out_json);                /* M7, 0.7 */
+dm_status   dm_workspace_symbols(dm_workspace, const char* query, int32_t limit,
+                                 dm_position_encoding, char** out_json);       /* M7, 0.8 */
 ```
 
 **Bulk path — serialized:**
 ```c
-dm_status   dm_query_json(dm_workspace*, const char* request_utf8, char** out_response);
+dm_status   dm_query_json(dm_workspace, const char* request, char** out_json);   /* M7, 0.11 */
 void        dm_free(void* ptr);
 char*       dm_last_error(void);
 ```
@@ -1164,6 +1237,7 @@ that the two candidate behaviours produce different compiler output.
 | **`.` and `:` on an untyped receiver are checked differently.** | With `var/x` and no type: `x.hp` fails and so does `x.nowhere_at_all`, but `x:hp` compiles while `x:nowhere_at_all` fails. `.` rejects everything; `:` asks whether the name exists as a member of *any* type in the program. Untyped is not unchecked, and the correct completion list after `x.` is empty while after `x:` it is every member name in the program. |
 | **The degradation to `:` is a property of the expression, not of the unknown type.** | `mk().elsewhere` compiles, but `var/x = mk()` then `x.elsewhere` does not. Both have an equally unknowable type; putting a variable in the way flips the answer. |
 | **`dm.exe -D` injects preprocessor defines.** | `-DNAME`, `-DNAME=value` and `-DFN(x)=((x)*2)` all compile. Bare `-DNAME` defines it **empty**, not `1`: `#if NAME == 1` then fails with *"unexpected token: =="*, matching `#define NAME` with no body. A project built with `-D` flags is a different program from the one we analyse without them. |
+| **A brace block can contain indentation-structured sub-blocks, and the two nest freely.** | `/obj/one {` with an indented `var` block under it, `/obj/two {` with a proc whose body is indented, and `/obj/three {` with a subtype declared by indentation all produce a tree **identical** to the same three written with indentation alone — checked in `-o` rather than inferred from a clean compile. Layout keeps its full meaning inside the braces. This was open question 7 from M4, and our parser disagreed with the answer: it lost the members and reported an error per line. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -1262,11 +1336,19 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   stress test and free to obtain.
 - **Differential testing against `dm.exe`.** Three flags make the compiler answer a question we also
   answer, so the check is a diff rather than a judgement call: `-o` for the object tree, `-l` for the
-  include graph, `-code_tree` for declarations. `-o` already found three declaration bugs. Wiring
-  `dmc includes` against `-l` over the corpus is the cheapest one left and needs no new machinery —
-  both produce an ordered file list. Worth doing before M9 makes the include walk incremental, since
-  that is exactly the change most likely to reorder it silently.
-- **CLI driver** — `Dm.Cli dump-tokens|classify|dump-ast|dump-tree|complete|check game.dme`.
+  include graph, `-code_tree` for declarations. `-o` already found three declaration bugs. **`-l` is
+  now checked too, and `dmc includes` matches it exactly on mlaas** — 102 of 102 source files,
+  nothing missing and nothing extra. Re-run it when M9 makes the include walk incremental, since that
+  is the change most likely to reorder the walk silently. `-code_tree` is the one oracle still
+  unwired.
+
+  One wrinkle worth knowing: **`-l` lists every file the build touches, not just the include
+  graph.** On mlaas it reports 234 entries where the include graph has 102, the difference being
+  resource files — `.dmi` icons pulled in by resource literals rather than by `#include`. Filter to
+  `.dm`/`.dme`/`.dmf`/`.dmm` before diffing, or the comparison reports 132 phantom misses. That also
+  makes `-l` the obvious oracle for resource resolution later, when `FILE_DIR` handling matters.
+- **CLI driver** — `dmc scan|dump-tokens|classify|includes|preprocess|outline|symbols|tree|complete|
+  definition|hover|wsymbols`, all taking `-DNAME` where they read a `.dme`.
   Fastest debug loop, and the arbiter when an IDE reports a bug: if the CLI reproduces it, the bug
   is in the core.
 - **ABI smoke test** — `tests/abi-smoke` builds via CMake, links `dm_core`, exercises the boundary.
@@ -1341,11 +1423,14 @@ by reasoning about the count:
   *"expected an expression"* along behind it. `TokenSource.HasWhitespaceBefore` now captures the
   fact against the token's real location, where it is still knowable. Fixing it took parse problems
   from 1,630 to 102.
-- **`#pragma syntax` does not survive preprocessing.** Directive lines are consumed, so the
-  statement parser never sees `C for` / `C switch` and parses those bodies under the default
-  grammar. Confirmed on a fixture: both pragma forms parse clean raw and fail preprocessed. Barely
-  visible in this bench — /tg/station has 31 pragmas and no `syntax` ones — but it is a real hole,
-  and the state has to ride the stream as data.
+- **`#pragma syntax` did not survive preprocessing.** Directive lines are consumed, so the statement
+  parser never saw `C for` / `C switch` and parsed those bodies under the default grammar. Confirmed
+  on a fixture that `dm.exe` compiles with 0 errors: it parsed clean raw and produced 10 diagnostics
+  preprocessed. Barely visible in this bench — /tg/station has 31 pragmas and no `syntax` ones — but
+  it is a real hole, and **fixed**: `IncludeGraph` now puts `#pragma syntax`, `push` and `pop` back
+  into the output stream, where the parser's existing directive handling picks them up. Every other
+  directive stays consumed. `push`/`pop` go along because they scope it — emitting the `syntax`
+  lines alone would leave a pop unmatched and the mode would leak to the end of the file.
 
 **The reference is reproducible, and `dm.exe` handles /tg/station fine.** `dm.exe -o -DCBT
 tgstation.dme` exits 0 with zero errors and produces a file byte-identical to the `objtree.xml` we
@@ -1476,7 +1561,7 @@ it.
 | 4 | MSVC tooling for NativeAOT | M0 | **Resolved** — present and verified. |
 | 5 | Third IDE's language | Nothing; may justify a prebuilt binding package | Open |
 | 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | Deferred |
-| 7 | Can a brace block contain indented sub-blocks? | M4 | Open — needs a compiler experiment |
+| 7 | Can a brace block contain indented sub-blocks? | M4 | **Resolved** — yes, and the two nest freely. `-o` prints an identical tree for the braced and indented forms. See §8. |
 | 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
 | 10 | Source encoding: some old files are Windows-1252, not UTF-8 | M3 | **Resolved** — `SourceFileReader` detects it. |
 | 11 | What does `#include` do inside a false `#ifdef`? | M3 | **Resolved** — not followed. `IncludeGraph` walks includes only while `ConditionalStack.IsActive`. |
@@ -1538,3 +1623,39 @@ it.
   §5 relabelled as the target layout with the unbuilt parts marked; `builtins.json` corrected to
   `builtins.txt` throughout. `INTEGRATION.txt` had listed M5 and M6 twice and still described
   syntax diagnostics as unshipped.
+- **2026-08-03** — Brace blocks at declaration level, which took /tg/station from 96.00% to 99.99%
+  on vars and 97.90% to 99.92% on procs. Recorded in §9 along with the aggregation lesson: the same
+  misses grouped by owner looked like a long tail and grouped by member name showed one shared
+  cause.
+- **2026-08-03** — CI matrix landed. Managed tests run once; all five RIDs publish, link
+  `abi-smoke` and execute it. Both local gotchas are handled in the workflow rather than
+  rediscovered — vswhere on PATH, and an assertion that the published binary still exists.
+- **2026-08-03** — M6 closed: semantic classification kinds 12–15, leading-`.` relative path
+  resolution, and the project's macros in the bare-identifier list.
+- **2026-08-03** — M7 navigation landed: `DefinitionService` at ABI 0.6, `HoverService` at 0.7 and
+  `WorkspaceSymbolService` at 0.8, with `///` and `/** */` doc comments shared between hover and
+  completion. Both doc forms were measured on /tg/station first — 4,870 files use `///` and 1,784
+  use blocks — and `@param` tags were measured and deliberately left unparsed. Proc signatures now
+  keep each parameter's type and `as` clause, which the symbol layer had been discarding.
+- **2026-08-03** — `-l` checked against `dmc includes`: exact on mlaas, 102 of 102 source files.
+  §9 records the wrinkle that makes the naive diff look catastrophic — `-l` lists every file the
+  build touches, resources included.
+- **2026-08-03** — Doc sync. §7 had described ABI 0.4 with 14 exports against a tree shipping 0.9
+  with 18; the header's signatures are now reproduced as written. M6 marked complete, injected
+  defines moved out of the M4 remainder, and §5's service and CLI lists brought to what exists.
+- **2026-08-03** — The first M11 warning ships early because the parser had to model it anyway: a
+  `proc` block inside a `var` block now declares nothing, matching `dm.exe`, and reports `DM0300`
+  instead of dropping it silently. madridspy reaches 507/507 procs against `-o`. Diagnostics gained
+  a `severity` field across the ABI at 0.10, since a warning that a client cannot tell from a syntax
+  error is not much use.
+- **2026-08-03** — M7 closed: `dm_query_json` at ABI 0.11 with `TreeQueryService` behind it and
+  `abi/schema/` frozen. The shaping lives in `Dm.Core` so the M10 LSP shell answers
+  `dm/objectTree` from the same code rather than growing its own.
+- **2026-08-03** — Open question 7 answered by compiling it: a brace block **can** hold
+  indentation-structured sub-blocks, and `-o` prints an identical tree for the braced and the
+  indented form. Our parser disagreed on all three shapes tested, losing the members and
+  reporting an error per line, and a second bug had a brace block swallow the declarations after
+  it. Both fixed; the finding is in §8 and in the language notes.
+- **2026-08-03** — `#pragma syntax` now survives preprocessing. It is the one directive the parser
+  rather than the preprocessor consumes, so the walk emits it back into the stream along with the
+  `push`/`pop` that scope it.

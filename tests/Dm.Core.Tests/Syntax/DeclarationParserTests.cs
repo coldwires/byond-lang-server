@@ -1,3 +1,4 @@
+using Dm.Core.Diagnostics;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -397,5 +398,179 @@ public class DeclarationParserTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Root.Declarations.Count);
+    }
+
+    // -- brace blocks -------------------------------------------------------
+
+    /// <summary>
+    /// The shape macro-generated code produces, since a <c>\</c>-continued macro body has no lines
+    /// to indent. tgstation's ADMIN_VERB family is exactly this, all on one logical line.
+    /// </summary>
+    [Fact]
+    public void A_brace_block_holds_declarations_separated_by_semicolons()
+    {
+        ParseResult result = Parse("/datum/av/x { name = \"n\"; desc = \"d\" }\n");
+
+        Assert.Empty(result.Diagnostics);
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+
+        // Both overrides are here: a `;` between names carries them as siblings of one
+        // declaration, the same shape `var/a; b` produces.
+        VarDeclarationSyntax first = Assert.IsType<VarDeclarationSyntax>(Assert.Single(type.Members));
+        Assert.Equal("name", first.Name);
+        Assert.Equal("desc", Assert.Single(first.Siblings).Name);
+    }
+
+    /// <remarks>
+    /// dm.exe puts `/datum/av/x` and `/datum/av/y` side by side under `/datum/av`. The object tree
+    /// agreed already, because it attributes by full path and a wrongly nested absolute path still
+    /// lands in the right place — so only the outline showed it, with `y` drawn inside `x`.
+    /// </remarks>
+    [Fact]
+    public void A_declaration_after_a_brace_block_is_a_sibling_of_it()
+    {
+        ParseResult result = Parse("/datum/av/x { name = \"n\" }\n\n/datum/av/y\n\tname = \"n\"\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Root.Declarations.Count);
+    }
+
+    /// <remarks>
+    /// Compiler-verified (PLAN.md §8): braces and indentation nest freely, and the braced form
+    /// produces a tree identical to the all-indented one in <c>dm.exe -o</c>. We used to ignore the
+    /// Indent inside the braces, which lost the members and reported an error per line.
+    /// </remarks>
+    [Fact]
+    public void A_brace_block_can_hold_an_indented_var_block()
+    {
+        ParseResult result = Parse("/obj/one {\n\tvar\n\t\ta = 1\n\t\tb = 2\n}\n");
+
+        Assert.Empty(result.Diagnostics);
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        TypeDeclarationSyntax varBlock = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(type.Members));
+
+        Assert.Equal(2, varBlock.Members.Count);
+        Assert.Equal(new[] { "a", "b" }, varBlock.Members.Select(m => m.Name).ToArray());
+    }
+
+    [Fact]
+    public void A_brace_block_can_hold_a_proc_with_an_indented_body()
+    {
+        ParseResult result = Parse("/obj/two {\n\tproc/f()\n\t\treturn 1\n}\n");
+
+        Assert.Empty(result.Diagnostics);
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        Assert.IsType<ProcDeclarationSyntax>(Assert.Single(type.Members));
+    }
+
+    [Fact]
+    public void A_brace_block_can_hold_a_subtype_declared_by_indentation()
+    {
+        ParseResult result = Parse("/obj/three {\n\tsub\n\t\tvar/c = 1\n}\n");
+
+        Assert.Empty(result.Diagnostics);
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        TypeDeclarationSyntax sub = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(type.Members));
+
+        Assert.Equal("sub", sub.Name);
+        Assert.IsType<VarDeclarationSyntax>(Assert.Single(sub.Members));
+    }
+
+    /// <summary>
+    /// The control the compiler run used: the braced and indented forms have to agree, since
+    /// <c>dm.exe -o</c> prints the same tree for both.
+    /// </summary>
+    [Fact]
+    public void The_braced_and_indented_forms_declare_the_same_thing()
+    {
+        ParseResult braced = Parse("/obj/x {\n\tvar\n\t\ta = 1\n}\n");
+        ParseResult indented = Parse("/obj/x\n\tvar\n\t\ta = 1\n");
+
+        static string Shape(DeclarationSyntax declaration)
+        {
+            string children = string.Join(
+                ",",
+                declaration is TypeDeclarationSyntax type
+                    ? type.Members.Select(Shape)
+                    : Enumerable.Empty<string>());
+
+            return $"{declaration.GetType().Name}:{declaration.Name}({children})";
+        }
+
+        Assert.Equal(
+            Shape(Assert.Single(indented.Root.Declarations)),
+            Shape(Assert.Single(braced.Root.Declarations)));
+    }
+
+    // -- declarations the compiler discards ---------------------------------
+
+    /// <remarks>
+    /// dm.exe compiles this with 0 errors and 0 warnings and declares nothing: `vanished` is not a
+    /// proc, not a var, and absent from `vars`. See PLAN.md §8 and §18 of the language notes, which
+    /// runs it. The sibling var beside it is unaffected, which is why nothing looks wrong.
+    /// </remarks>
+    [Fact]
+    public void A_proc_block_inside_a_var_block_declares_nothing()
+    {
+        ParseResult result = Parse("/datum/swallowed\n\tvar\n\t\tkept = 1\n\t\tproc\n\t\t\tvanished()\n");
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        TypeDeclarationSyntax varBlock = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(type.Members));
+
+        DeclarationSyntax kept = Assert.Single(varBlock.Members);
+        Assert.IsType<VarDeclarationSyntax>(kept);
+        Assert.Equal("kept", kept.Name);
+    }
+
+    /// <summary>
+    /// Dropping them silently would match the compiler and help nobody: nothing else in a DM
+    /// toolchain reports this, and the author's proc does not exist at runtime.
+    /// </summary>
+    [Fact]
+    public void A_discarded_proc_block_is_reported_as_a_warning()
+    {
+        ParseResult result = Parse("/datum/swallowed\n\tvar\n\t\tkept = 1\n\t\tproc\n\t\t\tvanished()\n");
+
+        Diagnostic diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("DM0300", diagnostic.Id);
+        Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
+
+        // Anchored on the misplaced header, which is the line to dedent.
+        Assert.Equal("proc", result.Text.ToString(diagnostic.Span));
+    }
+
+    /// <summary><c>verb</c> is the same shape and the same outcome.</summary>
+    [Fact]
+    public void A_verb_block_inside_a_var_block_is_discarded_too()
+    {
+        ParseResult result = Parse("/mob\n\tvar\n\t\tverb\n\t\t\tsay_hi()\n");
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        TypeDeclarationSyntax varBlock = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(type.Members));
+
+        Assert.Empty(varBlock.Members);
+        Assert.Equal("DM0300", Assert.Single(result.Diagnostics).Id);
+    }
+
+    /// <summary>
+    /// The negative control: one level out, the same block is an ordinary proc group and declares
+    /// the proc. Without this the test above would pass against a parser that dropped every proc.
+    /// </summary>
+    [Fact]
+    public void A_proc_block_beside_the_var_block_still_declares()
+    {
+        ParseResult result = Parse("/datum/kept\n\tvar\n\t\tkept = 1\n\tproc\n\t\tsurvives()\n");
+
+        Assert.Empty(result.Diagnostics);
+
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        Assert.Equal(2, type.Members.Count);
+
+        TypeDeclarationSyntax procBlock = Assert.IsType<TypeDeclarationSyntax>(type.Members[1]);
+        Assert.IsType<ProcDeclarationSyntax>(Assert.Single(procBlock.Members));
     }
 }

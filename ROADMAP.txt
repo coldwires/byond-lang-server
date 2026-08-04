@@ -7,23 +7,30 @@
 WHERE WE ARE
 --------------------------------------------------------------------------------
   - M0 boundary is PROVEN. C# -> NativeAOT -> C ABI -> C++ round trip works.
-      dm_core.dll builds at 1.51 MB with 15 exports.
-      tests/abi-smoke passes from C++, covering use-after-close, both
-      encodings, dm_document_symbols, dm_complete_at and dm_set_defines.
-      Reports ABI 0.5.
+      dm_core.dll builds at 1.88 MB with 19 exports.
+      tests/abi-smoke passes 110 checks from C++, covering use-after-close,
+      both encodings, dm_document_symbols, dm_complete_at, dm_set_defines,
+      dm_definition_at, dm_hover_at, dm_workspace_symbols and dm_query_json.
+      Reports ABI 0.11.
   - M1, M2 and M3 are DONE: lexer, syntax highlighting through the ABI, and the
     preprocessor with its include graph and macro source maps.
   - M4 is DONE. Declarations, expressions and statements all parse, proc
     bodies are real syntax trees, and the outline ships through the ABI at
     version 0.3. Every DM file in the corpus parses clean.
-  - Local git repo initialised. MIT licensed.
+  - M5 and M6 are DONE: the object tree with BYOND's builtins merged in, and
+    completion with type inference, semantic colours and relative paths.
+  - M7 is DONE. Go-to-definition, hover and workspace symbol search ship
+    (ABI 0.6, 0.7, 0.8), and bulk object-tree queries ship as dm_query_json
+    at 0.11 with the request and response shapes frozen in abi/schema/.
+    That is TEAM V1: everything an IDE needs to draw the panels.
+  - Local git repo initialised. MIT licensed. 90 commits.
   - tgstation is at 99.99% vars / 99.92% procs against dm.exe -o.
   - CI runs on push and PR: .github/workflows/ci.yml. Managed tests once,
     then all five RIDs publish, link abi-smoke and RUN it. vswhere is put on
     PATH before the Windows publish and the binary's existence is asserted
     after it, so neither local gotcha has to be rediscovered.
-  - dotnet test works: 546 tests, all passing.
-      Dm.Core.Tests   - 514, text layer through completion
+  - dotnet test works: 609 tests, all passing.
+      Dm.Core.Tests   - 577, text layer through bulk queries
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
@@ -48,15 +55,22 @@ WHAT WE ARE BUILDING
 
 WHAT'S NEXT
 --------------------------------------------------------------------------------
-  1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
-     through the ABI. He can wire it up today - it does not need anything else
-     from us. The CMakeLists include/link lines are meant to be copied.
-  2. Test dm.exe for whether a brace block can hold indentation-structured
-     sub-blocks. Still a guess. Mixed tabs and spaces is now answered - see
-     VERIFIED below.
+  1. SEND tests/abi-smoke TO THE IDE DEVS. Highlighting, the outline,
+     completion, definition, hover and workspace symbols are all callable
+     today, and the CMakeLists include/link lines are meant to be copied.
+  2. Pick the next milestone. M8 (.dmi icon states) is self-contained and is
+     an afternoon; M9 (incremental reparse) is what a 1.5M-line codebase will
+     want before the LSP shell brings public users with big projects.
+  3. Nothing about the language is a guess now. Both remaining open questions
+     are about the project - see OPEN QUESTIONS at the bottom.
 
-FOR THE IDE DEVS - HIGHLIGHTING IS READY
+FOR THE IDE DEVS - WHAT YOU CAN CALL TODAY
 --------------------------------------------------------------------------------
+  Highlighting is the shortest path in, and it is the sequence below.
+  Completion, definition, hover, workspace symbols and the document outline
+  are all callable too - see INTEGRATION.txt for their arguments and the
+  ownership rules.
+
   dm_workspace_open(dme_path, &ws)
   dm_set_buffer(ws, "file.dm", utf8_text, byte_length)   // unsaved text
   dm_classify_range(ws, "file.dm", first_line, last_line, encoding, &spans)
@@ -100,8 +114,28 @@ FOR THE IDE DEVS - HIGHLIGHTING IS READY
         the document outline exactly as the ABI will return it
         --params    include proc parameters
         --utf8      columns in UTF-8 bytes instead of UTF-16 units
+    dotnet run --project src\Dm.Cli -- complete <dme> <file> <line> <col>
+        what can be typed there. lines and columns are 1-based in the CLI,
+        0-based across the ABI
+    dotnet run --project src\Dm.Cli -- definition <dme> <file> <line> <col>
+        every declaration of that symbol, nearest first
+    dotnet run --project src\Dm.Cli -- hover <dme> <file> <line> <col>
+        the tooltip: resolved path, declaration as written, doc comment
+    dotnet run --project src\Dm.Cli -- wsymbols <dme> <query>
+        search the project by name, ranked
+        --limit <n>        how many hits (default 200)
+    dotnet run --project src\Dm.Cli -- query <file.dme>
+        browse the tree the way an IDE panel does
+        --path <path>      the node to browse (default /)
+        --depth <n>        levels of children (default 1)
+        --subtypes <path>  flat list of everything beneath a path
+        --members <path>   a type's vars and procs, inherited included
     dotnet run --project src\Dm.Cli -- dump-tokens <file.dm>
     dotnet run --project src\Dm.Cli -- scan <file-or-directory>
+
+    Every command that reads a .dme also takes -DNAME, -DNAME=value and
+    -DFN(x)=body. Pass what the build passes or you are analysing a
+    different program.
 
     "scan" is the important one. It reports anything the lexer didn't
     understand across a whole codebase. The DM reference doesn't list every
@@ -219,11 +253,14 @@ PREPROCESSED PARSING - NOW THE DEFAULT
       it. 5,064 bogus "expected ':'" plus 6,044 "expected an expression"
       behind it. TokenSource.HasWhitespaceBefore now captures the fact where
       the token really lives. Problems went 1,630 -> 102.
-    - "#pragma syntax" does not survive preprocessing. Directives are
-      consumed, so the statement parser never sees "C for" / "C switch".
-      Confirmed on a fixture. Barely matters here - tgstation has 31 pragmas
-      and no syntax ones - but it is a real hole and the state has to ride
-      the stream as data.
+    - "#pragma syntax" did not survive preprocessing. Directives are
+      consumed, so the statement parser never saw "C for" / "C switch" and
+      parsed those bodies under the default grammar. FIXED: IncludeGraph
+      puts syntax/push/pop back into the stream and the parser's existing
+      directive handling applies them. Everything else stays consumed.
+      On a fixture dm.exe compiles with 0 errors, we went from 10 bogus
+      diagnostics to none. Barely matters on tgstation - 31 pragmas, no
+      syntax ones - but a file that uses it was unreadable to us.
 
   THIRD CAUSE - INDENTATION ACROSS A SKIPPED #if. Found on mlaas, not here.
   A skipped region takes its Indent tokens with it while the matching Dedents
@@ -415,8 +452,9 @@ VERIFIED AGAINST dm.exe 516.1666
         definition that has nothing to do with your question.
       - check the error's LINE NUMBER. it is evidence.
 
-  Still untested, still guesses:
-    whether a brace block can hold indentation-structured sub-blocks
+  Nothing about the language is untested now. The last guess - whether a brace
+  block can hold indentation-structured sub-blocks - was answered by compiling
+  one: YES, and the braced and indented forms produce an IDENTICAL -o tree.
 
 WHERE WE DISAGREE WITH dm.exe - ON PURPOSE, EXACTLY ONCE
 --------------------------------------------------------------------------------
@@ -431,6 +469,33 @@ WHERE WE DISAGREE WITH dm.exe - ON PURPOSE, EXACTLY ONCE
   and the matching M11 warning ("x is untyped, `.` cannot compile here") is
   on the list. Nothing else in the library pretends the var has a type -
   the object tree and the diagnostics both agree with dm.exe.
+
+DM0300 - THE FIRST WARNING, SHIPPED EARLY   [DONE]
+--------------------------------------------------------------------------------
+  A proc block indented one level too far, into a var block, declares NOTHING.
+  dm.exe takes it with 0 errors and 0 warnings and drops everything under it -
+  not a proc, not a var, absent from vars, and calling it is a runtime
+  "undefined proc or verb". Runnable proof: docs/dm-language-notes.md 18.
+
+    /datum/swallowed
+      var
+        kept = "this one survives"
+        proc
+          vanished()          <- does not exist at runtime
+
+  We now declare nothing there either, which is what the compiler does, and
+  warn on the header, which is what the compiler does not. Nothing else in a
+  DM toolchain reports it. It was found in a shipped game where four mission
+  procs were declared this way and one is called from another file.
+
+  The warning arrives in dm_document_symbols with the syntax errors, so
+  clients need no new call. DM03xx is the range for this class: code that
+  compiles clean and does not mean what it looks like. An ERROR would be
+  wrong - the file compiles.
+
+  madridspy is now 507/507 procs and 1231/1231 vars against dm.exe -o. The one
+  remaining extra is /icon ChangeOpacity, which is the -o blind spot below and
+  is ours being right. tgstation has no occurrences at all.
 
 INJECTED DEFINES - dm.exe -D   [DONE for the core and the CLI]
 --------------------------------------------------------------------------------
@@ -460,11 +525,18 @@ dm.exe FLAGS - THE FULL SET FOR 516.1666
 
     -o             object tree as XML.  already our oracle - three declaration
                    bugs and the proc/var matching came out of it
-    -l             every source file the .dme reaches. prints "Source Files:"
+    -l             EVERY FILE THE BUILD TOUCHES - not just the include graph.
+                   on mlaas that is 234 entries vs our 102, the difference
+                   being .dmi resources pulled in by resource literals rather
+                   than by #include. filter to .dm/.dme/.dmf/.dmm before
+                   diffing or you get 132 phantom misses. our include graph
+                   matches it EXACTLY on the 102 source files.
+                   prints "Source Files:"
                    then the .dme and each file IN COMPILE ORDER, relative,
                    backslash separated. stddef.dm is not listed. still writes
                    a .dmb, so it is a build with a report, not a dry run.
-                   ORACLE FOR OUR INCLUDE GRAPH - cheapest one left to wire up
+                   ORACLE FOR OUR INCLUDE GRAPH - CHECKED, and exact on
+                   mlaas. re-run it when M9 makes the walk incremental.
     -code_tree     SYNTACTIC tree, before resolution. an oracle for the
                    PARSER, not the type tree. also lists the builtin branches
                    from any project at all - but with NO builtin members, so
@@ -610,9 +682,12 @@ MILESTONES                                    (restructured 2026-08-02)
              declarations, expressions and statements all parse.
              document symbols ship through dm_document_symbols (ABI 0.3)
              with syntax diagnostics in the same call.
-             deferred: parameter defaults still use a range scan, and the
-             parser still reads raw per-file tokens, not the preprocessed
-             stream. Neither blocks M5.
+             the parser now reads the PREPROCESSED stream by default;
+             dmc tree --raw keeps the old path for comparison.
+             injected defines (-D) are accepted everywhere, including
+             through the ABI as dm_set_defines.
+             deferred: parameter defaults still come from a range scan, so
+             ParameterSyntax.HasDefault is a bool with no tree behind it.
   [x] M5   Object tree + BYOND builtins   <- DONE
              types merge across files in compile order, inheritance
              follows parent_type, and the BYOND standard library is
@@ -627,11 +702,43 @@ MILESTONES                                    (restructured 2026-08-02)
              serves is the PREPROCESSED one, so macro-declared types resolve.
              semantic highlighting produces colour IDs 12-15, and
              leading-"." relative paths resolve. M6 IS DONE.
-  [ ] M7   Workspace symbols + navigation + bulk queries   <- team v1
+  [x] M7   Workspace symbols + navigation + bulk queries   <- team v1, DONE
+             go-to-definition WORKS and SHIPS at ABI 0.6 as
+             dm_definition_at. try: dmc definition <dme> <file> <line> <col>
+             returns EVERY declaration, not one - types reopen and procs
+             override, and hiding that is worse than showing it.
+             hover WORKS and SHIPS at ABI 0.7 as dm_hover_at, with /// doc
+             comments. try: dmc hover <dme> <file> <line> <col>
+             workspace symbol search SHIPS at ABI 0.8, ranked and capped.
+             try: dmc wsymbols <dme> <query> --limit 20
+             /// doc comments show in BOTH hover and the completion list.
+             BOTH doc comment forms work: /// runs and /** */ blocks.
+             measured on tgstation first - 4,870 files use ///, 1,784 use
+             blocks, so supporting one was leaving a lot on the floor.
+             PROC SIGNATURES NOW CARRY PARAMETER TYPES. the parser had them
+             and the symbol was throwing them away, so completion showed
+             heal(target, amount) for heal(mob/target, amount as num).
+             that is WHY no @param convention is needed - the types are in
+             the declaration and cannot go stale like a comment can.
+             NOT doing @param tags: ~200 uses in 1.5M lines, spelled
+             @param/@params and @return/@returns. the codebase disagrees
+             with itself, so there is no standard to match. text passes
+             through verbatim; a client can render tags if it wants.
+             BULK QUERIES SHIP as dm_query_json at ABI 0.11, with the
+             shapes frozen in abi/schema/. Three of them: objectTree for a
+             node and its children, subtypesOf for a flat capped list, and
+             members for a type's vars and procs with inheritance resolved.
+             try: dmc query <dme> --path /obj --depth 2
+             A node carries childCount as well as its children, so a panel
+             can draw an expander without a second call, and a capped list
+             says truncated rather than leaving you to compare counts.
   [ ] M8   .dmi icon states  (independent, do anytime)
   [ ] M9   Incremental reparse + performance
   [ ] M10  LSP server + VS Code extension <- community v1
   [ ] M11  Semantic diagnostics, find-refs, rename
+             one of them landed early: DM0300, the discarded-proc warning,
+             because the parser had to model the construct to match dm.exe
+             and knowing it was written is then free. See DM0300 above.
 
   WHAT CHANGED AND WHY
     Syntax highlighting was at M9/M10. That was wrong for us: the TextMate
@@ -738,10 +845,9 @@ CHALLENGES
 OPEN QUESTIONS
 --------------------------------------------------------------------------------
   - What are SpacemanDMM's terms, if we ever borrow from it?
-  - Can a brace block contain indented sub-blocks? Needs a compiler experiment.
   - What language is the third IDE in?
   - Should Dm.Lsp be AOT compiled for startup speed, or keep the reflection-
-    based LSP library? Decide at M9.
+    based LSP library? Decide at M10, when the shell is built.
 
   ANSWERED
   - License: MIT.

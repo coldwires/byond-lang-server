@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/byond-lang-server/abi/schema/query-request.schema.json",
+  "title": "dm_query_json request",
+  "description": "A bulk question about the object tree. Frozen at ABI 0.11 and versioned separately from the binary: new queries and new optional members are additive, and anything removed or renamed is a major bump. Unknown members are ignored by the library, so a client written against a later schema still gets an answer from an older build.",
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {
+      "description": "Which question to answer.",
+      "enum": ["objectTree", "subtypesOf", "members"]
+    },
+    "path": {
+      "description": "The type path to answer about. \"/\" and \"\" both mean the root.",
+      "type": "string",
+      "default": "/"
+    },
+    "depth": {
+      "description": "objectTree only. Levels of children to include: 1 is one level, which is what a panel needs for a node the user just expanded; 0 is the node alone, for a single-row refresh.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 1
+    },
+    "limit": {
+      "description": "subtypesOf only. Cap on how many types come back. A response that hit the cap sets \"truncated\".",
+      "type": "integer",
+      "minimum": 1,
+      "default": 500
+    },
+    "inherited": {
+      "description": "members only. Include what the type inherits, walking parent_type rather than the path.",
+      "type": "boolean",
+      "default": true
+    },
+    "includeBuiltins": {
+      "description": "Include BYOND's own types and members alongside the project's.",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}
