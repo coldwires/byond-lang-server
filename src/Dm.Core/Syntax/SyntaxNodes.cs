@@ -202,13 +202,20 @@ public sealed class ProcDeclarationSyntax : DeclarationSyntax
 /// <summary>One parameter in a proc or verb signature.</summary>
 public sealed class ParameterSyntax : SyntaxNode
 {
-    public ParameterSyntax(string name, PathSyntax? declaredType, string? inputType, bool hasDefault, TextSpan span)
+    public ParameterSyntax(
+        string name,
+        PathSyntax? declaredType,
+        string? inputType,
+        bool hasDefault,
+        TextSpan span,
+        ExpressionSyntax? defaultValue = null)
         : base(span)
     {
         Name = name;
         DeclaredType = declaredType;
         InputType = inputType;
         HasDefault = hasDefault;
+        DefaultValue = defaultValue;
     }
 
     public string Name { get; }
@@ -220,6 +227,16 @@ public sealed class ParameterSyntax : SyntaxNode
     public string? InputType { get; }
 
     public bool HasDefault { get; }
+
+    /// <summary>
+    /// The expression after the <c>=</c>, when there is one.
+    /// </summary>
+    /// <remarks>
+    /// Null while <see cref="HasDefault"/> is true means the default was written and could not be
+    /// parsed — the two are kept separate so a caller can tell "no default" from "a default we could
+    /// not read", which are different answers for a signature.
+    /// </remarks>
+    public ExpressionSyntax? DefaultValue { get; }
 
     public override string ToString() => DeclaredType is null ? Name : $"{DeclaredType}/{Name}";
 }

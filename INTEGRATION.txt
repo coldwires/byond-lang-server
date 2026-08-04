@@ -336,6 +336,12 @@ WHAT YOU GET TODAY
       and real code spells them several ways, so render them yourself if you
       want them highlighted.
 
+      A proc's "detail" is its signature as declared, with parameter types,
+      `as` clauses and DEFAULTS: heal(mob/target, amount as num, silent = 0).
+      A default tells your user the argument is optional and what it falls
+      back to, which is the same information an @param comment would carry
+      and cannot go stale.
+
       "builtin": true marks BYOND's own members rather than the project's.
       Style them apart if you like; the flag is there for that.
 

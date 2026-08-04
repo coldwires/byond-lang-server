@@ -353,6 +353,39 @@ public class ExpressionParserTests
         Assert.IsType<InvocationExpressionSyntax>(expression.Expression);
     }
 
+    // -- spans --------------------------------------------------------------
+
+    /// <summary>
+    /// A postfix form spans from where its <b>target</b> begins. The span used to start at the
+    /// operator, so an invocation covered <c>(1, 2)</c> rather than <c>f(1, 2)</c> — and that span
+    /// is what a hover range, a go-to-definition range and any diagnostic on a call point at.
+    /// </summary>
+    [Theory]
+    [InlineData("f(1, 2)")]
+    [InlineData("L[1]")]
+    [InlineData("a.b")]
+    [InlineData("a.b()")]
+    [InlineData("obj.name++")]
+    [InlineData("input(\"pick\") as text")]
+    [InlineData("f(1)(2)")]
+    public void A_postfix_expression_spans_its_whole_text(string source)
+    {
+        ExpressionSyntax expression = Parse(source);
+
+        Assert.Equal(0, expression.Span.Start);
+        Assert.Equal(source.Length, expression.Span.End);
+    }
+
+    /// <summary>The target keeps its own span, so a caller can still point at the callee alone.</summary>
+    [Fact]
+    public void The_target_of_a_call_keeps_its_own_span()
+    {
+        InvocationExpressionSyntax call = Assert.IsType<InvocationExpressionSyntax>(Parse("myproc(1)"));
+
+        Assert.Equal(0, call.Target.Span.Start);
+        Assert.Equal("myproc".Length, call.Target.Span.End);
+    }
+
     // -- recovery -----------------------------------------------------------
 
     /// <summary>An editor buffer is malformed on every keystroke, so a bad operand still returns a node.</summary>

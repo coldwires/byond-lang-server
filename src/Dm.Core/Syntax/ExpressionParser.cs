@@ -100,6 +100,27 @@ public sealed class ExpressionParser
 
     private string TextOf(int index) => _source.TextOf(index);
 
+    /// <summary>
+    /// Span from a text offset to the last token consumed.
+    /// </summary>
+    /// <remarks>
+    /// The postfix forms need this rather than <see cref="SpanFrom"/>: their span starts where the
+    /// <b>target</b> starts, and by the time one is built the target's tokens are already behind
+    /// <c>_position</c>. Anchoring on the token index instead made a call's span cover `(1, 2)`
+    /// rather than `f(1, 2)` — which is what a hover range, a go-to-definition range and any
+    /// diagnostic on a call all point at.
+    /// </remarks>
+    private TextSpan SpanTo(int startOffset)
+    {
+        if (_tokens.Count == 0)
+            return new TextSpan(startOffset, 0);
+
+        int endToken = Math.Min(Math.Max(_position - 1, 0), _tokens.Count - 1);
+        int end = Math.Max(startOffset, _tokens[endToken].Span.End);
+
+        return TextSpan.FromBounds(startOffset, end);
+    }
+
     private TextSpan SpanFrom(int startToken)
     {
         if (startToken >= _tokens.Count)
@@ -344,7 +365,10 @@ public sealed class ExpressionParser
 
     private ExpressionSyntax ParsePostfix(ExpressionSyntax expression)
     {
-        int start = _position;
+        // Every postfix form spans from where its target begins: a call is `f(1)`, an index is
+        // `L[i]`, a member access is `a.b`. Anchoring here on _position would start each of them at
+        // the operator, since the target's tokens are already consumed.
+        int start = expression.Span.Start;
 
         while (true)
         {
@@ -354,7 +378,7 @@ public sealed class ExpressionParser
                     expression = new InvocationExpressionSyntax(
                         expression,
                         ParseArgumentList(TokenKind.OpenParen, TokenKind.CloseParen),
-                        SpanFrom(start));
+                        SpanTo(start));
                     break;
 
                 case TokenKind.OpenBracket:
@@ -391,13 +415,13 @@ public sealed class ExpressionParser
                 case TokenKind.PlusPlus:
                     _position++;
                     expression = new UnaryExpressionSyntax(
-                        UnaryOperatorKind.PostIncrement, expression, SpanFrom(start));
+                        UnaryOperatorKind.PostIncrement, expression, SpanTo(start));
                     break;
 
                 case TokenKind.MinusMinus:
                     _position++;
                     expression = new UnaryExpressionSyntax(
-                        UnaryOperatorKind.PostDecrement, expression, SpanFrom(start));
+                        UnaryOperatorKind.PostDecrement, expression, SpanTo(start));
                     break;
 
                 // `input(...) as text|null`. The clause belongs to the call it follows.
@@ -411,7 +435,7 @@ public sealed class ExpressionParser
         }
     }
 
-    private ExpressionSyntax ParseIndex(ExpressionSyntax target, int start)
+    private ExpressionSyntax ParseIndex(ExpressionSyntax target, int startOffset)
     {
         bool nullConditional = Current == TokenKind.QuestionOpenBracket;
         _position++;
@@ -428,10 +452,10 @@ public sealed class ExpressionParser
         else
             Report(CurrentSpan, "expected ']'");
 
-        return new IndexExpressionSyntax(target, index, nullConditional, SpanFrom(start));
+        return new IndexExpressionSyntax(target, index, nullConditional, SpanTo(startOffset));
     }
 
-    private ExpressionSyntax ParseMemberAccess(ExpressionSyntax? target, int start)
+    private ExpressionSyntax ParseMemberAccess(ExpressionSyntax? target, int startOffset)
     {
         MemberAccessKind kind = Current switch
         {
@@ -447,7 +471,7 @@ public sealed class ExpressionParser
         if (!IsNameLike(Current))
         {
             Report(CurrentSpan, "expected a member name");
-            return new MemberAccessExpressionSyntax(target, kind, string.Empty, CurrentSpan, false, SpanFrom(start));
+            return new MemberAccessExpressionSyntax(target, kind, string.Empty, CurrentSpan, false, SpanTo(startOffset));
         }
 
         string name = TextOf(_position);
@@ -463,10 +487,10 @@ public sealed class ExpressionParser
             _position += 2;
         }
 
-        return new MemberAccessExpressionSyntax(target, kind, name, nameSpan, isProcReference, SpanFrom(start));
+        return new MemberAccessExpressionSyntax(target, kind, name, nameSpan, isProcReference, SpanTo(startOffset));
     }
 
-    private ExpressionSyntax ParseModifiedType(ExpressionSyntax type, int start)
+    private ExpressionSyntax ParseModifiedType(ExpressionSyntax type, int startOffset)
     {
         _position++;
         _groupDepth++;
@@ -500,11 +524,11 @@ public sealed class ExpressionParser
         else
             Report(CurrentSpan, "expected '}'");
 
-        return new ModifiedTypeExpressionSyntax(type, assignments, SpanFrom(start));
+        return new ModifiedTypeExpressionSyntax(type, assignments, SpanTo(startOffset));
     }
 
     /// <summary>Consumes an <c>as</c> clause: one or more input types separated by <c>|</c>.</summary>
-    private ExpressionSyntax ParseAsClause(ExpressionSyntax expression, int start)
+    private ExpressionSyntax ParseAsClause(ExpressionSyntax expression, int startOffset)
     {
         _position++;
 
@@ -524,7 +548,7 @@ public sealed class ExpressionParser
         if (inputTypes.Count == 0)
             Report(CurrentSpan, "expected an input type after 'as'");
 
-        return new AsExpressionSyntax(expression, inputTypes, SpanFrom(start));
+        return new AsExpressionSyntax(expression, inputTypes, SpanTo(startOffset));
     }
 
     private List<ArgumentSyntax> ParseArgumentList(TokenKind opener, TokenKind closer)
@@ -653,7 +677,7 @@ public sealed class ExpressionParser
 
             // The leading scope forms, `::A` and `::A()`.
             case TokenKind.ColonColon:
-                return ParseMemberAccess(null, start);
+                return ParseMemberAccess(null, _tokens[start].Span.Start);
 
             case TokenKind.Identifier:
             case TokenKind.KeywordSrc:
@@ -700,7 +724,7 @@ public sealed class ExpressionParser
             type = ParsePostfix(ParsePrimary());
 
         if (Current == TokenKind.OpenBrace)
-            type = ParseModifiedType(type ?? new ErrorExpressionSyntax(CurrentSpan), start);
+            type = ParseModifiedType(type ?? new ErrorExpressionSyntax(CurrentSpan), _tokens[start].Span.Start);
 
         List<ArgumentSyntax> arguments = ParseArgumentList(TokenKind.OpenParen, TokenKind.CloseParen);
         return new NewExpressionSyntax(type, arguments, SpanFrom(start));

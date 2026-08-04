@@ -438,7 +438,7 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
 - ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.11 and passing 110 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 609 today (577 core, 32 native). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 621 today (589 core, 32 native). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -632,7 +632,10 @@ order — the same ordering that decides override resolution and the §4a path a
   parser rather than the preprocessor consumes, so `IncludeGraph` emits `syntax`, `push` and `pop`
   back into the stream instead of stripping them with the rest. Otherwise a body written under one
   is parsed with the default grammar and reports errors on code `dm.exe` accepts.
-- ⬜ Parameter defaults still come from the range scan in `ReadParameter`, not the expression parser.
+- ✅ Parameter defaults go through the expression parser. `ParameterSyntax.DefaultValue` carries the
+  tree and `HasDefault` still records that one was written, so "no default" stays distinguishable
+  from "a default we could not read". A signature now renders `heal(amount = 5)`, which tells a
+  reader the argument is optional and what it falls back to. **That was the last M4 item.**
 - ✅ Parse the preprocessed stream rather than raw per-file tokens, and it is now the default.
   `TokenSource` lets the parsers read tokens whose text and position come from different files,
   `PreprocessedSplitter` gathers the project stream back into per-file runs, and `dmc tree --raw`
@@ -913,14 +916,48 @@ that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is
 - No dependency on the compiler pipeline. Roughly an afternoon, and it parallelizes cleanly to
   another team member during M4.
 
-### M9 — Incrementality and performance
+### M9 — Incrementality and performance *(in progress)*
 
-- Reparse only the edited file. Preprocessor state flows sequentially through include order, so
+- ✅ `dmc bench` — the baseline, because an optimisation without one is a guess. It times a cold open
+  by phase and then the thing that actually matters: push a buffer, ask a question, measure. The
+  edit it makes is a trailing comment, so the number is the **floor** for what an edit costs rather
+  than an average.
+- ⬜ Reparse only the edited file. Preprocessor state flows sequentially through include order, so
   editing a file containing `#define`s invalidates everything downstream — mitigate via the M3
   boundary snapshots: re-run downstream files only if the exit-state hash changed.
-- Cache the object tree per-file, rebuilding affected subtrees only.
+- ⬜ Cache the object tree per-file, rebuilding affected subtrees only.
 - Target: warm completion under 30ms on the team's game. Complete before M10 — public users will
   arrive with larger codebases.
+
+**Measured 2026-08-03, Release build.** Every edit rebuilds the whole project today, so a keystroke
+costs what a cold open costs:
+
+| | mlaas (100 files) | /tg/station (7,161 files) |
+|---|---|---|
+| preprocess | 102 ms | 5,454 ms |
+| split into per-file runs | 27 ms | 3,683 ms |
+| parse | 45 ms | 4,313 ms |
+| build tree | 9 ms | 858 ms |
+| **cold total** | **185 ms** | **14,311 ms** |
+| **one keystroke** | **131 ms** | **13,691 ms** |
+
+Two things this says that guesswork would not. **The tree merge is not the problem** — it is 6% of
+the cold build, so "cache the object tree per-file" is the smallest of the three levers. And **the
+split is as expensive as the parse** on the large project, which no one would have predicted from
+reading it; grouping ~10M tokens by origin allocates three arrays per file on top of the dictionary.
+
+Timing the include walk on its own (`dmc includes`, which reads, lexes and evaluates conditionals
+without expanding) puts roughly 2.9 s of the 5.45 s preprocess in the read-and-lex, and the rest in
+expansion. So a rebuild re-reads and re-lexes all 7,161 files, every keystroke.
+
+**The design fork, and it is a contract decision rather than a technical one.** Reusing a lex across
+rebuilds means caching by path, and a cached file is a file we stop noticing changes to on disk — a
+`git checkout` under a running IDE would then be invisible until the workspace is reopened. The
+alternatives are to stat each file (cheap, but 7,161 syscalls per keystroke), to require the client
+to tell us (a new ABI call, and every client has to remember), or to cache only files the client has
+open as buffers (safe, and useless here since the point is the 7,160 files it has *not* opened).
+Decide with the IDE devs before building it, since whichever way it goes lands in `INTEGRATION.txt`
+as a rule they have to follow.
 
 ### M10 — LSP shell → community v1
 
@@ -1648,6 +1685,10 @@ it.
   instead of dropping it silently. madridspy reaches 507/507 procs against `-o`. Diagnostics gained
   a `severity` field across the ABI at 0.10, since a warning that a client cannot tell from a syntax
   error is not much use.
+- **2026-08-03** — M4 closed: parameter defaults are parsed rather than merely noticed. Finding a
+  faithful rendering for them exposed a span bug in every postfix expression — an invocation's span
+  covered `(1, 2)` rather than `f(1, 2)`, since `ParsePostfix` anchored on the operator instead of
+  on its target. Hover and go-to-definition ranges on a call were wrong by the width of the callee.
 - **2026-08-03** — M7 closed: `dm_query_json` at ABI 0.11 with `TreeQueryService` behind it and
   `abi/schema/` frozen. The shaping lives in `Dm.Core` so the M10 LSP shell answers
   `dm/objectTree` from the same code rather than growing its own.

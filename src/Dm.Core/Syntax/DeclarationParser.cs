@@ -755,6 +755,7 @@ public sealed class DeclarationParser
         List<TextSpan> spans = new();
         string? inputType = null;
         bool hasDefault = false;
+        ExpressionSyntax? defaultValue = null;
 
         for (int i = start; i < end; i++)
         {
@@ -771,6 +772,7 @@ public sealed class DeclarationParser
             if (kind == TokenKind.Assign)
             {
                 hasDefault = true;
+                defaultValue = ReadDefaultValue(i + 1, end);
                 break;
             }
 
@@ -789,7 +791,7 @@ public sealed class DeclarationParser
             : CurrentSpan;
 
         if (segments.Count == 0)
-            return new ParameterSyntax(string.Empty, null, inputType, hasDefault, span);
+            return new ParameterSyntax(string.Empty, null, inputType, hasDefault, span, defaultValue);
 
         string name = segments[^1];
         PathSyntax? type = segments.Count > 1
@@ -800,7 +802,37 @@ public sealed class DeclarationParser
                 spans.GetRange(0, spans.Count - 1))
             : null;
 
-        return new ParameterSyntax(name, type, inputType, hasDefault, span);
+        return new ParameterSyntax(name, type, inputType, hasDefault, span, defaultValue);
+    }
+
+    /// <summary>
+    /// Parses a parameter's default value from the tokens between the <c>=</c> and the end of the
+    /// parameter.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The range is already bounded by <see cref="ParseParameters"/>, which splits on commas at
+    /// paren depth 1 — so <c>f(a = list(1,2), b)</c> hands this the whole of <c>list(1,2)</c> and
+    /// nothing of <c>b</c>. The expression parser is given that range and its answer is kept only if
+    /// it stayed inside it: a parse that ran past the end has read the following parameter, and a
+    /// wrong tree is worse here than none, since the caller can still see <c>HasDefault</c>.
+    /// </para>
+    /// <para>
+    /// Nothing moves <c>_position</c>. The caller owns it and is mid-scan of the parameter list.
+    /// </para>
+    /// </remarks>
+    private ExpressionSyntax? ReadDefaultValue(int start, int end)
+    {
+        if (start >= end)
+            return null;
+
+        (ExpressionSyntax expression, int next) =
+            ExpressionParser.Parse(_tokens, _source, _diagnostics, start);
+
+        if (next > end || expression is ErrorExpressionSyntax)
+            return null;
+
+        return expression;
     }
 
     // -- helpers -----------------------------------------------------------
