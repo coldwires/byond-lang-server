@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Dm.Core.Syntax;
 
 namespace Dm.Core.Preprocessing;
 
@@ -40,6 +41,17 @@ public sealed class MacroTable
         _macros[macro.Name] = macro;
         Mix(macro.Name.GetHashCode(StringComparison.Ordinal));
         Mix(macro.Body.Count);
+        Mix(macro.Parameters?.Count ?? -1);
+
+        // The body's CONTENT, not only its length. Two macros of the same name whose bodies are the
+        // same size — `#define THING /obj/first` against `#define THING /obj/second` — are a
+        // different program, and a hash that cannot tell them apart lets anything keyed on this
+        // state reuse work that no longer applies. Caught by a test that edited exactly that.
+        foreach (Token token in macro.Body)
+        {
+            Mix((int)token.Kind);
+            Mix(macro.Source.ToString(token.Span).GetHashCode(StringComparison.Ordinal));
+        }
     }
 
     public bool Undefine(string name)

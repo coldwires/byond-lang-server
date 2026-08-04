@@ -80,6 +80,27 @@ public sealed class IncludeOptions
     /// </remarks>
     public Func<string, SourceText?>? SourceProvider { get; init; }
 
+    /// <summary>
+    /// Supplies a file's lex, or null to lex it here.
+    /// </summary>
+    /// <remarks>
+    /// The hook a caller uses to reuse work across rebuilds. Every rebuild otherwise re-lexes the
+    /// whole project, and on a large one that is seconds of repeating what did not change. Whether a
+    /// cached lex is still valid is the provider's problem, not the walk's — see
+    /// <see cref="Text.SourceCache"/>, which decides by re-probing the file.
+    /// </remarks>
+    public Func<string, SourceText, LexResult>? LexProvider { get; init; }
+
+    /// <summary>
+    /// Remembers what walking each file did, so an unchanged one is replayed instead of re-walked.
+    /// </summary>
+    /// <remarks>
+    /// The walk is the largest cost in a rebuild, and after an edit nearly every file does exactly
+    /// what it did last time. Supplying a cache here turns those files into a replay of recorded
+    /// steps. Ignored when tokens are not being collected, since there is then nothing to replay.
+    /// </remarks>
+    public FileEffectCache? Effects { get; init; }
+
     internal string ResolveLibraryRoot()
         => LibraryRoot ?? System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -159,7 +180,7 @@ public sealed class IncludeGraph
     public static IncludeGraph Build(string dmePath, IncludeOptions? options = null)
         => BuildCore(dmePath, options, collectTokens: false).Graph;
 
-    internal static (IncludeGraph Graph, List<ExpandedToken> Tokens) BuildCore(
+    internal static (IncludeGraph Graph, RunCollector Runs) BuildCore(
         string dmePath,
         IncludeOptions? options,
         bool collectTokens)
@@ -170,10 +191,41 @@ public sealed class IncludeGraph
         if (!File.Exists(root))
             throw new FileNotFoundException("dme not found", root);
 
-        List<ExpandedToken> tokens = new();
-        Builder builder = new(options ?? new IncludeOptions())
+        IncludeOptions settings = options ?? new IncludeOptions();
+        settings.Effects?.ResetStatistics();
+
+        (IncludeGraph graph, RunCollector runs) = RunWalk(root, settings, collectTokens);
+
+        // A replay found that one of a file's includes now does something different, so part of this
+        // build was replayed against a macro state that no longer holds. Nothing here is worth
+        // repairing in place: redo it once with the cache out of the way, which is the same cost as
+        // the build we did before any of this existed, in the one case where a macro moved and
+        // everything downstream had to be redone regardless.
+        if (settings.Effects is { Diverged: true })
         {
-            Tokens = collectTokens ? tokens : null,
+            settings.Effects.Clear();
+
+            IncludeOptions withoutCache = new()
+            {
+                LibraryRoot = settings.LibraryRoot,
+                Defines = settings.Defines,
+                SourceProvider = settings.SourceProvider,
+                LexProvider = settings.LexProvider,
+            };
+
+            (graph, runs) = RunWalk(root, withoutCache, collectTokens);
+        }
+
+        return (graph, runs);
+    }
+
+    private static (IncludeGraph Graph, RunCollector Runs) RunWalk(
+        string root, IncludeOptions options, bool collectTokens)
+    {
+        RunCollector runs = new();
+        Builder builder = new(options)
+        {
+            Runs = collectTokens ? runs : null,
         };
 
         // `__MAIN__` is defined only in the .dme being compiled, never in the files it includes.
@@ -181,7 +233,7 @@ public sealed class IncludeGraph
 
         builder.Walk(root, includedFrom: null, depth: 0, fromLibrary: false);
 
-        return (new IncludeGraph(root, builder.Files, builder.Diagnostics, builder.Macros), tokens);
+        return (new IncludeGraph(root, builder.Files, builder.Diagnostics, builder.Macros), runs);
     }
 
     /// <summary>
@@ -233,7 +285,27 @@ public sealed class IncludeGraph
         /// Expansion is the expensive part, so callers that only need the include list — the
         /// <c>includes</c> command, orphan detection — skip it entirely.
         /// </remarks>
-        public List<ExpandedToken>? Tokens { get; init; }
+        public RunCollector? Runs { get; init; }
+
+        /// <summary>
+        /// Steps being recorded for the file currently being walked, or null when it is being
+        /// replayed or nothing is caching.
+        /// </summary>
+        /// <remarks>
+        /// Saved and restored around each nested file, so a parent resumes recording its own steps
+        /// once an include returns.
+        /// </remarks>
+        private List<EffectStep>? _recording;
+
+        /// <summary>
+        /// Where the file currently being walked started in its own run.
+        /// </summary>
+        /// <remarks>
+        /// Zero except for a file entered twice under <c>#pragma multiple</c>, where the run already
+        /// holds the first pass. Recorded offsets are relative to this so a replay can index the
+        /// slice it was given rather than the accumulated run.
+        /// </remarks>
+        private int _runStart;
 
         public void Walk(string path, string? includedFrom, int depth, bool fromLibrary)
         {
@@ -275,7 +347,49 @@ public sealed class IncludeGraph
                 return;
             }
 
-            LexResult lex = Lexer.Lex(text);
+            // Replay, if this file's text and the macro state it is being entered with are both what
+            // they were last time. Everything below - the lex, the directive scan, the token loop
+            // and the expansion - is what that skips.
+            FileEffectCache? effects = Runs is null ? null : _options.Effects;
+            int entryHash = Macros.StateHash;
+
+            if (effects is not null && effects.TryGet(path, text, entryHash, out FileEffect cached))
+            {
+                Replay(cached, path, depth, fromLibrary, effects);
+                return;
+            }
+
+            List<EffectStep>? outerRecording = _recording;
+            int outerRunStart = _runStart;
+
+            List<EffectStep>? steps = effects is null ? null : new List<EffectStep>();
+            int runStart = Runs?.LengthOf(text) ?? 0;
+
+            _recording = steps;
+            _runStart = runStart;
+
+            try
+            {
+                WalkFile(path, depth, fromLibrary, text);
+            }
+            finally
+            {
+                _recording = outerRecording;
+                _runStart = outerRunStart;
+            }
+
+            if (effects is not null && steps is not null)
+            {
+                // Read from the local: the field is back to the enclosing file's start by now.
+                ExpandedToken[] run = Runs?.Slice(text, runStart) ?? System.Array.Empty<ExpandedToken>();
+                effects.Add(path, new FileEffect(text, entryHash, steps, run, Macros.StateHash));
+            }
+        }
+
+        /// <summary>Walks one file's tokens and directives, recording its effect if a cache wants it.</summary>
+        private void WalkFile(string path, int depth, bool fromLibrary, SourceText text)
+        {
+            LexResult lex = _options.LexProvider?.Invoke(path, text) ?? Lexer.Lex(text);
             IReadOnlyList<Directive> directives = DirectiveScanner.Scan(lex);
             ConditionalStack conditionals = new();
 
@@ -320,6 +434,10 @@ public sealed class IncludeGraph
                 FlushPending(text, pending);
                 tokenIndex = System.Math.Max(directive.ArgumentEnd, directive.HashIndex + 2);
 
+                // Diagnostics this directive produces are part of this file's effect and have to be
+                // replayed with it, or a cached file reports clean on the next build.
+                int diagnosticsBefore = Diagnostics.Count;
+
                 switch (directive.Kind)
                 {
                     case DirectiveKind.If:
@@ -348,28 +466,59 @@ public sealed class IncludeGraph
 
                     case DirectiveKind.Define when conditionals.IsActive:
                         if (MacroDefinition.Parse(lex, directive, Diagnostics) is { } macro)
+                        {
                             Macros.Define(macro);
+                            _recording?.Add(EffectStep.ForDefine(macro));
+                        }
+
                         break;
 
                     case DirectiveKind.Undef when conditionals.IsActive:
                         if (directive.HasArguments)
-                            Macros.Undefine(lex.GetText(lex.Tokens[directive.ArgumentStart]));
+                        {
+                            string undefined = lex.GetText(lex.Tokens[directive.ArgumentStart]);
+                            Macros.Undefine(undefined);
+                            _recording?.Add(EffectStep.ForUndef(undefined));
+                        }
+
                         break;
 
                     case DirectiveKind.Pragma when conditionals.IsActive:
                         // `#pragma multiple` lets a file be included more than once, opting out of
                         // the compiler's include-once rule.
                         if (directive.HasArguments && lex.GetText(lex.Tokens[directive.ArgumentStart]) == "multiple")
+                        {
                             _reincludable.Add(path);
+                            _recording?.Add(EffectStep.ForReincludable(path));
+                        }
 
                         KeepIfGrammarPragma(text, lex, directive);
                         break;
 
                     case DirectiveKind.Include when conditionals.IsActive:
-                        FollowInclude(lex, directive, path, depth, fromLibrary);
+                    {
+                        string? resolved = ResolveInclude(lex, directive, path, out bool isLibrary, out IncludeSite site);
+
+                        // Whatever resolution had to say belongs to this file. What the included
+                        // file has to say belongs to it, and it records its own.
+                        RecordDiagnosticsFrom(diagnosticsBefore);
+
+                        if (resolved is not null)
+                        {
+                            EnterInclude(resolved, path, depth, fromLibrary || isLibrary, site);
+                            _recording?.Add(
+                                EffectStep.ForInclude(resolved, isLibrary, site, Macros.StateHash));
+                        }
+
+                        diagnosticsBefore = Diagnostics.Count;
                         break;
+                    }
                 }
+
+                RecordDiagnosticsFrom(diagnosticsBefore);
             }
+
+            int tailDiagnostics = Diagnostics.Count;
 
             // Close whatever the file left open, so the next file starts from the root rather than
             // inheriting this one's depth.
@@ -388,6 +537,99 @@ public sealed class IncludeGraph
                     new TextSpan(text.Length, 0),
                     $"{conditionals.Depth} unterminated conditional block(s) at end of file"));
             }
+
+            RecordDiagnosticsFrom(tailDiagnostics);
+        }
+
+        /// <summary>One stretch of a recorded run, for the rare replay that cannot adopt it whole.</summary>
+        private static ExpandedToken[] Slice(ExpandedToken[] run, int start, int count)
+        {
+            ExpandedToken[] slice = new ExpandedToken[count];
+            System.Array.Copy(run, start, slice, 0, count);
+
+            return slice;
+        }
+
+        /// <summary>Records diagnostics added since a watermark as part of this file's effect.</summary>
+        private void RecordDiagnosticsFrom(int from)
+        {
+            if (_recording is null)
+                return;
+
+            for (int i = from; i < Diagnostics.Count; i++)
+                _recording.Add(EffectStep.ForDiagnostic(Diagnostics[i]));
+        }
+
+        /// <summary>
+        /// Does again what walking this file did last time, without walking it.
+        /// </summary>
+        /// <remarks>
+        /// Includes are re-entered rather than replayed from here: the file an include leads to
+        /// decides for itself whether it can be replayed, and it is the one that knows what macro
+        /// state it is being entered with now.
+        /// </remarks>
+        private void Replay(FileEffect effect, string path, int depth, bool fromLibrary, FileEffectCache effects)
+        {
+            List<EffectStep>? outerRecording = _recording;
+            _recording = null;
+
+            // The whole run at once, by reference. A replayed file otherwise copies every token it
+            // ever produced into a fresh list, which on a large project is most of what a rebuild
+            // costs. Where each stretch sits between this file's includes is replayed separately,
+            // from the offsets recorded with the steps.
+            bool adopted = Runs is not null && Runs.TryAdopt(effect.Text, effect.Run);
+
+            try
+            {
+                foreach (EffectStep step in effect.Steps)
+                {
+                    switch (step.Kind)
+                    {
+                        case EffectKind.Tokens:
+                            if (adopted)
+                                Runs!.AddSegment(effect.Text, step.Start, step.Count);
+                            else
+                                Runs!.Append(effect.Text, Slice(effect.Run, step.Start, step.Count));
+
+                            break;
+
+                        case EffectKind.Define:
+                            Macros.Define(step.Macro!);
+                            break;
+
+                        case EffectKind.Undef:
+                            Macros.Undefine(step.Name!);
+                            break;
+
+                        case EffectKind.Reincludable:
+                            _reincludable.Add(step.Name!);
+                            break;
+
+                        case EffectKind.Diagnostic:
+                            Diagnostics.Add(step.Diagnostic);
+                            break;
+
+                        case EffectKind.Include:
+                            EnterInclude(step.Name!, path, depth, fromLibrary || step.IsLibrary, step.Site);
+
+                            // The include did something different this time, so everything recorded
+                            // after it describes an expansion that no longer happens.
+                            if (Macros.StateHash != step.HashAfter)
+                                effects.MarkDiverged();
+
+                            break;
+                    }
+                }
+            }
+            finally
+            {
+                _recording = outerRecording;
+            }
+
+            // A self-test rather than a guard: if the steps really are everything the file did, the
+            // state it leaves behind is the state it left behind when it was recorded.
+            if (Macros.StateHash != effect.ExitHash)
+                effects.MarkDiverged();
         }
 
         /// <summary>
@@ -417,7 +659,7 @@ public sealed class IncludeGraph
         /// </remarks>
         private void KeepIfGrammarPragma(SourceText text, LexResult lex, Directive directive)
         {
-            if (Tokens is null || !directive.HasArguments)
+            if (Runs is null || !directive.HasArguments)
                 return;
 
             string first = lex.GetText(lex.Tokens[directive.ArgumentStart]);
@@ -425,14 +667,18 @@ public sealed class IncludeGraph
             if (first is not ("syntax" or "push" or "pop"))
                 return;
 
+            List<ExpandedToken> kept = new();
+
             for (int i = directive.HashIndex; i < directive.ArgumentEnd; i++)
             {
                 Token token = lex.Tokens[i];
-                Tokens.Add(new ExpandedToken(token.Kind, text, token.Span, null));
+                kept.Add(new ExpandedToken(token.Kind, text, token.Span, null));
             }
 
             Token last = lex.Tokens[directive.ArgumentEnd - 1];
-            Tokens.Add(new ExpandedToken(TokenKind.Newline, text, new TextSpan(last.Span.End, 0), null));
+            kept.Add(new ExpandedToken(TokenKind.Newline, text, new TextSpan(last.Span.End, 0), null));
+
+            Emit(text, kept);
         }
 
         /// <summary>
@@ -445,11 +691,34 @@ public sealed class IncludeGraph
         /// </remarks>
         private void FlushPending(SourceText text, List<Token> pending)
         {
-            if (pending.Count == 0 || Tokens is null)
+            if (pending.Count == 0 || Runs is null)
                 return;
 
-            Tokens.AddRange(MacroExpander.Expand(text, pending, Macros, Diagnostics));
+            Emit(text, MacroExpander.Expand(text, pending, Macros, Diagnostics));
             pending.Clear();
+        }
+
+        /// <summary>
+        /// Emits a stretch of tokens for the file being walked, recording it as part of that file's
+        /// effect.
+        /// </summary>
+        /// <remarks>
+        /// One array serves both purposes: it is appended to the file's run, and it is the payload a
+        /// replay appends when the file has not changed. Emission and recording are the same call so
+        /// that a new emission site cannot be added without its tokens being recorded — a replay
+        /// that silently dropped part of a file would be an awful bug to find.
+        /// </remarks>
+        private void Emit(SourceText origin, IReadOnlyList<ExpandedToken> produced)
+        {
+            if (Runs is null || produced.Count == 0)
+                return;
+
+            // Where this stretch lands inside the file's own run, which is what a replay needs to
+            // put it back in compile order without carrying a copy of it.
+            int start = Runs.LengthOf(origin) - _runStart;
+
+            Runs.Append(origin, produced);
+            _recording?.Add(EffectStep.ForTokens(start, produced.Count));
         }
 
         /// <summary>Layout and comments carry no meaning for the parser.</summary>
@@ -497,13 +766,28 @@ public sealed class IncludeGraph
             => Diagnostics.Add(Diagnostic.Error(
                 "DM0104", directive.Span, $"#{directive.Name} without a matching #if"));
 
-        private void FollowInclude(LexResult lex, Directive directive, string path, int depth, bool fromLibrary)
+        /// <summary>
+        /// Works out which file an <c>#include</c> names, reporting why if it cannot.
+        /// </summary>
+        /// <remarks>
+        /// Split from <see cref="EnterInclude"/> because the two halves belong to different files.
+        /// Resolution is this file's business and its diagnostics are part of this file's effect;
+        /// what happens after belongs to the file being included, which records its own.
+        /// </remarks>
+        private string? ResolveInclude(
+            LexResult lex, Directive directive, string path, out bool isLibrary, out IncludeSite site)
         {
+            isLibrary = false;
+            site = default;
+
             if (!IncludeDirective.TryRead(lex, directive, out IncludeDirective include))
             {
                 Diagnostics.Add(Diagnostic.Error("DM0105", directive.Span, "malformed #include"));
-                return;
+                return null;
             }
+
+            isLibrary = include.IsLibrary;
+            site = new IncludeSite(include.Target, include.Span);
 
             string? resolved = Resolve(include, path, out string attempted);
 
@@ -513,9 +797,23 @@ public sealed class IncludeGraph
                     "DM0101",
                     include.Span,
                     $"unable to open \"{include.Target}\" (looked for {attempted})"));
-                return;
+
+                return null;
             }
 
+            return resolved;
+        }
+
+        /// <summary>
+        /// Descends into an included file, or reports that the compiler would ignore the repeat.
+        /// </summary>
+        /// <remarks>
+        /// Called both by the walk and by a replay, and it must behave the same either way: the
+        /// include-once check reads <c>_seen</c>, which a replay grows in the same order, so a
+        /// repeat is still a repeat and the file that is reached is still reached once.
+        /// </remarks>
+        private void EnterInclude(string resolved, string path, int depth, bool fromLibrary, IncludeSite site)
+        {
             if (_seen.Contains(resolved) && !_reincludable.Contains(resolved))
             {
                 // The compiler ignores a repeat silently. Worth surfacing, not worth failing: real
@@ -523,8 +821,9 @@ public sealed class IncludeGraph
                 Diagnostics.Add(new Diagnostic(
                     "DM0102",
                     DiagnosticSeverity.Information,
-                    include.Span,
-                    $"\"{include.Target}\" was already included; the compiler ignores the repeat"));
+                    site.Span,
+                    $"\"{site.Target}\" was already included; the compiler ignores the repeat"));
+
                 return;
             }
 
@@ -534,11 +833,12 @@ public sealed class IncludeGraph
             if (wasMain)
                 Macros.Undefine(MainMacro);
 
-            Walk(resolved, path, depth + 1, fromLibrary || include.IsLibrary);
+            Walk(resolved, path, depth + 1, fromLibrary);
 
             if (wasMain)
                 Macros.Define(MacroBuilder.Empty(MainMacro));
         }
+
 
         private const string MainMacro = "__MAIN__";
 

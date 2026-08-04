@@ -9,20 +9,37 @@ namespace Dm.Core.Preprocessing;
 /// </summary>
 public sealed class PreprocessResult
 {
-    internal PreprocessResult(IncludeGraph graph, IReadOnlyList<ExpandedToken> tokens)
+    private readonly RunCollector _runs;
+    private IReadOnlyList<ExpandedToken>? _flattened;
+
+    internal PreprocessResult(IncludeGraph graph, RunCollector runs)
     {
         Graph = graph;
-        Tokens = tokens;
+        _runs = runs;
     }
 
     /// <summary>The files reached, in compile order.</summary>
     public IncludeGraph Graph { get; }
 
     /// <summary>
+    /// One run per file, in compile order, with that file's tokens gathered.
+    /// </summary>
+    /// <remarks>
+    /// What the parser reads. Gathered during the walk, which already knows which file it is in —
+    /// regrouping the whole stream afterwards cost as much as parsing it.
+    /// </remarks>
+    public IReadOnlyList<PreprocessedFile> Runs => _runs.Files;
+
+    /// <summary>
     /// Every code token in the project, in compile order, with conditionals resolved and macros
     /// expanded. Directive lines are gone; each token still knows where it came from.
     /// </summary>
-    public IReadOnlyList<ExpandedToken> Tokens { get; }
+    /// <remarks>
+    /// The stream as the compiler sees it, interleaved across files — which <see cref="Runs"/> is
+    /// not, since a file's tokens are interrupted by its includes. Rebuilt on demand from the order
+    /// the runs were emitted in, so holding this view costs nothing until something asks for it.
+    /// </remarks>
+    public IReadOnlyList<ExpandedToken> Tokens => _flattened ??= _runs.Flatten();
 
     public IReadOnlyList<Diagnostic> Diagnostics => Graph.Diagnostics;
 
@@ -45,9 +62,9 @@ public static class Preprocessor
 {
     public static PreprocessResult Run(string dmePath, IncludeOptions? options = null)
     {
-        (IncludeGraph graph, List<ExpandedToken> tokens) =
+        (IncludeGraph graph, RunCollector runs) =
             IncludeGraph.BuildCore(dmePath, options, collectTokens: true);
 
-        return new PreprocessResult(graph, tokens);
+        return new PreprocessResult(graph, runs);
     }
 }
