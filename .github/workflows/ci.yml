@@ -1,0 +1,120 @@
+name: CI
+
+# The managed tests run once - they are platform-independent - while the native job runs per RID,
+# because NativeAOT produces a separate binary for each and the C ABI is the thing most likely to
+# break in a platform-specific way. See PLAN.md §M0.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
+
+  native:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One RID failing should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,     rid: linux-x64 }
+          - { os: ubuntu-24.04-arm,  rid: linux-arm64 }
+          - { os: windows-latest,    rid: win-x64 }
+          - { os: macos-13,          rid: osx-x64 }
+          - { os: macos-latest,      rid: osx-arm64 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # NativeAOT links with clang and needs zlib's headers. The SDK does not bring either.
+      - name: Install the AOT toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      # Without vswhere on PATH the ILCompiler targets splice a "'vswhere.exe' is not recognized"
+      # string into the link command and fail with MSB3073, while blaming link.exe - which was
+      # found. Cost an afternoon locally; see PLAN.md §8.
+      - name: Put vswhere on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = "C:\Program Files (x86)\Microsoft Visual Studio\Installer"
+          if (Test-Path $installer) {
+            Add-Content -Path $env:GITHUB_PATH -Value $installer
+          } else {
+            Write-Error "vswhere's directory is missing; the AOT publish will fail misleadingly"
+          }
+
+      - name: Publish dm_core
+        run: dotnet publish src/Dm.Native/Dm.Native.csproj -c Release -r ${{ matrix.rid }}
+
+      - name: Check the binary survived
+        shell: bash
+        run: |
+          publish="src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish"
+          ls -l "$publish"
+          # Windows Defender has quarantined a freshly published dm_core.dll locally, and the
+          # publish still reports success - so the file's absence is the only symptom. Fail here
+          # with a clear message rather than in the CMake copy step with a wall of MSB3073.
+          if ! ls "$publish"/dm_core.dll "$publish"/libdm_core.so "$publish"/libdm_core.dylib 2>/dev/null | grep -q .; then
+            echo "::error::no dm_core binary in $publish - antivirus quarantine is the usual cause"
+            exit 1
+          fi
+
+      # Every RID in the matrix runs on its own architecture, so each one really executes rather
+      # than just linking.
+      - name: Build and run the ABI smoke test
+        shell: bash
+        run: |
+          cmake -S tests/abi-smoke -B build/abi-smoke -DCMAKE_BUILD_TYPE=Release -DDM_RID=${{ matrix.rid }}
+          cmake --build build/abi-smoke --config Release
+
+          # The CMakeLists copies the DLL next to the executable as a POST_BUILD step, which is
+          # what a client should copy verbatim. Doing it again here costs nothing and keeps the
+          # run from depending on that step: it has been seen to fail on a machine without pwsh,
+          # and the failure looks like a linker problem rather than a missing file.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.dll" \
+               build/abi-smoke/Release/ 2>/dev/null || true
+          fi
+
+          ctest --test-dir build/abi-smoke -C Release --output-on-failure
+
+      - name: Upload the native binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dm_core-${{ matrix.rid }}
+          path: |
+            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.dll
+            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/libdm_core.so
+            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/libdm_core.dylib
+            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/native/dm_core.lib
+          if-no-files-found: error

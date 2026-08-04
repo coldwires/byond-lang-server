@@ -252,6 +252,53 @@ public sealed class DeclarationParser
     }
 
     /// <summary>Skips an indented block without parsing it, used for proc bodies.</summary>
+    /// <summary>
+    /// Parses a <c>{ ... }</c> block of declarations, which DM accepts in place of an indented one.
+    /// </summary>
+    /// <remarks>
+    /// Members are separated by <c>;</c> rather than by newlines, since a brace block is usually
+    /// written on one line — and always is when a macro produced it.
+    /// </remarks>
+    private List<DeclarationSyntax> ParseBraceBlock(BlockContext context)
+    {
+        _position++;
+
+        List<DeclarationSyntax> declarations = new();
+
+        while (true)
+        {
+            SkipNewlines();
+
+            if (AtEnd || Current == TokenKind.CloseBrace)
+                break;
+
+            if (Current == TokenKind.Semicolon)
+            {
+                _position++;
+                continue;
+            }
+
+            if (Current == TokenKind.Hash)
+            {
+                ConsumeDirective();
+                continue;
+            }
+
+            int before = _position;
+
+            if (ParseDeclaration(context) is { } declaration)
+                declarations.Add(declaration);
+
+            if (_position == before)
+                _position++;
+        }
+
+        if (Current == TokenKind.CloseBrace)
+            _position++;
+
+        return declarations;
+    }
+
     private void SkipIndentedBlock()
     {
         SkipNewlinesAndDirectives();
@@ -366,6 +413,17 @@ public sealed class DeclarationParser
         // value, not a type, so modelling it as a type node would put `maxx` in the object tree.
         if (Current == TokenKind.Assign)
             return ParseVar(path, varIndex: -1, start, inVarContext: false);
+
+        // DM takes braces as an alternative to indentation for a block, and macro-generated code
+        // leans on it because a `\`-continued macro body has no lines to indent. tgstation's
+        // ADMIN_VERB family expands to `/datum/av/x { name = "..."; }; /client/proc/... { ... };`
+        // all on one logical line, and reading the brace as the end of the declaration lost the
+        // type, its overrides, and every declaration after the `;`.
+        if (Current == TokenKind.OpenBrace)
+        {
+            List<DeclarationSyntax> braced = ParseBraceBlock(BlockContext.Any);
+            return new TypeDeclarationSyntax(path, braced, SpanFrom(start));
+        }
 
         ConsumeLineEnd();
         List<DeclarationSyntax> children = ParseIndentedBlock(BlockContext.Any);
