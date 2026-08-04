@@ -426,7 +426,7 @@ Restructured 2026-08-02. Syntax highlighting moved from M9/M10 to M2: it needs o
 it is the first thing a user sees. Document symbols moved to the parser milestone for the same
 reason — a per-file outline needs the AST, not the object tree.
 
-### M0 — Boundary and project setup ✅ *(CI outstanding)*
+### M0 — Boundary and project setup ✅
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
@@ -437,9 +437,14 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
 - ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 523 today. Handle validation, UTF-8
   marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
-- ⬜ CI matrix. NativeAOT produces per-RID binaries: `win-x64`, `linux-x64`, `linux-arm64`,
-  `osx-x64`, `osx-arm64`. **Note the vswhere quirk** — the publish fails with a misleading
-  MSB3073 linker error unless `vswhere.exe`'s directory is on PATH.
+- ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
+  platform-independent — while the native job runs per RID, since NativeAOT produces a separate
+  binary for each and the C ABI is what breaks in platform-specific ways. All five RIDs
+  (`win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`) run on their own architecture,
+  so each publishes, links `abi-smoke` and **executes** it under `ctest` rather than only building.
+  Both local gotchas are handled rather than rediscovered: `vswhere.exe` is put on PATH before the
+  Windows publish, and a step asserts the binary still exists afterwards, because a Defender
+  quarantine leaves the publish reporting success with the file gone.
 
 ### M1 — Text layer and lexer ✅
 
@@ -1315,8 +1320,8 @@ none of which was practical against 1.5M lines.
 
 | | raw | preprocessed |
 |---|---|---|
-| var recall | 94.37% | **96.00%** |
-| proc recall | 96.50% | **97.90%** |
+| var recall | 94.37% | **99.99%** |
+| proc recall | 96.50% | **99.92%** |
 | macro-shaped phantom types | 246 | **9** |
 | files with parse problems | 229 | **102** |
 | wall clock | 37s | **15s** |
@@ -1389,8 +1394,7 @@ earlier: **the harness was wrong, and it produced a confident, plausible, wrong 
 | var recall | 95.42% | **96.00%** |
 | proc recall | 96.04% | **97.90%** |
 
-The subsystem cluster is gone from the top misses entirely; what remains is scattered at 5-9 per
-owner.
+The subsystem cluster is gone from the top misses entirely.
 
 ### The oracle has a blind spot, and "invented" is overstated because of it
 
@@ -1415,6 +1419,35 @@ remainder is 691 vars and 1,096 procs.
 **Do not chase the invented column to zero.** Doing so would mean deleting types the compiler agrees
 exist. Recall is unaffected — it is measured against the reference — but any precision figure has to
 exclude these branches or it is measuring the oracle rather than us.
+
+### The fourth cause: brace blocks at declaration level
+
+DM takes `{ ... }` as an alternative to indentation for a block, and macro-generated code leans on
+it because a `\`-continued macro body has no lines to indent. We handled only indentation, so a type
+with a brace body was read as ending at the brace — losing the type, its overrides, and every
+declaration after the following `;`. tgstation's `ADMIN_VERB` family is exactly that shape, on one
+logical line:
+
+```dm
+/datum/av/x { name = "..."; }; /client/proc/__avd_x() { ... }; /datum/av/x/__avd_do_verb(...)
+```
+
+| | before | after |
+|---|---|---|
+| var recall | 96.00% | **99.99%** — 8,962 missing to 26 |
+| proc recall | 97.90% | **99.92%** — 1,363 missing to 55 |
+
+**This had been filed as a long tail, and that was wrong.** Aggregating the misses by *owner* showed
+no cluster above nine, which read as diminishing returns. Aggregating the same misses by *member
+name* showed `dir` 1792, `icon_state` 1161, `pixel_x`/`pixel_y` 900 each — the signature of one
+shared cause spread thin across thousands of owners. Both views cost a single command; only one was
+informative, and picking the wrong one nearly closed the investigation early.
+
+**Residue: 26 vars and 55 procs out of roughly 289,000.** Two leads if it is ever worth another
+pass. Several root-level members are missing while the same names appear invented under builtin
+branches — `/icon AddAlphaMask`, `/mutable_appearance/... appearance_ref` — so an owner is resolving
+to a builtin type where it should be the root. And one invented entry has the owner `/else`, which
+means a conditional branch is being read as a declaration somewhere.
 
 The third cause was **indentation across a skipped `#if` region**, found on mlaas rather than here:
 the region takes its `Indent` tokens with it while the matching `Dedent`s survive in live code, so

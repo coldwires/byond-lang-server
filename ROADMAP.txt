@@ -17,6 +17,11 @@ WHERE WE ARE
     bodies are real syntax trees, and the outline ships through the ABI at
     version 0.3. Every DM file in the corpus parses clean.
   - Local git repo initialised. MIT licensed.
+  - tgstation is at 99.99% vars / 99.92% procs against dm.exe -o.
+  - CI runs on push and PR: .github/workflows/ci.yml. Managed tests once,
+    then all five RIDs publish, link abi-smoke and RUN it. vswhere is put on
+    PATH before the Windows publish and the binary's existence is asserted
+    after it, so neither local gotcha has to be rediscovered.
   - dotnet test works: 546 tests, all passing.
       Dm.Core.Tests   - 514, text layer through completion
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
@@ -46,10 +51,7 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE QT DEV. Syntax highlighting is now available
      through the ABI. He can wire it up today - it does not need anything else
      from us. The CMakeLists include/link lines are meant to be copied.
-  2. One focused pass at tgstation recall, then stop. No cluster is above 9
-     per owner now, so expect diminishing returns fast.
-  3. CI with the 5-platform build matrix. The vswhere quirk will hit it too.
-  4. Test dm.exe for whether a brace block can hold indentation-structured
+  2. Test dm.exe for whether a brace block can hold indentation-structured
      sub-blocks. Still a guess. Mixed tabs and spaces is now answered - see
      VERIFIED below.
 
@@ -196,8 +198,8 @@ PREPROCESSED PARSING - NOW THE DEFAULT
 
   On tgstation:
                               raw        preprocessed
-    var recall              94.37%          96.00%
-    proc recall             96.50%          97.90%
+    var recall              94.37%          99.99%   (26 missing)
+    proc recall             96.50%          99.92%   (55 missing)
     macro-shaped phantoms      246               9
     files with problems        229             102
     wall clock                 37s             15s
@@ -596,7 +598,7 @@ NOTED IN YOUR PROJECT (mlaas) - not our bug, might be yours
 
 MILESTONES                                    (restructured 2026-08-02)
 --------------------------------------------------------------------------------
-  [~] M0   Boundary + project setup       <- done except CI
+  [x] M0   Boundary + project setup       <- DONE, CI included
   [x] M1   Text layer + lexer             <- DONE. clean across 279 files /
                                              303,015 tokens of real DM.
   [x] M2   Lexical classification         <- DONE. syntax highlighting works
