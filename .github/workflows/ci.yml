@@ -42,6 +42,10 @@ jobs:
           - { os: ubuntu-latest,     rid: linux-x64 }
           - { os: ubuntu-24.04-arm,  rid: linux-arm64 }
           - { os: windows-latest,    rid: win-x64 }
+          # 32-bit exists for the DreamMaker patcher, which must load into a 32-bit MFC host.
+          # It earns its place in the matrix: the handle table packed a generation into the
+          # high 32 bits of a pointer and silently had none here, which x64 could never catch.
+          - { os: windows-latest,    rid: win-x86 }
           - { os: macos-13,          rid: osx-x64 }
           - { os: macos-latest,      rid: osx-arm64 }
 
@@ -94,7 +98,14 @@ jobs:
       - name: Build and run the ABI smoke test
         shell: bash
         run: |
-          cmake -S tests/abi-smoke -B build/abi-smoke -DCMAKE_BUILD_TYPE=Release -DDM_RID=${{ matrix.rid }}
+          # MSVC defaults to a 64-bit target whatever the RID says, so the 32-bit build needs the
+          # generator platform set or it links x64 objects against an x86 import library.
+          arch=""
+          if [ "${{ matrix.rid }}" = "win-x86" ]; then
+            arch="-A Win32"
+          fi
+
+          cmake -S tests/abi-smoke -B build/abi-smoke -DCMAKE_BUILD_TYPE=Release -DDM_RID=${{ matrix.rid }} $arch
           cmake --build build/abi-smoke --config Release
 
           # The CMakeLists copies the DLL next to the executable as a POST_BUILD step, which is

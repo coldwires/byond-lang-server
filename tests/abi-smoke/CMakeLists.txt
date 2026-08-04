@@ -15,6 +15,11 @@ else()
   set(DM_RID_DEFAULT "linux-x64")
 endif()
 
+# Building 32-bit needs the generator platform as well as the RID, since MSVC targets x64 by
+# default and would otherwise link x64 objects against an x86 import library:
+#
+#   cmake -S tests/abi-smoke -B build/smoke32 -A Win32 -DDM_RID=win-x86
+#
 set(DM_RID "${DM_RID_DEFAULT}" CACHE STRING "Runtime identifier of the dm_core build to link")
 
 set(DM_CORE_BUILD_DIR

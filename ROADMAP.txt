@@ -518,6 +518,48 @@ INJECTED DEFINES - dm.exe -D   [DONE for the core and the CLI]
   highlighting and the build will disagree. Pre/post-compile hooks are yours
   to own - we have no build step to hang them off.
 
+32-BIT BUILD - FOR THE DREAMMAKER PATCHER   [VERIFIED, NOT WIRED UP]
+--------------------------------------------------------------------------------
+  dreammaker.exe is a 32-bit MFC app (mfc140u.dll) importing byondwin/byondext/
+  byondcore, and its editor pane looks like a RichEdit 2.0 control. So anything
+  loading into that process must be 32-bit, and our five RIDs are all 64-bit.
+
+  NativeAOT targets win-x86 fine. Verified 2026-08-04:
+
+    dotnet publish src\Dm.Native\Dm.Native.csproj -c Release -r win-x86
+
+    dm_core.dll   1.69 MB, machine (x86), all 21 exports present
+    dm_core.lib   alongside it in native\, as on x64
+
+  ** THE TRAP: ON x86 THE EXPORTS ARE __stdcall AND OUR HEADER DOES NOT SAY SO **
+
+    dm_abi_version = _dm_abi_version@0
+    dm_complete_at = _dm_complete_at@24
+    dm_query_json  = _dm_query_json@12
+
+  The undecorated names are exported, so GetProcAddress finds them. But MSVC
+  defaults an extern "C" declaration to __cdecl on x86, and abi/dm_core.h has no
+  calling-convention annotation - it never needed one, because x64 has only one
+  convention. A client that includes the header as-is will mismatch and corrupt
+  the stack on every call. It presents as random crashes, not as a link error.
+
+  Until this is settled, a 32-bit client should declare the functions __stdcall
+  itself rather than including the header unmodified.
+
+  TWO WAYS TO FIX, undecided:
+    1. Annotate the header with a DM_CALL macro - __stdcall on 32-bit Windows,
+       empty elsewhere. Documents what the toolchain already produces; no
+       managed-side change.
+    2. Force cdecl in the exports with
+       [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] so the header
+       stays convention-free. Touches all 19 exports, needs the smoke test re-run
+       per RID.
+
+  ALSO NOT DONE: the C++ smoke test has never been built 32-bit. That is the
+  difference between "the DLL exists" and "C++ can call it", which is the exact
+  distinction M0 was built to catch. Do it when the patcher work starts.
+  win-x86 also needs adding to the CI matrix or it will rot between now and then.
+
 dm.exe FLAGS - THE FULL SET FOR 516.1666
 --------------------------------------------------------------------------------
   Three of these are ORACLES. They make the compiler answer something we also

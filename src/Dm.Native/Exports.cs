@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Dm.Core;
@@ -32,10 +33,10 @@ internal static unsafe class Exports
     [ThreadStatic]
     private static string? _lastError;
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_abi_version")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_abi_version")]
     public static int AbiVersion() => DmAbi.Packed;
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_workspace_open")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_workspace_open")]
     public static int WorkspaceOpen(byte* dmePathUtf8, IntPtr* outWorkspace)
     {
         if (outWorkspace is null)
@@ -59,7 +60,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_workspace_close")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_workspace_close")]
     public static void WorkspaceClose(IntPtr workspace)
     {
         try
@@ -73,7 +74,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_workspace_root")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_workspace_root")]
     public static int WorkspaceRoot(IntPtr workspace, byte** outRoot)
     {
         if (outRoot is null)
@@ -103,7 +104,7 @@ internal static unsafe class Exports
     /// <c>dm_workspace_open</c> still applies to the first query, and a client can change build
     /// flags later without reopening. Passing null or a count of zero clears them.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_set_defines")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_set_defines")]
     public static int SetDefines(IntPtr workspace, byte** defines, int count)
     {
         try
@@ -141,7 +142,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_set_buffer")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_set_buffer")]
     public static int SetBuffer(IntPtr workspace, byte* filePath, byte* contentUtf8, int length)
     {
         try
@@ -172,7 +173,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_close_buffer")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_close_buffer")]
     public static int CloseBuffer(IntPtr workspace, byte* filePath)
     {
         try
@@ -202,7 +203,7 @@ internal static unsafe class Exports
     /// accessor calls per span. This runs on every scroll and every keystroke, so the per-span cost
     /// is what matters.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_classify_range")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_classify_range")]
     public static int ClassifyRange(
         IntPtr workspace,
         byte* filePath,
@@ -252,7 +253,7 @@ internal static unsafe class Exports
     ///
     /// The caller owns the returned buffer and releases it with <c>dm_free</c>.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_document_symbols")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_document_symbols")]
     public static int DocumentSymbols(
         IntPtr workspace,
         byte* filePath,
@@ -311,7 +312,7 @@ internal static unsafe class Exports
     /// as a matter of course, so a single answer would be an arbitrary pick among several correct
     /// ones.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_definition_at")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_definition_at")]
     public static int DefinitionAt(
         IntPtr workspace,
         byte* filePath,
@@ -358,7 +359,7 @@ internal static unsafe class Exports
     /// An empty JSON object rather than an error when nothing resolves: a pointer resting on a
     /// local, a keyword or whitespace is the common case, not a failure.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_hover_at")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_hover_at")]
     public static int HoverAt(
         IntPtr workspace,
         byte* filePath,
@@ -407,7 +408,7 @@ internal static unsafe class Exports
     /// Ranked and capped rather than exhaustive: a two-character query on a large project matches
     /// tens of thousands of symbols, and an unranked wall of them is useless to a picker.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_workspace_symbols")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_workspace_symbols")]
     public static int WorkspaceSymbols(
         IntPtr workspace,
         byte* query,
@@ -457,7 +458,7 @@ internal static unsafe class Exports
     /// same shapes become <c>dm/objectTree</c> and friends at M10, which is what keeps the two shells
     /// answering identically.
     /// </remarks>
-    [UnmanagedCallersOnly(EntryPoint = "dm_query_json")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_query_json")]
     public static int QueryJsonExport(IntPtr workspace, byte* request, byte** outJson)
     {
         if (outJson is null)
@@ -492,7 +493,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_complete_at")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_complete_at")]
     public static int CompleteAt(
         IntPtr workspace,
         byte* filePath,
@@ -538,7 +539,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_classification_count")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_classification_count")]
     public static int ClassificationCount(IntPtr classification)
         => HandleTable.TryGet(classification, out ClassificationBuffer buffer) ? buffer.Count : -1;
 
@@ -546,11 +547,11 @@ internal static unsafe class Exports
     /// Pointer to <c>3 * count</c> consecutive <c>int32</c> values. Valid until
     /// <c>dm_classification_free</c>.
     /// </summary>
-    [UnmanagedCallersOnly(EntryPoint = "dm_classification_data")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_classification_data")]
     public static int* ClassificationData(IntPtr classification)
         => HandleTable.TryGet(classification, out ClassificationBuffer buffer) ? buffer.Data : null;
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_classification_free")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_classification_free")]
     public static void ClassificationFree(IntPtr classification)
     {
         try
@@ -594,7 +595,7 @@ internal static unsafe class Exports
     /// Message for the last failure on the calling thread, or null. Caller frees with
     /// <c>dm_free</c>.
     /// </summary>
-    [UnmanagedCallersOnly(EntryPoint = "dm_last_error")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_last_error")]
     public static byte* LastError()
     {
         try
@@ -607,7 +608,7 @@ internal static unsafe class Exports
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "dm_free")]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_free")]
     public static void Free(void* ptr) => NativeStrings.Free(ptr);
 
     private static int Ok()
