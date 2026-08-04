@@ -47,6 +47,7 @@ internal static class Program
                 "hover" => Hover(args),
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
+                "bench" => Bench.Run(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -103,6 +104,9 @@ internal static class Program
         Console.Error.WriteLine("      --own                with --members, skip what it inherits");
         Console.Error.WriteLine("      --limit <n>          cap on --subtypes (default 500)");
         Console.Error.WriteLine("      --no-builtins        the project's own declarations only");
+        Console.Error.WriteLine("  bench <file.dme>         time a cold open and a warm edit");
+        Console.Error.WriteLine("      --rounds <n>         warm rounds to time (default 3)");
+        Console.Error.WriteLine("      --file <path>        which file to 'edit' (default: the first)");
         Console.Error.WriteLine("  preprocess <file.dme>    expand the whole project in compile order");
         Console.Error.WriteLine("      --macros             show tokens that came from a macro");
         Console.Error.WriteLine("      --dump               print every token");
@@ -827,7 +831,7 @@ internal static class Program
     /// <c>-D CBT</c>. A project built with flags we do not receive is a different program from the
     /// one we analyse, so these belong on every command that walks the graph, not just on `tree`.
     /// </remarks>
-    private static IncludeOptions BuildOptions(string[] args)
+    internal static IncludeOptions BuildOptions(string[] args)
     {
         List<string> defines = new();
 
@@ -844,7 +848,7 @@ internal static class Program
         return new IncludeOptions { Defines = defines.Count > 0 ? defines : null };
     }
 
-    private static string? OptionValue(string[] args, string name)
+    internal static string? OptionValue(string[] args, string name)
     {
         for (int i = 0; i < args.Length - 1; i++)
         {

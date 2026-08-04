@@ -23,14 +23,14 @@ WHERE WE ARE
     (ABI 0.6, 0.7, 0.8), and bulk object-tree queries ship as dm_query_json
     at 0.11 with the request and response shapes frozen in abi/schema/.
     That is TEAM V1: everything an IDE needs to draw the panels.
-  - Local git repo initialised. MIT licensed. 90 commits.
+  - Local git repo initialised. MIT licensed. 91 commits.
   - tgstation is at 99.99% vars / 99.92% procs against dm.exe -o.
   - CI runs on push and PR: .github/workflows/ci.yml. Managed tests once,
     then all five RIDs publish, link abi-smoke and RUN it. vswhere is put on
     PATH before the Windows publish and the binary's existence is asserted
     after it, so neither local gotcha has to be rediscovered.
-  - dotnet test works: 609 tests, all passing.
-      Dm.Core.Tests   - 577, text layer through bulk queries
+  - dotnet test works: 621 tests, all passing.
+      Dm.Core.Tests   - 589, text layer through bulk queries
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
@@ -58,9 +58,9 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE IDE DEVS. Highlighting, the outline,
      completion, definition, hover and workspace symbols are all callable
      today, and the CMakeLists include/link lines are meant to be copied.
-  2. Pick the next milestone. M8 (.dmi icon states) is self-contained and is
-     an afternoon; M9 (incremental reparse) is what a 1.5M-line codebase will
-     want before the LSP shell brings public users with big projects.
+  2. Settle the M9 staleness question - see MILESTONES M9. It decides what
+     we can cache between keystrokes, and it is a rule your IDEs have to
+     follow, so it is not ours to pick alone.
   3. Nothing about the language is a guess now. Both remaining open questions
      are about the project - see OPEN QUESTIONS at the bottom.
 
@@ -678,7 +678,7 @@ MILESTONES                                    (restructured 2026-08-02)
   [x] M3   Preprocessor + include graph   <- DONE. include graph, encoding,
                                              conditionals, macro expansion,
                                              and the source map.
-  [x] M4   Parser + syntax errors + document symbols   <- DONE
+  [x] M4   Parser + syntax errors + document symbols   <- DONE, complete
              declarations, expressions and statements all parse.
              document symbols ship through dm_document_symbols (ABI 0.3)
              with syntax diagnostics in the same call.
@@ -686,8 +686,8 @@ MILESTONES                                    (restructured 2026-08-02)
              dmc tree --raw keeps the old path for comparison.
              injected defines (-D) are accepted everywhere, including
              through the ABI as dm_set_defines.
-             deferred: parameter defaults still come from a range scan, so
-             ParameterSyntax.HasDefault is a bool with no tree behind it.
+             parameter defaults are parsed too, so a signature renders
+             heal(amount = 5) rather than heal(amount). M4 IS COMPLETE.
   [x] M5   Object tree + BYOND builtins   <- DONE
              types merge across files in compile order, inheritance
              follows parent_type, and the BYOND standard library is
@@ -733,7 +733,22 @@ MILESTONES                                    (restructured 2026-08-02)
              can draw an expander without a second call, and a capped list
              says truncated rather than leaving you to compare counts.
   [ ] M8   .dmi icon states  (independent, do anytime)
-  [ ] M9   Incremental reparse + performance
+  [~] M9   Incremental reparse + performance   <- STARTED
+             baseline measured first, because optimising without one is
+             guessing. dmc bench times a cold open by phase and then the
+             number that matters: push a buffer, ask a question.
+             mlaas       cold 185 ms    one keystroke 131 ms
+             tgstation   cold 14.3 s    one keystroke 13.7 s
+             every edit rebuilds the whole project today.
+             WHERE THE TIME IS, on tgstation: preprocess 5.4s, split 3.7s,
+             parse 4.3s, build tree 0.9s. So the TREE MERGE IS NOT THE
+             PROBLEM - it is 6% - and the split costs as much as the parse,
+             which nobody would have guessed from reading it.
+             ~2.9s of the preprocess is reading and lexing all 7,161 files,
+             which we redo on every keystroke.
+             NEXT DECISION IS YOURS, not technical: reusing a lex across
+             rebuilds means caching by path, and then a git checkout under a
+             running IDE is invisible to us until reopen. See PLAN M9.
   [ ] M10  LSP server + VS Code extension <- community v1
   [ ] M11  Semantic diagnostics, find-refs, rename
              one of them landed early: DM0300, the discarded-proc warning,

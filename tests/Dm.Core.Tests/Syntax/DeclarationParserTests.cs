@@ -400,6 +400,70 @@ public class DeclarationParserTests
         Assert.Equal(2, result.Root.Declarations.Count);
     }
 
+    // -- parameter defaults -------------------------------------------------
+
+    private static ParameterSyntax OnlyParameter(string source)
+    {
+        ParseResult result = Parse(source);
+        Assert.Empty(result.Diagnostics);
+
+        ProcDeclarationSyntax proc = Assert.IsType<ProcDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        return Assert.Single(proc.Parameters);
+    }
+
+    /// <remarks>
+    /// The default used to be a bool with nothing behind it, so `f(x = 5)` and `f(x = get_max())`
+    /// were indistinguishable to everything downstream.
+    /// </remarks>
+    [Fact]
+    public void A_parameter_default_is_parsed_as_an_expression()
+    {
+        ParameterSyntax parameter = OnlyParameter("/proc/f(x = 5)\n\treturn\n");
+
+        Assert.True(parameter.HasDefault);
+        LiteralExpressionSyntax literal = Assert.IsType<LiteralExpressionSyntax>(parameter.DefaultValue);
+        Assert.Equal("5", literal.Text);
+    }
+
+    [Fact]
+    public void A_parameter_without_a_default_has_neither_flag_nor_tree()
+    {
+        ParameterSyntax parameter = OnlyParameter("/proc/f(x)\n\treturn\n");
+
+        Assert.False(parameter.HasDefault);
+        Assert.Null(parameter.DefaultValue);
+    }
+
+    /// <summary>
+    /// The parameter list is split on commas at paren depth 1, so a call in a default keeps its own
+    /// commas. Reading past the parameter would take the next one with it.
+    /// </summary>
+    [Fact]
+    public void A_default_may_contain_commas_of_its_own()
+    {
+        ParseResult result = Parse("/proc/f(x = list(1, 2), y = 3)\n\treturn\n");
+
+        Assert.Empty(result.Diagnostics);
+
+        ProcDeclarationSyntax proc = Assert.IsType<ProcDeclarationSyntax>(Assert.Single(result.Root.Declarations));
+        Assert.Equal(2, proc.Parameters.Count);
+
+        Assert.IsType<InvocationExpressionSyntax>(proc.Parameters[0].DefaultValue);
+        Assert.Equal("y", proc.Parameters[1].Name);
+        Assert.IsType<LiteralExpressionSyntax>(proc.Parameters[1].DefaultValue);
+    }
+
+    /// <summary>A default sits after the type and before the <c>as</c> clause, and none of them collide.</summary>
+    [Fact]
+    public void A_default_coexists_with_a_declared_type()
+    {
+        ParameterSyntax parameter = OnlyParameter("/proc/f(obj/item/I = /obj/item/sword)\n\treturn\n");
+
+        Assert.Equal("I", parameter.Name);
+        Assert.Equal("/obj/item", parameter.DeclaredType?.Text);
+        Assert.IsType<PathExpressionSyntax>(parameter.DefaultValue);
+    }
+
     // -- brace blocks -------------------------------------------------------
 
     /// <summary>

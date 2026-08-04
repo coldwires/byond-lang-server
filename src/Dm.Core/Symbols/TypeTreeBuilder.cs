@@ -58,12 +58,13 @@ public static class TypeTreeBuilder
         ArgumentNullException.ThrowIfNull(parse);
 
         foreach (DeclarationSyntax declaration in parse.Root.Declarations)
-            Walk(tree, file, declaration, TypePath.Root, cancellationToken);
+            Walk(tree, file, parse.Text, declaration, TypePath.Root, cancellationToken);
     }
 
     private static void Walk(
         ObjectTree tree,
         string file,
+        SourceText text,
         DeclarationSyntax declaration,
         TypePath enclosing,
         CancellationToken cancellationToken)
@@ -83,7 +84,7 @@ public static class TypeTreeBuilder
                 TypePath owner = GroupOwner(enclosing, group.Path);
 
                 foreach (DeclarationSyntax member in group.Members)
-                    Walk(tree, file, member, owner, cancellationToken);
+                    Walk(tree, file, text, member, owner, cancellationToken);
 
                 break;
             }
@@ -95,7 +96,7 @@ public static class TypeTreeBuilder
                 symbol.AddSite(new DeclarationSite(file, type.Span, type.NameSpan));
 
                 foreach (DeclarationSyntax member in type.Members)
-                    Walk(tree, file, member, path, cancellationToken);
+                    Walk(tree, file, text, member, path, cancellationToken);
 
                 break;
             }
@@ -109,7 +110,7 @@ public static class TypeTreeBuilder
                 break;
 
             case ProcDeclarationSyntax proc:
-                AddProc(tree, file, proc, enclosing);
+                AddProc(tree, file, text, proc, enclosing);
                 break;
         }
     }
@@ -165,7 +166,7 @@ public static class TypeTreeBuilder
     /// signature derived from it cannot drift out of date the way a comment can.
     /// </para>
     /// </remarks>
-    private static string Render(ParameterSyntax parameter)
+    private static string Render(ParameterSyntax parameter, SourceText text)
     {
         // The path is rendered resolved, so `mob/target` in source shows as `/mob/target`. That is
         // the type it actually names, and a leading separator is what distinguishes a type from a
@@ -178,15 +179,25 @@ public static class TypeTreeBuilder
         if (parameter.InputType is { Length: > 0 } inputType)
             rendered += $" as {inputType}";
 
+        // The default, as written. A caller reading `heal(amount = 5)` learns something a caller
+        // reading `heal(amount)` does not: that the argument is optional, and what it falls back to.
+        // Rendered from source rather than from the tree, so an expression we model loosely still
+        // shows the author's own text.
+        if (parameter.DefaultValue is { } value)
+            rendered += $" = {text.ToString(value.Span)}";
+        else if (parameter.HasDefault)
+            rendered += " = ...";
+
         return rendered;
     }
 
-    private static void AddProc(ObjectTree tree, string file, ProcDeclarationSyntax proc, TypePath enclosing)
+    private static void AddProc(
+        ObjectTree tree, string file, SourceText text, ProcDeclarationSyntax proc, TypePath enclosing)
     {
         List<string> parameters = new(proc.Parameters.Count);
 
         foreach (ParameterSyntax parameter in proc.Parameters)
-            parameters.Add(Render(parameter));
+            parameters.Add(Render(parameter, text));
 
         tree.GetOrAdd(ProcOwner(enclosing, proc.Path))
             .GetOrAddProc(proc.Name, proc.IsVerb)
