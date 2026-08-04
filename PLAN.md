@@ -1136,11 +1136,123 @@ gives a freeze rather than a breakpoint. Combining is the interesting design: pr
 inspection and stack, native suspend for "pause now" and for holding the clock. Each half is useful
 alone, and only the suspend half is unsupported.
 
-**The experiment that settles rung 1** costs an afternoon and should come before any design: ~30 lines
-of DM — a proc looping on `sleep(1)` until a flag flips, plus a `world/Topic()` that flips it and
-dumps state — compiled and poked from outside. If `Topic()` is serviced while a proc sleeps, the
-approach stands and the rest is plumbing. If not, the channel has to change. Compile a discriminating
-case, as with everything else in §8.
+**Injection point, if we own the IDE.** Start the host with `CreateProcess` suspended and inject
+before the first instruction runs, rather than attaching to a live process. Attaching races whatever
+is already executing and has to handle a world mid-tick; launching does not. Owning the IDE means
+owning the launch, which removes the hardest part of rung 3.
+
+**Rung 2 in one line:** the probe calls into our DLL through `call_ext`/byondapi instead of
+`world.Export()`. That is a documented API, so it keeps the maintenance story, and it buys
+native-speed marshalling plus a socket we own instead of HTTP per probe hit.
+
+**On patching bytecode, and why the compiler is the better lever.** An `INT3` equivalent does not
+exist: `0xCC` works because the CPU defines it and the OS delivers a debug exception, and BYOND's
+interpreter offers no such contract to a third party. Replacing an opcode with a trap only works if
+something already hooks the dispatch loop to recognise it — which is rung 4, and the fragility is the
+hook rather than the patch. Inserting a *call* to a debug proc would work against the stock
+interpreter, but it means writing a `.dmb` encoder for an undocumented format that changes across
+releases, and both public decompilers already fail on 516: one reads zero bytecode entries from a
+confirmed DEBUG build, the other EOFErrors in the string table. Inserting also shifts every
+subsequent offset, jump target and line-table entry.
+
+The same idea works with supported inputs, because we control what the compiler is *fed* even though
+we cannot change the compiler. **Emit a probe at every statement once, gated on a runtime flag**, and
+breakpoints become data rather than code: toggling one flips a list entry instead of recompiling.
+That trades a flag check per statement for the recompile-per-breakpoint cost noted above, and it is
+the design to prototype first.
+
+### Rung 1 is validated — `world.Topic()` is serviced while a proc is blocked
+
+Run 2026-08-04 against 516.1666, because the whole approach stood on an assumption. A world with
+three breakpoints in a row, each a `sleep(1)` loop on a global flag, plus a `Topic()` that reports
+state and flips the flag:
+
+```dm
+/proc/breakpoint_here(where)
+	dbg_state = "stopped:[where]"
+	dbg_hits++
+	while(!dbg_resume)
+		sleep(1)
+	dbg_resume = 0
+
+world/Topic(T, Addr, Master, Keys)
+	if(T == "status") return "state=[dbg_state] hits=[dbg_hits] steps=[dbg_steps]"
+	if(T == "resume")
+		dbg_resume = 1
+		return "ok"
+```
+
+Compiled, run under `dreamdaemon probe.dmb 47123 -trusted -invisible -logself`, and driven from a
+Python client speaking BYOND's topic framing — `00 83`, a big-endian length, five zero bytes, the
+query, a NUL; replies are `2a` for a float and `06` for a string. Three stop/resume cycles:
+
+```
+state=stopped:step-1 hits=1 steps=0
+resume -> ok      state=stopped:step-2 hits=2 steps=1
+resume -> ok      state=stopped:step-3 hits=3 steps=2
+resume -> ok      state=finished       hits=3 steps=3
+```
+
+**Two results.** `Topic()` answers while a proc sits in its sleep loop, so the command channel works
+with no injection and no native code. And `steps` advances only after each resume, so *that proc* is
+genuinely parked rather than running on — the `world.log` interleaving shows the loop: *stopped at
+step-1, topic status, topic resume, resumed from step-1, executed step 1, stopped at step-2*.
+
+**What is emphatically not stopped is the world**, and it is worth being exact because the word
+"breakpoint" invites the wrong picture. BYOND runs DM on a single thread with cooperative
+scheduling: `sleep()` yields to the scheduler rather than blocking the thread, and the scheduler then
+runs everything else — including the `Topic()` proc. A background ticker measures it. Sampled three
+times while sitting at the same breakpoint:
+
+```
+state=stopped:step-1 hits=1 steps=0 ticks=130 time=130
+state=stopped:step-1 hits=1 steps=0 ticks=152 time=152
+state=stopped:step-1 hits=1 steps=0 ticks=174 time=174
+```
+
+The ticker ran 44 more times and `world.time` advanced with it, in lockstep, while our proc was
+"stopped". So this is **a breakpoint on one call stack**, not a stopped process — the game keeps
+moving, timers keep firing, other procs keep running.
+
+That is also *why* it works at all. On a single thread, a real block would deadlock the world and
+`Topic()` could never be answered; the experiment would have hung rather than replied. Cooperative
+yielding is the mechanism, not an incidental detail, and it is the reason nothing here needs native
+code.
+
+**What this asks of the game being debugged, which is less than it first appears.** A breakpoint is
+the same class of interruption DM already has: any proc containing `sleep()` or `spawn()` already
+lets the world change underneath it, and DM code has to tolerate that to work at all. Code that is
+correct across a `sleep(1)` is correct across a breakpoint in the same place.
+
+The narrow hazard is that instrumentation introduces yield points where the author had none — a proc
+written to run start to finish is atomic today and is not with a probe in the middle of it. **Gating
+each probe on a runtime flag is what contains this**, and it is the strongest argument for that
+design over inserting bare calls: with the flag off, `if(dbg_enabled[47]) breakpoint_here(47)` is a
+list read and a branch, so no yield exists anywhere a breakpoint has not been set. Atomicity is lost
+only where one is, which is true of every debugger in a language where anything else can run.
+
+What no design fixes, and what belongs in the client's documentation rather than being discovered:
+`world.time` jumps across a stop, so elapsed-time arithmetic reads nonsense on resume; timers
+scheduled during the stop all fire at once when it ends; a hand-rolled `var/busy` lock held across a
+breakpoint blocks other procs for the duration; and connected clients experience the stop as lag.
+None of that argues for changing how a game is written — it argues for debugging on a local session,
+which is what people do anyway.
+
+A game *can* cooperate for a closer approximation of stop-the-world, and the shape is one SS13 already
+has: a global paused flag that long-running loops check at their own safepoints. That needs no
+instrumentation at all. Optional, not a prerequisite.
+
+The consequence for the design: pausing more of the world means instrumenting more of it, since only
+a proc that reaches a probe can park. Procs without probes, engine-driven work and anything inside
+`byondcore` keep going regardless. **Stopping the scheduler itself is what rung 3 buys**, and this is
+the sharpest argument for it — `SuspendThread` on the interpreter thread is the only way to freeze
+what DM cannot reach.
+
+That is a debugger control loop — stop, inspect, resume, repeat — in pure DM. The rest of rung 1 is
+plumbing: a rewriter that inserts `breakpoint_here()` calls at statement boundaries, locals captured
+explicitly since DM cannot enumerate them, and a DAP server translating the same commands. The
+limits recorded above are unchanged: an instrumented build is not the shipped program, the world
+keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ---
 
