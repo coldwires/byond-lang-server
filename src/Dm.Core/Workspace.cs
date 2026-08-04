@@ -23,6 +23,9 @@ namespace Dm.Core;
 public sealed class Workspace : IDisposable
 {
     private readonly Dictionary<string, Document> _documents;
+    private readonly SourceCache _sources = new(PathComparer);
+    private readonly ExpandedRunCache _runs = new(PathComparer);
+    private readonly FileEffectCache _effects = new();
     private ObjectTree? _tree;
     private IReadOnlyCollection<string>? _macroNames;
     private bool _disposed;
@@ -166,16 +169,32 @@ public sealed class Workspace : IDisposable
 
             // Pushed buffers are authoritative (PLAN.md §4). Without this the walk reads the file as
             // last saved, and every unsaved keystroke would be analysed against stale text.
-            SourceProvider = path => _documents.TryGetValue(path, out Document? open) ? open.Text : null,
+            SourceProvider = path => _documents.TryGetValue(path, out Document? open)
+                ? open.Text
+                : _sources.Read(path),
+
+            // Reuses the lex of every file that has not changed since the last rebuild. The one file
+            // being typed in has a buffer, and its Document caches its own lex, so the work that is
+            // genuinely new is done exactly once either way.
+            LexProvider = (path, text) => _documents.TryGetValue(path, out Document? open) && ReferenceEquals(open.Text, text)
+                ? open.Lex
+                : _sources.Lex(path, text),
+
+            // Replays a file that has not changed instead of walking it, which is where the bulk of
+            // a rebuild goes once reading and lexing are cached.
+            Effects = _effects,
         };
 
         PreprocessResult preprocessed = Preprocessor.Run(DmePath, options);
         _macroNames = preprocessed.Macros.Names;
 
-        foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed, cancellationToken))
+        // Reuses the token source and the parse of every file whose run came out identical, which
+        // after an edit is nearly all of them.
+        foreach ((string file, TokenSource _, ParseResult parse) in
+                 PreprocessedSplitter.SplitAndParse(preprocessed, _runs, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            TypeTreeBuilder.AddFile(tree, file, DeclarationParser.Parse(source), cancellationToken);
+            TypeTreeBuilder.AddFile(tree, file, parse, cancellationToken);
         }
 
         _tree = tree;

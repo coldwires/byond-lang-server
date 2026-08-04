@@ -23,14 +23,14 @@ WHERE WE ARE
     (ABI 0.6, 0.7, 0.8), and bulk object-tree queries ship as dm_query_json
     at 0.11 with the request and response shapes frozen in abi/schema/.
     That is TEAM V1: everything an IDE needs to draw the panels.
-  - Local git repo initialised. MIT licensed. 91 commits.
+  - Local git repo initialised. MIT licensed. 97 commits.
   - tgstation is at 99.99% vars / 99.92% procs against dm.exe -o.
   - CI runs on push and PR: .github/workflows/ci.yml. Managed tests once,
     then all five RIDs publish, link abi-smoke and RUN it. vswhere is put on
     PATH before the Windows publish and the binary's existence is asserted
     after it, so neither local gotcha has to be rediscovered.
-  - dotnet test works: 621 tests, all passing.
-      Dm.Core.Tests   - 589, text layer through bulk queries
+  - dotnet test works: 637 tests, all passing.
+      Dm.Core.Tests   - 605, text layer through bulk queries
       Dm.Native.Tests -  32, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
@@ -746,9 +746,76 @@ MILESTONES                                    (restructured 2026-08-02)
              which nobody would have guessed from reading it.
              ~2.9s of the preprocess is reading and lexing all 7,161 files,
              which we redo on every keystroke.
-             NEXT DECISION IS YOURS, not technical: reusing a lex across
-             rebuilds means caching by path, and then a git checkout under a
-             running IDE is invisible to us until reopen. See PLAN M9.
+             TWO CACHES IN. SourceCache keeps each file's read and lex,
+             revalidated by mtime + length - you picked the probe over
+             trusting the cache, so a git checkout under a running IDE is
+             still seen and your IDEs need do nothing. ExpandedRunCache then
+             keeps each file's token source and parse, reused when the
+             preprocessor produced the same run for it.
+
+             one keystroke  baseline  +lex  +run  +effect  +runs  +zero-copy
+             mlaas            131 ms  87 ms 41 ms   21 ms  14 ms      10 ms
+             tgstation       13.7 s   7.8 s  5.8 s   3.1 s   2.0 s     0.91 s
+
+             MLAAS IS UNDER THE 30 ms TARGET. That is the acceptance
+             number - your game, one keystroke, warm.
+
+             THIRD LEVER: FileEffectCache records what walking a file did -
+             the tokens it contributes, the macros it defines, the includes
+             it triggers - and replays it when the file text and the macro
+             state entering it are both unchanged. 1 of 7,161 files is
+             re-walked after an edit.
+
+             VERIFIED ON REAL CODE: dmc bench --verify builds the same
+             edited project with every cache off and compares. 335,519
+             declarations identical on tgstation.
+
+             THE TRAP WAS REAL, AND SO WAS A BUG UNDER IT. A file key does
+             not cover its includes, so each include records the macro state
+             hash it produced and a mismatch makes the build redo itself
+             without the cache. That check needs a state hash that can tell
+             two macro states apart - and MacroTable.StateHash mixed a
+             macro NAME and BODY LENGTH, so THING=/obj/first and
+             THING=/obj/second hashed the same. Editing a define did
+             nothing. Latent since M3, harmless until something depended on
+             it. The hash now covers the body tokens.
+
+             FOURTH LEVER: per-file runs are now the preprocessor OUTPUT
+             rather than a flat stream regrouped afterwards. The walk knows
+             which file it is in, so it gathers there for free.
+             split+parse 1.6 s -> 124 ms, and the tokens are no longer held
+             twice.
+
+             FIFTH LEVER: a replayed file now copies NOTHING. FileEffect
+             carries the run it produced and the collector adopts it by
+             reference; the token steps became offsets into it, so each
+             stretch is still placed individually between the file's
+             includes and the compile-order view stays exact. The run cache
+             then recognises the same run by reference and skips hashing.
+             preprocess 1.3 s -> 296 ms, total 2.0 s -> 909 ms.
+
+             WHAT IS LEFT on tgstation, 909 ms total: the TREE MERGE at
+             411 ms, now the largest phase and the last one rebuilding the
+             whole project from scratch. That is the next order of
+             magnitude.
+
+             A TRAP FROM THE ZERO-COPY WORK, for whoever touches this next:
+             adopting an EMPTY run created a file entry that an uncached
+             build never produces - a header of nothing but directives is
+             the ordinary case - so Runs gained a phantom file. Caught
+             because dmc bench prints the file count and it moved from
+             7,161 to 7,162. Print the counts; they catch what the timings
+             hide. The tree merge is now the
+             SECOND largest cost; the early measurement called it 6% only
+             because everything else was slower then.
+
+             TWO MEASUREMENT BUGS ALONG THE WAY, both flattering: the bench
+             edited a COMMENT (comments never reach the token stream, so
+             nothing changed and every cache hit), and the edited buffer was
+             keyed by a differently-spelled path so it was never consulted.
+             dmc bench now edits a real declaration, canonicalises the path,
+             and prints how many files were re-read and re-parsed - a
+             rebuild of nothing is now visible instead of looking like a win.
   [ ] M10  LSP server + VS Code extension <- community v1
   [ ] M11  Semantic diagnostics, find-refs, rename
              one of them landed early: DM0300, the discarded-proc warning,

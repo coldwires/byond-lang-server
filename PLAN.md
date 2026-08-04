@@ -438,7 +438,7 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
 - ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.11 and passing 110 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 621 today (589 core, 32 native). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 637 today (605 core, 32 native). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -922,6 +922,21 @@ that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is
   by phase and then the thing that actually matters: push a buffer, ask a question, measure. The
   edit it makes is a trailing comment, so the number is the **floor** for what an edit costs rather
   than an average.
+- ✅ `SourceCache` — the read and the lex of every file on disk, revalidated by last-write time and
+  length before reuse. **mlaas 131 → 87 ms, /tg/station 13,691 → 7,800 ms**, and correctness is
+  unchanged: mlaas stays exact against `dm.exe -o`. Chosen over trusting the cache because a
+  `git checkout` under a running IDE would otherwise be invisible until reopen, and over an ABI
+  call because every client would have to remember to make it. One probe per file per rebuild is
+  the price, and it bought back 5.9 s of the 13.7.
+- ✅ `ExpandedRunCache` — a file's token source and parse, reused when the preprocessor produced the
+  same run for it. Keyed on a hash of the run rather than on (file, macro state), so it is
+  independent of *why* a run is unchanged. **mlaas 87 → 41 ms, /tg/station 7,800 → 5,806 ms**, with
+  1 of 7,161 files re-parsed after an edit.
+- ✅ `FileEffectCache` — what walking a file did, recorded as ordered steps and replayed when its
+  text and the macro state entering it are both unchanged. **mlaas 41 → 21 ms, /tg/station
+  5,806 → 3,133 ms**, with 1 of 7,161 files re-walked. Verified end to end by `dmc bench --verify`,
+  which builds the same edited project with the caches off and compares: **335,519 declarations
+  identical** on /tg/station.
 - ⬜ Reparse only the edited file. Preprocessor state flows sequentially through include order, so
   editing a file containing `#define`s invalidates everything downstream — mitigate via the M3
   boundary snapshots: re-run downstream files only if the exit-state hash changed.
@@ -929,8 +944,69 @@ that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is
 - Target: warm completion under 30ms on the team's game. Complete before M10 — public users will
   arrive with larger codebases.
 
-**Measured 2026-08-03, Release build.** Every edit rebuilds the whole project today, so a keystroke
-costs what a cold open costs:
+**Measured 2026-08-03/04, Release build, `dmc bench`.** Where it stands after the two caches:
+
+| one keystroke | baseline | + lex | + run | + effect | + runs | + zero-copy |
+|---|---|---|---|---|---|---|
+| mlaas (100 files) | 131 ms | 87 ms | 41 ms | 21 ms | 14 ms | **10 ms** |
+| /tg/station (7,161 files) | 13,691 ms | 7,800 ms | 5,806 ms | 3,133 ms | 2,014 ms | **909 ms** |
+
+mlaas is the acceptance target and it is **under the 30 ms goal**.
+
+On /tg/station that leaves preprocess 3,306 ms, split + parse 1,236 ms, build tree ~900 ms, with
+**1 of 7,161 files re-parsed** and none re-read. The remaining cost is the walk: every file is still
+visited, its directives scanned and its code runs expanded, to produce a token stream that is then
+found to be identical. Skipping that needs the file-effect memoization below.
+
+**Two measurement bugs, both of which made the numbers look better than the truth.** The bench's
+edit was a trailing comment, and comments never reach the token stream — so nothing downstream
+changed and every cache hit. Then the edited buffer was keyed by a path spelled differently from the
+one the walk hands the provider, so the buffer was never consulted at all and the "warm" rounds
+rebuilt an unedited project. `dmc bench` now appends a real declaration and canonicalises the path,
+and it reports how many files were re-read and re-parsed so a rebuild of nothing is visible rather
+than silently reported as a win.
+
+**Where it stands after the file-effect cache.** /tg/station is at 3,133 ms: preprocess 505 ms,
+split + parse 1,636 ms, build tree 991 ms, with 1 of 7,161 files re-walked and 1 re-parsed.
+
+- ✅ **Per-file runs are the preprocessor's output.** The walk already knows which file it is in, so
+  it gathers there; `PreprocessResult.Tokens` is rebuilt on demand from the emission order for the
+  consumers that want the interleaved view. **Split + parse fell from 1,636 ms to 124 ms** on
+  /tg/station and the project's tokens are no longer held twice.
+
+- ✅ **A replayed file copies nothing.** `FileEffect` carries the run it produced and the collector
+  adopts it by reference; the `Tokens` steps became offsets into it, so each stretch is still placed
+  individually between the file's includes and the compile-order view stays exact. `ExpandedRunCache`
+  then recognises the same run by reference and skips hashing it. **Preprocess 1,308 → 296 ms**, and
+  /tg/station reached **909 ms**.
+
+Where /tg/station stands: preprocess 296 ms, split + parse 187 ms, build tree 411 ms, total 909 ms,
+with 1 of 7,161 files re-walked and 1 re-parsed.
+
+**The tree merge is now the largest phase**, and it is the last one still rebuilding the whole
+project from scratch — the "cache the object tree per-file" bullet, which the first measurement
+called 6% of a build that no longer exists. That is where the next order of magnitude is.
+
+One thing the zero-copy work exposed, worth knowing before the next change here: adopting an
+**empty** run created a file entry that a build without the cache never produced, so `Runs` gained a
+phantom file — a header of nothing but directives is the ordinary case. Appending already skipped
+empty stretches; adopting now does too. Caught by the file count in `dmc bench` moving from 7,161 to
+7,162, which is exactly why that line is printed.
+
+**The correctness trap, and it was real.** A file's own key does not cover its includes: if an
+included file changes so that it defines a different macro, the including file's later code expands
+differently while its own text and entry state are unchanged. Each include step therefore records the
+macro state hash it produced, the replay checks it, and a mismatch makes the build redo itself with
+the cache off — one wasted pass in exactly the case where a macro moved and everything downstream had
+to be redone anyway.
+
+That check only works if the state hash can tell two macro states apart, and **it could not**.
+`MacroTable.StateHash` mixed a macro's name and the *length* of its body, so `#define THING /obj/first`
+and `#define THING /obj/second` produced the same hash — a file using the macro replayed its old
+expansion and an edit to the define did nothing. The hash now covers the body's tokens. The weakness
+had been latent since M3, harmless until something depended on it.
+
+**The earlier baseline, for reference.** Before either cache, every edit rebuilt everything:
 
 | | mlaas (100 files) | /tg/station (7,161 files) |
 |---|---|---|

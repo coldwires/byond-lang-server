@@ -37,29 +37,42 @@ public static class PreprocessedSplitter
     {
         ArgumentNullException.ThrowIfNull(result);
 
-        Dictionary<SourceText, List<ExpandedToken>> byOrigin = new();
-        List<SourceText> order = new();
+        List<(string, TokenSource)> files = new(result.Runs.Count);
 
-        foreach (ExpandedToken token in result.Tokens)
+        foreach (PreprocessedFile run in result.Runs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            files.Add((run.Origin.Path ?? string.Empty, TokenSource.FromExpanded(run.Origin, run.Tokens)));
+        }
+
+        return files;
+    }
+
+    /// <summary>
+    /// The same split, with each file's token source and parse taken from <paramref name="cache"/>
+    /// when the preprocessor produced the same run for it as last time.
+    /// </summary>
+    /// <remarks>
+    /// The parse is returned alongside because it is what the cache is for: a rebuild re-parses
+    /// every file, and after an edit almost none of them have changed. Building the token source is
+    /// avoided with it, since that allocates three arrays per file.
+    /// </remarks>
+    public static List<(string File, TokenSource Source, ParseResult Parse)> SplitAndParse(
+        PreprocessResult result, ExpandedRunCache cache, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(cache);
+
+        List<(string, TokenSource, ParseResult)> files = new(result.Runs.Count);
+
+        foreach (PreprocessedFile run in result.Runs)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            SourceText origin = token.ReportAt.Source;
-
-            if (!byOrigin.TryGetValue(origin, out List<ExpandedToken>? run))
-            {
-                run = new List<ExpandedToken>();
-                byOrigin.Add(origin, run);
-                order.Add(origin);
-            }
-
-            run.Add(token);
+            string file = run.Origin.Path ?? string.Empty;
+            (TokenSource source, ParseResult parse) = cache.GetOrAdd(file, run.Origin, run.Tokens);
+            files.Add((file, source, parse));
         }
-
-        List<(string, TokenSource)> files = new(order.Count);
-
-        foreach (SourceText origin in order)
-            files.Add((origin.Path ?? string.Empty, TokenSource.FromExpanded(origin, byOrigin[origin])));
 
         return files;
     }
