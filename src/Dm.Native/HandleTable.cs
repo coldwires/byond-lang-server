@@ -7,50 +7,71 @@ namespace Dm.Native;
 /// Maps opaque native handles to managed objects.
 /// </summary>
 /// <remarks>
-/// A handle is <c>(generation &lt;&lt; 32) | (index + 1)</c>. Index 0 is never issued, so a zeroed
-/// or null handle is always invalid.
-///
-/// Slots are recycled with an incremented generation, so a handle held past its close returns
-/// <see cref="DmStatus.InvalidHandle"/> rather than resolving to whatever object later took the
-/// slot. This matters because the consumers are three independently written clients; a use-after-close
-/// in any of them should be a clean error, not memory corruption.
-///
-/// Requires 64-bit pointers. Only 64-bit RIDs are shipped.
+/// <para>
+/// A handle is a monotonically increasing id, never reused. Zero is never issued, so a zeroed or
+/// null handle is always invalid, and a handle held past its close is invalid because its id is gone
+/// from the table — it cannot resolve to whatever was opened next. That matters because the
+/// consumers are three independently written clients; a use-after-close in any of them should be a
+/// clean error rather than memory corruption.
+/// </para>
+/// <para>
+/// **This used to pack a generation and a slot index into the pointer**, which required 64-bit
+/// pointers and silently did not have them on <c>win-x86</c>. The generation occupied the high 32
+/// bits, the cast to <see cref="IntPtr"/> discarded them, and every call taking a handle returned
+/// <c>DM_ERR_INVALID_HANDLE</c> — while <c>dm_workspace_open</c> succeeded, because it is the one
+/// entry point that never unpacks. Closing failed the same way, so no slot was ever released and
+/// every open leaked its workspace and all five caches. Found by the 32-bit client, not by us: the
+/// unit tests and the smoke test both run 64-bit, where the packing works.
+/// </para>
+/// <para>
+/// An id has no bit budget to get right on one architecture and wrong on another, which is why this
+/// removes the class of bug rather than resizing it. The cost is a dictionary lookup where there was
+/// an array index, which is noise beside anything a handle is used to ask for.
+/// </para>
 /// </remarks>
 internal static class HandleTable
 {
-    private struct Slot
-    {
-        public object? Target;
-        public uint Generation;
-        public bool InUse;
-    }
-
     private static readonly object Sync = new();
-    private static readonly List<Slot> Slots = new();
-    private static readonly Stack<int> Free = new();
+    private static readonly Dictionary<nint, object> Live = new();
+
+    /// <summary>
+    /// Ids start well above the values a confused client is likely to pass.
+    /// </summary>
+    /// <remarks>
+    /// The packed scheme rejected small integers for free, because anything without a generation in
+    /// its high bits could not have been issued. A bare counter would hand out 1, 2, 3 and make a
+    /// stray <c>1</c> resolve to a live workspace. Biasing costs nothing and keeps garbage failing
+    /// cleanly, which is most of why this table validates at all. Leaves ~850M ids on 32-bit.
+    /// </remarks>
+    private const nint FirstId = 0x4D4D0000;
+
+    private static nint _next = FirstId - 1;
+
+    /// <summary>Handles currently open. Lets a test assert that closing actually releases.</summary>
+    public static int Count
+    {
+        get
+        {
+            lock (Sync)
+                return Live.Count;
+        }
+    }
 
     public static IntPtr Alloc(object target)
     {
         lock (Sync)
         {
-            int index;
+            // Saturating rather than wrapping: a wrapped id could collide with a live handle, which
+            // is the one failure this table exists to prevent. On 32-bit that ceiling is 2^31 opens,
+            // which no editor session approaches, and refusing to allocate is a clean error if one
+            // ever did.
+            if (_next == nint.MaxValue)
+                throw new InvalidOperationException("handle space exhausted");
 
-            if (Free.Count > 0)
-            {
-                index = Free.Pop();
-                Slot recycled = Slots[index];
-                recycled.Target = target;
-                recycled.InUse = true;
-                Slots[index] = recycled;
-            }
-            else
-            {
-                index = Slots.Count;
-                Slots.Add(new Slot { Target = target, Generation = 1, InUse = true });
-            }
+            nint id = ++_next;
+            Live.Add(id, target);
 
-            return Pack(index, Slots[index].Generation);
+            return id;
         }
     }
 
@@ -58,19 +79,9 @@ internal static class HandleTable
     {
         value = null!;
 
-        if (!Unpack(handle, out int index, out uint generation))
-            return false;
-
         lock (Sync)
         {
-            if (index < 0 || index >= Slots.Count)
-                return false;
-
-            Slot slot = Slots[index];
-            if (!slot.InUse || slot.Generation != generation)
-                return false;
-
-            if (slot.Target is not T typed)
+            if (!Live.TryGetValue(handle, out object? target) || target is not T typed)
                 return false;
 
             value = typed;
@@ -84,56 +95,9 @@ internal static class HandleTable
     /// </summary>
     public static object? Release(IntPtr handle)
     {
-        if (!Unpack(handle, out int index, out uint generation))
-            return null;
-
         lock (Sync)
         {
-            if (index < 0 || index >= Slots.Count)
-                return null;
-
-            Slot slot = Slots[index];
-            if (!slot.InUse || slot.Generation != generation)
-                return null;
-
-            object? target = slot.Target;
-
-            slot.Target = null;
-            slot.InUse = false;
-            // Wrapping is fine: a collision needs 2^32 reuses of one slot while a stale handle to
-            // that exact generation is still held.
-            slot.Generation = slot.Generation == uint.MaxValue ? 1 : slot.Generation + 1;
-            Slots[index] = slot;
-
-            Free.Push(index);
-            return target;
+            return Live.Remove(handle, out object? target) ? target : null;
         }
-    }
-
-    private static IntPtr Pack(int index, uint generation)
-        => (IntPtr)(((long)generation << 32) | (uint)(index + 1));
-
-    /// <summary>
-    /// Splits a handle into slot index and generation, rejecting anything that cannot have been
-    /// issued by <see cref="Alloc"/>.
-    /// </summary>
-    /// <remarks>
-    /// The <c>low &gt; int.MaxValue</c> check is load-bearing. Clients pass arbitrary pointer
-    /// values across the ABI, and without it a low word of 0xFFFFFFFF casts to -1 and yields a
-    /// negative index, which reads past the start of the slot list.
-    /// </remarks>
-    private static bool Unpack(IntPtr handle, out int index, out uint generation)
-    {
-        index = -1;
-
-        long raw = handle.ToInt64();
-        uint low = (uint)(raw & 0xFFFFFFFF);
-        generation = (uint)(raw >> 32);
-
-        if (low == 0 || generation == 0 || low > int.MaxValue)
-            return false;
-
-        index = (int)low - 1;
-        return true;
     }
 }

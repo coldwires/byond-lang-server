@@ -62,37 +62,50 @@ public class HandleTableTests
     /// object later occupied the slot, which is a silent wrong answer rather than an error.
     /// </summary>
     [Fact]
-    public void A_stale_handle_does_not_resolve_after_its_slot_is_reused()
+    public void A_stale_handle_never_resolves_however_many_follow_it()
     {
         Target first = new("first");
         IntPtr stale = HandleTable.Alloc(first);
         HandleTable.Release(stale);
 
-        // Allocate until the freed slot is handed back out.
+        // Ids are never reused, so no later handle can collide with the stale one and it can never
+        // start resolving again. This used to be a slot-reuse test, which asserted the mechanism
+        // rather than the contract.
         List<IntPtr> allocated = new();
-        IntPtr reused = IntPtr.Zero;
 
         for (int i = 0; i < 64; i++)
         {
-            IntPtr handle = HandleTable.Alloc(new Target($"reuse-{i}"));
+            IntPtr handle = HandleTable.Alloc(new Target($"later-{i}"));
+
+            Assert.NotEqual(stale, handle);
+            Assert.False(HandleTable.TryGet(stale, out Target _));
+
             allocated.Add(handle);
-
-            if (LowWord(handle) == LowWord(stale))
-            {
-                reused = handle;
-                break;
-            }
         }
-
-        Assert.NotEqual(IntPtr.Zero, reused);
-        Assert.NotEqual(stale, reused);
-
-        Assert.False(HandleTable.TryGet(stale, out Target _));
-        Assert.True(HandleTable.TryGet(reused, out Target current));
-        Assert.NotSame(first, current);
 
         foreach (IntPtr handle in allocated)
             HandleTable.Release(handle);
+    }
+
+    /// <remarks>
+    /// The half of the x86 handle bug that was not a wrong answer but a leak: Release could fail to
+    /// find the handle it had just issued and return without clearing anything, so every workspace
+    /// ever opened stayed live along with its documents and all five caches.
+    /// </remarks>
+    [Fact]
+    public void Closing_actually_releases()
+    {
+        int before = HandleTable.Count;
+
+        IntPtr handle = HandleTable.Alloc(new Target("released"));
+        Assert.Equal(before + 1, HandleTable.Count);
+
+        Assert.NotNull(HandleTable.Release(handle));
+        Assert.Equal(before, HandleTable.Count);
+
+        // Double close stays a no-op, and still releases nothing a second time.
+        Assert.Null(HandleTable.Release(handle));
+        Assert.Equal(before, HandleTable.Count);
     }
 
     [Fact]
@@ -124,5 +137,4 @@ public class HandleTableTests
         Assert.Null(HandleTable.Release(new IntPtr(raw)));
     }
 
-    private static uint LowWord(IntPtr handle) => (uint)(handle.ToInt64() & 0xFFFFFFFF);
 }

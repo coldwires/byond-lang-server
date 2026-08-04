@@ -1092,8 +1092,55 @@ Find-references and rename cannot be fully sound in DM because of `:` and string
 
 ### Deferred
 
-`.dmm` map support, formatter, debug adapter. DAP requires auxtools-style injection into Dream
-Daemon and is effectively a separate project.
+`.dmm` map support, formatter, debug adapter.
+
+### Debugging: four rungs, and which of them we could reach
+
+Explored 2026-08-04, not started. Prior art matters here — **auxtools** injects into DreamDaemon,
+hooks BYOND's bytecode interpreter and serves DAP, and SpacemanDMM's VS Code client drives it. Any
+work here competes with something that already runs /tg/station.
+
+BYOND exposes no debug API. Procs run as `.dmb` bytecode inside `byondcore.dll`; `dreamdaemon.exe`
+(268 KB) and `dreamseeker.exe` (878 KB) are thin shells around the 4.4 MB engine. **The interpreter
+lives in the server process** — a debugger attaches to DreamDaemon, not to DreamSeeker, which is the
+client. `byondapi.h`/`.lib` is the extension API, called *from* DM through `call_ext()`, so it
+carries values but not control.
+
+| Rung | Pause quality | Maintenance |
+|---|---|---|
+| 1. Source instrumentation, pure DM | cooperative: procs stop at the next probe | none beyond the parser we maintain anyway |
+| 2. + a `call_ext` DLL via byondapi | same | documented API, so still low |
+| 3. + native thread suspend | true freeze, no inspection while frozen | small unsupported surface |
+| 4. auxtools-style opcode hooks | real breakpoints | per-BYOND-release, permanent |
+
+**Rung 1 is the one this project uniquely enables.** Rewrite the source before compiling, inserting a
+probe call at each statement boundary; the probe loops on `sleep()` until released and answers
+`world.Topic()`. We already have what that needs: statement boundaries from the M4 AST, textual
+insertion by span (so no lossless round-tripping tree is required), the preprocessor source map so a
+breakpoint on macro-heavy code lands on the line the author wrote, and scope resolution to know which
+locals to capture — DM locals are not enumerable at runtime, unlike object `vars`.
+
+Its limits are structural, not incidental: you debug an instrumented build; macro-generated code
+cannot be probed per statement; builtins cannot be stepped into; and **`world.time` keeps advancing
+while you are stopped**, so timers fire in a burst on resume. Per-statement probes across 1.5M lines
+are not viable, so only files carrying breakpoints get instrumented, which costs a recompile whenever
+the breakpoint set changes.
+
+**Pausing on top of it** is a global flag every probe checks. Procs already past a probe run to their
+next one, so it drains to a safepoint rather than stopping dead — the same shape as a cooperative GC.
+Density decides how close that feels to a real pause, and nothing in DM can stop the clock.
+
+**Rung 3 is the answer to "can we truly pause".** `SuspendThread` on the interpreter thread freezes
+everything instantly and needs no bytecode knowledge — but a frozen interpreter is opaque, so it
+gives a freeze rather than a breakpoint. Combining is the interesting design: probes for breakpoints,
+inspection and stack, native suspend for "pause now" and for holding the clock. Each half is useful
+alone, and only the suspend half is unsupported.
+
+**The experiment that settles rung 1** costs an afternoon and should come before any design: ~30 lines
+of DM — a proc looping on `sleep(1)` until a flag flips, plus a `world/Topic()` that flips it and
+dumps state — compiled and poked from outside. If `Topic()` is serviced while a proc sleeps, the
+approach stands and the rest is plumbing. If not, the channel has to change. Compile a discriminating
+case, as with everything else in §8.
 
 ---
 
@@ -1142,10 +1189,21 @@ char*       dm_last_error(void);
 
 - **No exception crosses the boundary.** Every export catches and returns a `dm_status`; the message
   is retrievable via `dm_last_error`.
-- **Handles are validated.** `(generation << 32) | (index + 1)` through a slot table with a free
-  list. Index 0 is never issued, so null is always invalid. Generation increments on release, so a
-  use-after-close returns `DM_ERR_INVALID_HANDLE` rather than resolving to a recycled object.
-  Malformed handles are rejected in `Unpack` before any indexing.
+- **Handles are validated.** A monotonically increasing id, never reused, biased to start well above
+  the small integers a confused client passes. A use-after-close returns `DM_ERR_INVALID_HANDLE`
+  because the id is gone from the table, not because a generation counter moved.
+
+  It packed `(generation << 32) | (index + 1)` until 2026-08-04, which needed 64-bit pointers and
+  silently did not have them on `win-x86`: the cast to `IntPtr` dropped the generation, so every call
+  taking a handle failed while `dm_workspace_open` succeeded — the one entry point that never
+  unpacks — and nothing was ever released, leaking a workspace and its caches per open. Reported by
+  the 32-bit client. An id has no bit budget to get right on one architecture and wrong on another.
+- **The ABI is `cdecl` on every platform**, declared explicitly on the exports. x64 has one calling
+  convention so this never came up; on x86 NativeAOT defaults to `stdcall`, which the header does not
+  say and which C, Rust, Go, Zig and Python's `ctypes` all assume otherwise. `INTEGRATION.txt`
+  promises anything with a C FFI can call this, and that promise is what decided it: the alternative
+  put a detail x64 never teaches in front of every future 32-bit binding author, with stack
+  corruption rather than a link error as the penalty.
 - **Never return a pointer into managed memory.** Strings are copied to `NativeMemory.Alloc`'d UTF-8
   and freed by the caller via `dm_free`. Ownership is documented per function in the header.
 - **`Dm.Core` stays AOT-clean:** no reflection, no `dynamic`, no runtime codegen, no reflection-based
