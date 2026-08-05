@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M7 complete · ABI 0.11 · next is M8 (`.dmi`) or M9 (incrementality)**
-> · Last updated: 2026-08-03
+> Status: **M0–M7 complete · M9 past its target · M11 started · ABI 0.11**
+> · Last updated: 2026-08-04
 
 ---
 
@@ -434,17 +434,21 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.88 MB, 19 exports) via NativeAOT.
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.98 MB, 19 exports) via NativeAOT, for six
+  RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
+  packed a generation into the high 32 bits of a pointer and silently had none there, which a
+  64-bit-only matrix could not have caught.
 - ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.11 and passing 110 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 637 today (605 core, 32 native). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 638 today (605 core, 33 native). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
   platform-independent — while the native job runs per RID, since NativeAOT produces a separate
-  binary for each and the C ABI is what breaks in platform-specific ways. All five RIDs
-  (`win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`) run on their own architecture,
+  binary for each and the C ABI is what breaks in platform-specific ways. All six RIDs
+  (`win-x64`, `win-x86`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`) run on their own
+    architecture,
   so each publishes, links `abi-smoke` and **executes** it under `ctest` rather than only building.
   Both local gotchas are handled rather than rediscovered: `vswhere.exe` is put on PATH before the
   Windows publish, and a step asserts the binary still exists afterwards, because a Defender
@@ -1080,6 +1084,49 @@ the correct answer.
 `DM03xx` is the range for this class: code that compiles clean and does not mean what it looks like.
 An error would be wrong, since the file does compile.
 
+### The oracle: `dm.exe`'s own error output
+
+Captured 2026-08-04 from a file built to trigger one of each. This is the reference M11 diffs
+against, the way `-o` is the reference for the object tree.
+
+```
+errs.dm:41:error: dup: duplicate definition
+errs.dm:40:error: dup: previous definition
+errs.dm:16:error: returnI.nothere: undefined var
+errs.dm:15:warning (unused_var): I: variable defined but not used
+errs.dm:20:error: returnI.damage: undefined var
+errs.dm:24:error: returnx.hp: undefined var
+errs.dm:28:error: I.nosuchproc: undefined proc
+errs.dm:31:error: no_such_global: undefined proc
+errs.dm:34:error: return/obj/nothing: undefined type path
+errs.dm:38:error: P.slot: undefined type: /clothing
+```
+
+`dmc diagdiff <dme>` runs both sides and reports the difference grouped by cause, since a hundred
+instances of one mistake is one thing to fix and a list of a hundred lines does not say so. Baselines
+as of 2026-08-04:
+
+| project | dm.exe | ours | missed | invented |
+|---|---|---|---|---|
+| mlaas | 0 | 0 | 0 | 0 |
+| madridspy | 2 | 0 | 2 | 0 |
+| the errors fixture | 14 | 0 | 14 | 0 |
+
+Zero invented is the number that has to stay zero. Missing ones are M11 work outstanding; invented
+ones are M11 work done wrong, and a project that builds clean while we complain is a tool nobody
+trusts. **Diagnostics we emit deliberately are listed in the tool rather than tolerated in the
+column** — `DM0102` and `DM0300` today — because a column that is never empty is one people stop
+reading.
+
+Format is `file:line:error: <symbol>: <message>`, and `file:line:warning (name): <symbol>: <message>`
+for warnings. **Do not match on the symbol column**: `returnI.nothere` is `return` and `I.nothere`
+run together, because the compiler strips whitespace when echoing the offending text. Match on
+`file:line` and the message, which are stable.
+
+The run also confirms three §8 findings rather than re-deriving them: `I.damage` where `damage` is on
+a *subtype* is rejected through `.`; `x.hp` on an untyped var is rejected; and the `/clothing` error
+lands on line 38 where the var is **used**, not line 12 where it was declared.
+
 **Diagnostics must join the compiler's warning vocabulary, not run beside it.** `#pragma
 ignore|warn|error <names>` and `-ignore/-warn/-error` share one set of identifiers, and a project
 that silences `init_proc` in source expects it to stay silenced. Reusing the compiler's name
@@ -1411,6 +1458,12 @@ lint.dm:3:warning (frequent_call): New: this proc will be called very frequently
 So the vocabulary is discoverable from any build log, which is how to enumerate it — the reference
 does not list them.
 
+**At least five names exist**, and the two below are only the off-by-default pair. Seen firing with
+no flags at all: `unused_var` on an unused local, `no_parent` on a `..()` with no parent proc to
+call, and `new_name` on a deprecated builtin (`lentext is being phased out; replace with length`).
+The last two came out of compiling madridspy for the diagnostic diff. Since the reference does not
+list them, the vocabulary has to be collected the way these were — off real build logs.
+
 Two ship **off by default** and exist for linting rather than for correctness. `dm.exe -warn
 init_proc,frequent_call game.dme` turns them on.
 
@@ -1521,6 +1574,9 @@ that the two candidate behaviours produce different compiler output.
 | **The degradation to `:` is a property of the expression, not of the unknown type.** | `mk().elsewhere` compiles, but `var/x = mk()` then `x.elsewhere` does not. Both have an equally unknowable type; putting a variable in the way flips the answer. |
 | **`dm.exe -D` injects preprocessor defines.** | `-DNAME`, `-DNAME=value` and `-DFN(x)=((x)*2)` all compile. Bare `-DNAME` defines it **empty**, not `1`: `#if NAME == 1` then fails with *"unexpected token: =="*, matching `#define NAME` with no body. A project built with `-D` flags is a different program from the one we analyse without them. |
 | **A brace block can contain indentation-structured sub-blocks, and the two nest freely.** | `/obj/one {` with an indented `var` block under it, `/obj/two {` with a proc whose body is indented, and `/obj/three {` with a subtype declared by indentation all produce a tree **identical** to the same three written with indentation alone — checked in `-o` rather than inferred from a clean compile. Layout keeps its full meaning inside the braces. This was open question 7 from M4, and our parser disagreed with the answer: it lost the members and reported an error per line. |
+| **`unused_var` is a third warning name, and it is ON by default.** | `var/unused = 1` in an otherwise clean file reports `warning (unused_var): unused: variable defined but not used` with no flags passed. §8's earlier note recorded only `init_proc` and `frequent_call`, both off by default, which left the impression those were the vocabulary. They are the off-by-default half of it. |
+| **`#pragma ignore` flows through include order rather than per file.** | With `#pragma ignore unused_var` in the first-included file, an offending var in the *second* file is silent; swap the two `#include` lines and it warns. So pragma level is sequential state like the macro table, and a diagnostic's level depends on what the compiler had already read — the same shape as §4a's include-order dependence. |
+| **A duplicate definition is two diagnostics, not one.** | `dup: duplicate definition` on the second declaration and `dup: previous definition` on the first, as separate lines. A model with one span per diagnostic cannot express it; the pair wants related locations. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -1931,6 +1987,27 @@ it.
   instead of dropping it silently. madridspy reaches 507/507 procs against `-o`. Diagnostics gained
   a `severity` field across the ABI at 0.10, since a warning that a client cannot tell from a syntax
   error is not much use.
+- **2026-08-04** — M9 reached its target and went past it. Four caches, each measured before and
+  after: `SourceCache` (read + lex, revalidated by mtime and length), `ExpandedRunCache` (token
+  source + parse, keyed on a hash of the run), `FileEffectCache` (a file's recorded effect, replayed
+  when its text and entry macro state match), and per-file runs as the preprocessor's output rather
+  than a regrouping pass. One keystroke: **mlaas 131 → 10 ms, /tg/station 13,691 → 909 ms**, verified
+  against uncached builds of the same text — 3,720 and 335,519 declarations identical.
+- **2026-08-04** — `MacroTable.StateHash` mixed a macro's name and the *length* of its body, so
+  `THING /obj/first` and `THING /obj/second` were indistinguishable and editing a define did nothing
+  once anything cached on it. Wrong since M3, harmless until the effect cache depended on it.
+- **2026-08-04** — Two defects found by the 32-bit client, neither reachable from a 64-bit-only
+  suite: handles packed a generation into the high bits of a pointer and lost it on `win-x86`, and
+  the exports were `stdcall` there while the header said nothing. Handles are now an opaque
+  monotonic id and the ABI is explicitly `cdecl` everywhere. `win-x86` is in CI and the C++ smoke
+  test runs there.
+- **2026-08-04** — M11 started with its oracle rather than its code: `dmc diagdiff` runs `dm.exe`
+  over a project and diffs the diagnostics. Three warning names the docs never had — `unused_var`,
+  `no_parent`, `new_name` — and `#pragma ignore` turns out to flow through include order rather than
+  resetting per file.
+- **2026-08-04** — Debugger feasibility settled by compiling one: `world.Topic()` is serviced while a
+  proc sits in a `sleep()` loop, so a stop/inspect/resume loop is reachable in pure DM. Measured what
+  "stopped" means at the same time — the world runs on, only that call stack parks. §6 Deferred.
 - **2026-08-03** — M4 closed: parameter defaults are parsed rather than merely noticed. Finding a
   faithful rendering for them exposed a span bug in every postfix expression — an invocation's span
   covered `(1, 2)` rather than `f(1, 2)`, since `ParsePostfix` anchored on the operator instead of

@@ -1,13 +1,14 @@
 ================================================================================
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. Updated as we go. Full detail in PLAN.md.
- Last updated: 2026-08-03
+ Last updated: 2026-08-04
 ================================================================================
 
 WHERE WE ARE
 --------------------------------------------------------------------------------
   - M0 boundary is PROVEN. C# -> NativeAOT -> C ABI -> C++ round trip works.
-      dm_core.dll builds at 1.88 MB with 19 exports.
+      dm_core.dll builds at 1.98 MB with 19 exports, cdecl on every
+      platform, for six RIDs including win-x86.
       tests/abi-smoke passes 110 checks from C++, covering use-after-close,
       both encodings, dm_document_symbols, dm_complete_at, dm_set_defines,
       dm_definition_at, dm_hover_at, dm_workspace_symbols and dm_query_json.
@@ -23,15 +24,15 @@ WHERE WE ARE
     (ABI 0.6, 0.7, 0.8), and bulk object-tree queries ship as dm_query_json
     at 0.11 with the request and response shapes frozen in abi/schema/.
     That is TEAM V1: everything an IDE needs to draw the panels.
-  - Local git repo initialised. MIT licensed. 97 commits.
+  - Local git repo initialised. MIT licensed. 107 commits.
   - tgstation is at 99.99% vars / 99.92% procs against dm.exe -o.
   - CI runs on push and PR: .github/workflows/ci.yml. Managed tests once,
-    then all five RIDs publish, link abi-smoke and RUN it. vswhere is put on
+    then all six RIDs publish, link abi-smoke and RUN it. vswhere is put on
     PATH before the Windows publish and the binary's existence is asserted
     after it, so neither local gotcha has to be rediscovered.
-  - dotnet test works: 637 tests, all passing.
+  - dotnet test works: 638 tests, all passing.
       Dm.Core.Tests   - 605, text layer through bulk queries
-      Dm.Native.Tests -  32, handle table, marshalling, the symbols export
+      Dm.Native.Tests -  33, handle table, marshalling, the symbols export
     Writing the first batch found a real bug: a garbage handle produced a
     negative slot index and crashed instead of returning DM_ERR_INVALID_HANDLE.
   - Environment checked: .NET SDK 9.0.308, git 2.47.0, BYOND installed,
@@ -58,9 +59,11 @@ WHAT'S NEXT
   1. SEND tests/abi-smoke TO THE IDE DEVS. Highlighting, the outline,
      completion, definition, hover and workspace symbols are all callable
      today, and the CMakeLists include/link lines are meant to be copied.
-  2. Settle the M9 staleness question - see MILESTONES M9. It decides what
-     we can cache between keystrokes, and it is a rule your IDEs have to
-     follow, so it is not ours to pick alone.
+  2. M11 is started and the harness is in: dmc diagdiff runs dm.exe over a
+     project and diffs its diagnostics against ours. mlaas is 0 vs 0. The
+     next step is the binder - walk every expression against the cached
+     tree - then checks in the order the fixture ranks them: undefined var
+     and undefined proc first, five of fourteen between them.
   3. Nothing about the language is a guess now. Both remaining open questions
      are about the project - see OPEN QUESTIONS at the bottom.
 
@@ -522,7 +525,7 @@ INJECTED DEFINES - dm.exe -D   [DONE for the core and the CLI]
 --------------------------------------------------------------------------------
   dreammaker.exe is a 32-bit MFC app (mfc140u.dll) importing byondwin/byondext/
   byondcore, and its editor pane looks like a RichEdit 2.0 control. So anything
-  loading into that process must be 32-bit, and our five RIDs are all 64-bit.
+  loading into that process must be 32-bit. win-x86 is now a sixth RID in CI.
 
   NativeAOT targets win-x86 fine. Verified 2026-08-04:
 
@@ -859,7 +862,22 @@ MILESTONES                                    (restructured 2026-08-02)
              and prints how many files were re-read and re-parsed - a
              rebuild of nothing is now visible instead of looking like a win.
   [ ] M10  LSP server + VS Code extension <- community v1
-  [ ] M11  Semantic diagnostics, find-refs, rename
+  [~] M11  Semantic diagnostics, find-refs, rename   <- STARTED
+             THE ORACLE IS IN. dmc diagdiff runs dm.exe over a project and
+             diffs its diagnostics against ours, grouped by cause.
+               mlaas       0 vs 0
+               madridspy   2 vs 0
+               errors fix 14 vs 0
+             Zero invented is the number that must stay zero: missing ones
+             are work to do, invented ones are work done wrong, and a
+             project that builds clean while we complain is a tool nobody
+             trusts. Diagnostics we emit ON PURPOSE are listed in the tool
+             (DM0102, DM0300) rather than tolerated in that column.
+             dm.exe's format: file:line:error: <sym>: <message>. Do NOT
+             match the symbol column - it strips whitespace, so
+             "return I.nothere" comes back as "returnI.nothere".
+             NEXT: the binder. Walk every expression against the cached
+             tree, then checks in the order the fixture ranks them.
              one of them landed early: DM0300, the discarded-proc warning,
              because the parser had to model the construct to match dm.exe
              and knowing it was written is then free. See DM0300 above.

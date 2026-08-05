@@ -28,6 +28,15 @@ public static class Builtins
     private const string ResourceName = "Dm.Core.Resources.builtins.txt";
 
     /// <summary>The BYOND version the bundled table was generated from.</summary>
+    /// <summary>
+    /// BYOND version the <b>bundled</b> table was generated from.
+    /// </summary>
+    /// <remarks>
+    /// Set once from the embedded resource and never by a caller's table. It used to be assigned by
+    /// every <see cref="Read"/>, which made it global mutable state: a caller supplying its own
+    /// table changed the reported version for everything else in the process, and two tests running
+    /// in parallel raced over it. A supplied table's version is returned to whoever supplied it.
+    /// </remarks>
     public static string Version { get; private set; } = "unknown";
 
     /// <summary>Builds a tree holding only the builtins.</summary>
@@ -54,14 +63,25 @@ public static class Builtins
             return;
 
         using StreamReader reader = new(stream);
-        Read(tree, reader);
+
+        // The bundled table is the one Version describes, so this is the only assignment.
+        Version = Read(tree, reader);
     }
 
-    /// <summary>Parses the table. Public so a caller can supply a newer one than the bundled copy.</summary>
-    public static void Read(ObjectTree tree, TextReader reader)
+    /// <summary>
+    /// Parses a table into a tree and returns the version it declares.
+    /// </summary>
+    /// <remarks>
+    /// Public so a caller can supply a newer table than the bundled copy. The version comes back as
+    /// a return value rather than landing in <see cref="Version"/>, which describes the bundled
+    /// table alone.
+    /// </remarks>
+    public static string Read(ObjectTree tree, TextReader reader)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(reader);
+
+        string declared = "unknown";
 
         while (reader.ReadLine() is { } line)
         {
@@ -70,7 +90,7 @@ public static class Builtins
 
             if (line.StartsWith("version ", StringComparison.Ordinal))
             {
-                Version = line["version ".Length..].Trim();
+                declared = line["version ".Length..].Trim();
                 continue;
             }
 
@@ -110,6 +130,8 @@ public static class Builtins
                 }
             }
         }
+
+        return declared;
     }
 
     private static TypeSymbol MarkBuiltin(TypeSymbol type)

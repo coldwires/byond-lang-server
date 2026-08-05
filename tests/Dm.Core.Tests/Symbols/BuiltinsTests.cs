@@ -120,9 +120,13 @@ public class BuiltinsTests
     public void A_caller_may_supply_its_own_table()
     {
         ObjectTree tree = new();
-        Builtins.Read(tree, new StringReader("# comment\nversion 999.1\nT /thing\nV /thing count\nP /thing Go a,b\nX /thing /datum\n"));
+        string declared = Builtins.Read(tree, new StringReader("# comment\nversion 999.1\nT /thing\nV /thing count\nP /thing Go a,b\nX /thing /datum\n"));
 
-        Assert.Equal("999.1", Builtins.Version);
+        // Returned, not parked in a static. A caller's table used to overwrite Builtins.Version for
+        // the whole process, so this test failed whenever another one seeded the real builtins at
+        // the same moment — which is what the intermittent failure was.
+        Assert.Equal("999.1", declared);
+        Assert.StartsWith("516.", Builtins.Version);
 
         TypeSymbol thing = tree.Find("/thing")!;
         Assert.NotNull(thing.FindVar("count"));

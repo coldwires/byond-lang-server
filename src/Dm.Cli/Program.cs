@@ -48,6 +48,7 @@ internal static class Program
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
                 "bench" => Bench.Run(args),
+                "diagdiff" => DiagnosticDiff.Run(args),
                 _ => Unknown(args[0]),
             };
         }
@@ -104,6 +105,9 @@ internal static class Program
         Console.Error.WriteLine("      --own                with --members, skip what it inherits");
         Console.Error.WriteLine("      --limit <n>          cap on --subtypes (default 500)");
         Console.Error.WriteLine("      --no-builtins        the project's own declarations only");
+        Console.Error.WriteLine("  diagdiff <file.dme>      diff our diagnostics against dm.exe");
+        Console.Error.WriteLine("      --dm <path>          dm.exe to compare against");
+        Console.Error.WriteLine("      --verbose            show example locations per cause");
         Console.Error.WriteLine("  bench <file.dme>         time a cold open and a warm edit");
         Console.Error.WriteLine("      --rounds <n>         warm rounds to time (default 3)");
         Console.Error.WriteLine("      --file <path>        which file to 'edit' (default: the first)");
