@@ -324,4 +324,25 @@ public class MacroExpanderTests
         Assert.Equal("OUTER", number.Expansion.Outermost.Macro.Name);
         Assert.Equal(use, number.ReportAt.Source);
     }
+
+    /// <summary>
+    /// An argument containing <c>?[</c> keeps everything after the matching <c>]</c>.
+    /// </summary>
+    /// <remarks>
+    /// <c>?[</c> is a single token and still opens a bracket. The argument scanner counted only
+    /// <c>OpenBracket</c>, so the depth went negative on the closing <c>]</c> and it took that as
+    /// the end of the invocation — silently dropping the rest of the argument. /tg/station's
+    /// <c>OFFSET_RENDER_TARGET</c> lost its whole <c>? 0 : off</c> tail this way, and the parse then
+    /// failed on a stream that was simply missing tokens. 174 diagnostics.
+    /// </remarks>
+    [Fact]
+    public void An_argument_containing_a_null_conditional_index_is_not_truncated()
+    {
+        string expanded = Expand(
+            "OUTER(k, fallback)",
+            "OUTER(rt, off) (blacklist?[\"[rt]\"] ? 0 : off)");
+
+        Assert.Contains("fallback", expanded);
+        Assert.Contains("?", expanded);
+    }
 }

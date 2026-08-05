@@ -4,7 +4,7 @@
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
 > Status: **M0–M7 complete · M8 passed over · M9 past its target · M11 started · ABI 0.11**
-> · 638 tests · Last updated: 2026-08-05
+> · 649 tests · Last updated: 2026-08-05
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -1116,11 +1116,165 @@ errs.dm:38:error: P.slot: undefined type: /clothing
 instances of one mistake is one thing to fix and a list of a hundred lines does not say so. Baselines
 as of 2026-08-04:
 
-| project | dm.exe | ours | missed | invented |
-|---|---|---|---|---|
-| mlaas | 0 | 0 | 0 | 0 |
-| madridspy | 2 | 0 | 2 | 0 |
-| the errors fixture | 14 | 0 | 14 | 0 |
+| project | dm.exe | ours | agreed | missed | invented |
+|---|---|---|---|---|---|
+| mlaas | 0 | 0 | 0 | 0 | **0** |
+| madridspy | 2 | 0 | 0 | 2 | **0** |
+| the binder control | 8 | 3 | **3** | 5 | **0** |
+| /tg/station `-DCBT` | 0 | 317 | 0 | 0 | **317** — 11 of them the binder's |
+
+### /tg/station, measured for the first time on 2026-08-05
+
+It was never measurable before: `diagdiff` passed the `.dme` to `dm.exe` with no `-D`, so the
+compiler built a different program from the one we analysed. With `-DCBT` reaching both sides,
+**dm.exe compiles 1.5M lines with zero diagnostics and we report 1,392.** They are not what the
+milestone would predict, and the split matters more than the total:
+
+| | count | |
+|---|---|---|
+| parser and preprocessor | **1,278** | pre-dates M11 entirely |
+| the binder | ~97 | M11's own |
+
+**Grouping by owner said "long tail" and that reading was wrong again.** Every cluster was one or
+two, exactly as the brace-block investigation looked before it turned out to be a single cause.
+Grouped by **member name** the binder's share is dominated by one:
+
+- **73 × a member literally named `proc`** — and the first explanation for it was wrong. `PROC_REF(X)`
+  expands to `(nameof(.proc/##X))`, so a token paste across a path separator looked like the obvious
+  cause; a minimal fixture of exactly that construct compiles clean on both sides. The real site is
+  `stack_entry.proc`, where `stack_entry` is a `var/callee`. **`/callee` is in `builtins.txt` as a
+  type with zero members**, so every `.proc`, `.caller` and `.name` on it is reported.
+- The rest are the same thing — `vis_contents`, `throw_range`, `opacity`, `screen_loc`, `type`.
+
+**So the binder is not what is wrong here; the builtin table is.** Counting members per builtin type
+says it plainly: `/obj`, `/turf` and `/area` have **one each**, `/callee` and — until this session —
+`/image` have none, and `throw_range` is absent altogether. The reference documents what it
+documents, and a scrape cannot invent the rest.
+
+That makes member-existence checking unsound against any builtin-derived type, which is nearly all of
+them, and it is why removing the interim guard looked safe: mlaas and madridspy are ~200 files that
+never touch `/callee`, `vis_contents` or `throw_range`. **A two-project sample was too small to hold
+the failure mode** — the argument for running the stress project *before* trusting a relaxation
+rather than after it.
+
+**Both were fixed, and the binder went 97 invented to 13.**
+
+*The table.* A generated matrix — 86 candidate names against 17 types, one file, one compile — put 50
+missing members in, and the count-per-type reading that started this was itself wrong: `/obj`,
+`/turf` and `/mob` were **complete**, since 1 counts only what a type declares itself and says nothing
+about what it inherits. The real holes were `/callee` (11, and it had none at all), `/image` and
+`/mutable_appearance` (11 each), `/client` (8), `/list` and `/savefile` (4 each). The first version of
+that probe wrote a bare `R.member` statement, which dm.exe does not type-check — it compiled with 0
+errors and proved nothing, so every type now carries a control name that must fail.
+
+*The parser.* `/callee` was only 2 of the 73. The rest were `TYPE_PROC_REF(TYPE, X)`, which expands to
+`(nameof(##TYPE.proc/##X))` and is called as `TYPE_PROC_REF(/datum/beam/, Start)` — giving
+`/datum/beam/.proc/Start`, a **doubled separator**. §4a says doubled and trailing separators both
+collapse; `ParsePath` consumed one and stopped, handing `.proc/Start` to member access. It now
+consumes the whole run.
+
+Five constructs came out of reading sites rather than counts, each verified against a fixture
+`dm.exe` compiles with 0 errors, and each now a regression test:
+
+| construct | worth |
+|---|---|
+| a label followed by a brace block | 754 |
+| `for(x in a to b step c)` with `x` already declared | ~70 |
+| `pick(20;"brown", 1;"albino")` — weighted arguments | ~50 |
+| `if(x in 12 to 20)` — a range test in expression position | ~50 |
+| `0. SECONDS` — a trailing-dot number literal | ~10 |
+| `?[` inside an interpolation hole, and in a macro argument | ~174 |
+| `step` as a variable name | ~16 |
+
+**`?[` is one token and still opens a bracket**, and two separate places counted only a bare `[`.
+Inside an interpolation hole the lexer ended the hole at the `]` closing a `?[`; the macro argument
+scanner did the same and **silently dropped everything after it**, so
+`OUTER(rt, blacklist?["[rt]"] ? 0 : off)` lost its whole `? 0 : off` tail and the parse then failed
+on a stream that was simply missing tokens. Every literal spelling of the construct parsed fine,
+which is what made it look like a macro bug until the token dump showed the tail was gone.
+
+**`step` is the only contextual keyword that is a legal variable name, and finding that out took
+two passes.** The first probe declared each one and read it back — `var/in = 1` then `return in` —
+which compiles for `step`, `in`, `as` and `set` alike, so all four went in. Adding a single
+`name += 1` rejects three of them:
+
+| written | result |
+|---|---|
+| `var/step = 40` then `step += 1` | compiles, and runs: 41 |
+| `var/in = 40` then `in += 1` | *"missing left-hand argument to in."* |
+| `var/as = 40`, `var/set = 40` | same shape, error on the use |
+| `var/to = 40` | error at the declaration itself |
+
+That is §8's own rule — *a clean compile proves almost nothing; ask whether the thing exists* — and
+the probe that skipped it was mine. `step` is confirmed at runtime as a local and as a loop
+variable, not merely compiled.
+
+**The `for` header one was a silent modelling bug, not a new feature.** The header's `in` was being
+taken by the expression parser, so `for(x in L)` with `x` already declared collapsed into the single
+expression `x in L` and the loop was modelled as a **bare** `for` over a nonsense initializer. That
+parsed without a diagnostic, so nothing caught it until `for(x in a to b step c)` turned it into a
+visible error. Worth remembering the shape: a construct that parses *clean* and means the wrong thing
+is invisible to a diagnostic count, and only `-code_tree` or an outline diff would show it.
+
+**A label may be followed by a brace block**, and that was worth 754 of the parser's 1,278. A
+`\`-continued macro body has no lines to put a label on, so /tg/station writes
+`set_adj_in_dir: { ... }` and breaks out of it by name. We required a line end after the colon, read
+the `:` as member access, reported "expected a member name" on the brace, and then failed to find an
+expression for every line of the block. A `:` followed by `{` is unambiguous — member access needs a
+name after the colon — so the rule is a strict widening rather than a guess.
+
+What is left of the binder's share is 11, and none of it is the binder: `log_message` (11) and
+`throw_range` (2) resolve nowhere as builtins, so they are /tg/station declarations we never built —
+downstream of the 1,278 parser diagnostics rather than separate from them.
+
+The parser's 1,278 are led by **973 `expected an expression`**, and some of them are likely the same
+`.proc/` cause seen from the other side. This is the first time our parser diagnostics have been
+diffed against the compiler's rather than against its object tree, and `-o` could never have shown
+it: a spurious error that still resolves to the right paths leaves recall untouched.
+
+### The binder, and the two shapes it is allowed to report
+
+`Binding/Binder.cs` walks a file's declarations against the finished tree, carrying the enclosing
+type and a scope of parameters and locals, and checks members reached through `.` on a receiver
+whose type is **written down**. `DM0400` is an undefined var, `DM0401` an undefined proc.
+
+**It deliberately does not use `TypeInference`.** Inference exists so completion can serve a
+half-written declaration and knowingly goes further than the compiler; diagnostics are the opposite
+job. Checking an inferred type would report errors on code that compiles.
+
+**Two holes in our own tree came out of this, and fixing them beat guarding against them.** A miss
+can mean our tree is short rather than that the author is wrong, and both ways that happens produced
+invented diagnostics on projects that build clean:
+
+- `builtins.txt` had **one** var on `/image` and none of the appearance vars, because the reference
+  carries no `<a name=/image/var/...>` anchors. 39 are now in the generator as a compiler-verified
+  table: one file reads them all off a `var/image/I`, and `vis_flags` — in the first draft of the
+  probe — turned out to be the accidental negative control, since it lives on `/atom/movable`.
+- **A root-level user type implicitly derives from `/datum`**, which nothing in its path says and the
+  tree did not model, so `tag`, `type` and `vars` resolved nowhere. Compiler-verified: all three
+  resolve inside a bare `/market_values` while a name no type declares still errors.
+
+The first probe for the second one used `name` and appeared to *disprove* it. `name` is on `/atom`,
+not `/datum`, so it failed for a reason unrelated to the question — §8's "watch for probes that
+collide", and it briefly went into these docs as a fact.
+
+With both closed, the interim guard — report only a name declared nowhere, or only on a subtype —
+was removed and re-measured at zero invented on both projects. It had been suppressing real errors:
+a typo that happens to name a member of an unrelated type is still a typo.
+
+**`unused_var` is written and backed out, not shipped.** It matched `dm.exe` exactly on a dedicated
+fixture — including the write-only case, since a plain `x = 1` writes rather than reads while `x +=
+1` does both — and then invented **13** warnings on mlaas, which `dm.exe` compiles with none. Two
+causes, one understood and one not: `var/obj/small/clothing` heading an indented block of names is a
+block **header** rather than a variable, and a `passed` read through `if(!passed)` was not reaching
+the use set for a reason not yet found. The error fixture could not have caught either, because
+every var in it is referenced on a line that fails to compile, so `dm.exe` discounts the use and
+warns anyway. A check that invents on a clean project is the one thing M11 must not do.
+
+Both bugs the corpus found are regression tests rather than notes. A `mob/pc/verb` group header owns
+its children (`TypeTreeBuilder.GroupOwner` is now shared rather than reimplemented, as is
+`ProcOwner`), and a loop variable's type no longer leaks into a later loop that reuses the name —
+locals are declared as encountered, and a `for` gets its own scope.
 
 Zero invented is the number that has to stay zero. Missing ones are M11 work outstanding; invented
 ones are M11 work done wrong, and a project that builds clean while we complain is a tool nobody
@@ -2071,6 +2225,18 @@ it.
   override resolution — so it carries a two-line swap as its control. Three harness traps fired on
   the first attempt and it confidently reported four misses that were two files; they are written
   down in §9 rather than left to be rediscovered.
+- **2026-08-05** — M11's binder landed with its first two checks, `DM0400` undefined var and
+  `DM0401` undefined proc. Built against the oracle from the first run, which is what the harness
+  was for: the first version invented **8** diagnostics on mlaas, a project that compiles clean, and
+  every one was our bug. A `mob/pc/verb` group header put `src` on the root; gathering a proc's
+  locals before walking it let a later `for(var/obj/disc_train/T ...)` decide how an earlier `T` of
+  another type was checked. Then madridspy invented **6** more, all of them our tree being short
+  rather than the author being wrong — a `builtins.txt` gap on `/image`, and root-level types
+  implicitly deriving from `/datum`, which we do not model. The rule is now narrow enough to be
+  sound: report only a name declared nowhere in the program, or one declared only on a subtype of
+  the receiver. mlaas and madridspy are at zero invented and a control fixture agrees with `dm.exe`
+  on 3 of 3. **A checker reporting nothing also scores zero invented**, which is why the control
+  exists.
 - **2026-08-05** — `ROADMAP.txt` cut from 1,047 lines to 234. It was meant to be "the short version"
   and had become a paraphrase of this document in different words, which is *why* the two
   contradicted each other twice: the same fact in two places drifts, and the lint matrix, the `-o`

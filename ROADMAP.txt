@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     1.98 MB, ABI 0.11, 19 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           638 green (605 core, 33 native)
+    tests           649 green (616 core, 33 native)
     abi-smoke       110 checks from C++, on x64 AND x86, run in CI not just built
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
@@ -49,12 +49,23 @@ WHAT WE ARE BUILDING
 
 WHAT'S NEXT
 --------------------------------------------------------------------------------
-  1. M11, the live thread. The oracle is in - dmc diagdiff runs dm.exe over a
-     project and diffs its diagnostics against ours, so every check added is
-     measured from its first commit. mlaas is 0 vs 0. NEXT IS THE BINDER: walk
-     every expression against the cached tree and resolve it, then checks in
-     the order the errors fixture ranks them - undefined var and undefined
-     proc are five of its fourteen.
+  1. M11, the live thread. THE BINDER IS IN, with its first two checks:
+     DM0400 undefined var and DM0401 undefined proc, on a member reached
+     through "." from a receiver whose type is WRITTEN DOWN. mlaas and
+     madridspy are at ZERO INVENTED and a control fixture agrees with dm.exe
+     on 3 of 3 - the control matters, because a checker that reports nothing
+     also scores zero invented.
+     NEXT, in the order they are worth doing:
+       - unused_var, which dm.exe reports by default and is 4 of the 5 we
+         still miss on the control
+       - "." on an UNTYPED local, which dm.exe rejects for every member
+         including the right one. Real, valuable, and needs certainty we saw
+         the declaration before it can be safe.
+       - ":" against the subtype tree
+       - the two tree gaps the binder exposed: builtins.txt is short on
+         /image, and a root-level type implicitly derives from /datum, which
+         we do not model. Both currently SUPPRESS checks rather than
+         producing wrong ones.
   2. M9's tree merge - 411 ms of tgstation's 909, and the last phase still
      rebuilding the whole project from scratch.
   3. SEND tests/abi-smoke TO THE IDE DEVS. The CMakeLists include and link
@@ -100,6 +111,10 @@ MILESTONES                                    (restructured 2026-08-02)
              harness first, code second. one check landed early as DM0300,
              because the parser had to model the construct to match dm.exe
              and knowing the author wrote it is then free.
+             THE BINDER IS IN: DM0400 undefined var, DM0401 undefined proc.
+             Built against the oracle from its first run, which caught 14
+             invented diagnostics across two clean projects before any of
+             them could be believed.
 
   WHAT CHANGED AND WHY
     Syntax highlighting was at M9/M10 as a TextMate grammar plus LSP semantic
