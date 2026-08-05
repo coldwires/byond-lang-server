@@ -18,13 +18,20 @@ WHERE WE ARE
 
     dm_core.dll     1.98 MB, ABI 0.11, 19 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           649 green (616 core, 33 native)
+    tests           985 green (952 core, 33 native)
+    BYOND 516.1686  goldens, probes and the 52-check world all hold on the
+                    latest build (standalone zip, DM_BYOND_BIN) - only the
+                    version tripwire fires, by design
     abi-smoke       110 checks from C++, on x64 AND x86, run in CI not just built
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
     include graph   102/102 against dm.exe -l, order identical after M9
     one keystroke   10 ms on mlaas (target was 30), 909 ms on tgstation
+    diagnostics     ZERO INVENTED EVERYWHERE - mlaas 0, madridspy 0, and
+                    tgstation 0 from 1,392: dm.exe says nothing on 1.5M
+                    lines and now so do we
+    fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 252-probe ratchet
 
   Shipping through the ABI today: syntax highlighting (lexical AND semantic
   colours 12-15), document outline with syntax diagnostics, completion,
@@ -55,17 +62,36 @@ WHAT'S NEXT
      madridspy are at ZERO INVENTED and a control fixture agrees with dm.exe
      on 3 of 3 - the control matters, because a checker that reports nothing
      also scores zero invented.
+     Both tree gaps the binder exposed are CLOSED: builtins.txt gained 89
+     verified members (/callee had none, /image had one), and a root-level
+     type now derives from /datum. The interim guard is gone with them.
+     THE TGSTATION RATCHET IS DONE: nine fixes took 225 -> 0 in one day,
+     every one a fixture and a regression test. Zero invented is now the
+     state to DEFEND - diagdiff on all three projects after any parser or
+     preprocessor change.
      NEXT, in the order they are worth doing:
-       - unused_var, which dm.exe reports by default and is 4 of the 5 we
-         still miss on the control
+       - raise the probe ratchet further: 41/252 after DM0402 (undefined
+         type path) and the empty-switch warning landed. The biggest
+         remaining classes: "undefined var" on BARE identifiers (11),
+         "out of bounds" (5), "duplicate definition" (4), "invalid parent
+         type" (4). Each lands the same way: probe, implement, hold the
+         zero-invented gate on all three projects.
+       - unused_var: written and BACKED OUT (invented 13 on mlaas; one
+         cause still not understood - PLAN 9 has both).
+       - "." on an UNTYPED local, and ":" against the subtype tree.
+       - M9's tree merge - the last phase rebuilding the whole project.
+       - M10, the LSP shell.
+       - the binder's own share is 13 and none of it is the binder:
+         log_message and throw_range resolve nowhere as builtins, so they
+         are declarations lost downstream of those clusters and should
+         evaporate on their own.
+       - unused_var: written and BACKED OUT, it invented 13 on mlaas. Two
+         causes, one understood (a var block header is not a variable) and
+         one not. PLAN 9 has both.
        - "." on an UNTYPED local, which dm.exe rejects for every member
          including the right one. Real, valuable, and needs certainty we saw
          the declaration before it can be safe.
-       - ":" against the subtype tree
-       - the two tree gaps the binder exposed: builtins.txt is short on
-         /image, and a root-level type implicitly derives from /datum, which
-         we do not model. Both currently SUPPRESS checks rather than
-         producing wrong ones.
+       - ":" against the subtype tree.
   2. M9's tree merge - 411 ms of tgstation's 909, and the last phase still
      rebuilding the whole project from scratch.
   3. SEND tests/abi-smoke TO THE IDE DEVS. The CMakeLists include and link
@@ -229,6 +255,9 @@ WHERE THE DETAIL LIVES
       troubleshooting by symptom, what an edit costs  INTEGRATION.txt
     runnable proofs of 18 DM edge cases               docs/dm-language-notes.md
     the fixture suite: compile + RUN + diagdiff       tests/fixtures/README.md
+      - and what to do when BYOND updates             tests/fixtures/README.md
+    the compiler's own diagnostic catalogue,
+      30 warning ids with their pragma names          PLAN.md 8a
     working notes, verified commands, dead ends       docs/internal/  (ignored)
 
   THE RULE THAT KEEPS THIS TRUE: the doc edit belongs in the commit that makes

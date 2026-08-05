@@ -257,8 +257,15 @@ internal static class Program
     /// </remarks>
     private static int AddVerifiedMembers(SortedDictionary<string, Entry> entries)
     {
+        // /alist is 516's associative list and appears nowhere in this reference version.
+        // Compiler-verified: `/alist` resolves as a path, `var/alist/A = new` works with keyed
+        // assignment, `initial(t:parent_type)` is empty — parentless, the same as /list — and
+        // /tg/station's isalist() family expands to istype(X, /alist). Identical on 516.1686.
+        int added = Add(entries, new Entry { Kind = 'T', Owner = "/alist" }) ? 1 : 0;
+
         Dictionary<string, string[]> members = new()
         {
+            ["/alist"] = new[] { "len", "parent_type", "tag", "type", "vars" },
             ["/callee"] = new[] { "args", "caller", "desc", "file", "invisibility", "line", "name", "proc", "src", "type", "usr" },
             ["/client"] = new[] { "bound_height", "bound_width", "bound_x", "bound_y", "parent_type", "tag", "type", "vars" },
             ["/image"] = new[] { "alpha", "animate_movement", "appearance", "appearance_flags", "blend_mode", "color", "contents", "density", "desc", "dir", "filters", "gender", "glide_size", "icon", "icon_state", "infra_luminosity", "invisibility", "layer", "luminosity", "maptext", "maptext_height", "maptext_width", "maptext_x", "maptext_y", "mouse_drag_pointer", "mouse_drop_pointer", "mouse_drop_zone", "mouse_opacity", "mouse_over_pointer", "name", "opacity", "overlays", "override", "pixel_w", "pixel_x", "pixel_y", "pixel_z", "plane", "render_source", "render_target", "screen_loc", "suffix", "text", "transform", "underlays", "verbs", "vis_contents", "x", "y", "z" },
@@ -268,8 +275,6 @@ internal static class Program
             ["/world"] = new[] { "vars" },
         };
 
-        int added = 0;
-
         foreach ((string owner, string[] names) in members)
         {
             foreach (string name in names)
@@ -277,6 +282,15 @@ internal static class Program
                 if (Add(entries, new Entry { Kind = 'V', Owner = owner, Name = name }))
                     added++;
             }
+        }
+
+        // /alist carries /list's whole proc surface: every one of these plus `len` compiles on a
+        // typed alist while a control name fails — one file, one compile, 516.1666.
+        foreach (string name in new[]
+                 { "Add", "Copy", "Cut", "Find", "Insert", "Join", "Remove", "RemoveAll", "Splice", "Swap" })
+        {
+            if (Add(entries, new Entry { Kind = 'P', Owner = "/alist", Name = name }))
+                added++;
         }
 
         return added;

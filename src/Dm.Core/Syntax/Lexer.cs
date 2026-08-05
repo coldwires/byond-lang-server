@@ -63,6 +63,9 @@ public sealed class Lexer
     /// <summary>Depth of <c>(</c> and <c>[</c> nesting. Layout tokens are suppressed inside.</summary>
     private int _groupingDepth;
 
+    /// <summary>Whether the current line carried a directive; its newline survives grouping.</summary>
+    private bool _lineHadDirective;
+
     private Lexer(SourceText text) => _text = text;
 
     public static LexResult Lex(SourceText text)
@@ -228,9 +231,13 @@ public sealed class Lexer
             _position++;
         }
 
-        if (_groupingDepth == 0)
+        // A line that carried a directive keeps its newline even inside a group: the directive
+        // scanner needs the terminator, or an `#include` spliced into an argument list swallows
+        // the token after it. See LexHash.
+        if (_groupingDepth == 0 || _lineHadDirective)
             Add(TokenKind.Newline, start);
 
+        _lineHadDirective = false;
         _atLineStart = _groupingDepth == 0;
     }
 
@@ -684,6 +691,13 @@ public sealed class Lexer
             _position++;
 
         Add(TokenKind.DirectiveName, nameStart);
+
+        // A directive line ends at its physical line end even inside an open bracket, where
+        // newlines are otherwise suppressed so argument lists can wrap. dm.exe allows an
+        // `#include` inside an open paren — tgstation splices a version file into a call — and
+        // without the terminator the directive scanner reads the NEXT line's tokens as payload,
+        // swallowing the very `)` that closes the group.
+        _lineHadDirective = true;
 
         // `#warn` and `#error` take free text, not tokens. The compiler prints the rest of the
         // line verbatim, so apostrophes and unbalanced quotes are legal there — real library code

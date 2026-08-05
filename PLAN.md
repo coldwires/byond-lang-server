@@ -4,7 +4,7 @@
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
 > Status: **M0–M7 complete · M8 passed over · M9 past its target · M11 started · ABI 0.11**
-> · 649 tests · Last updated: 2026-08-05
+> · 985 tests · Last updated: 2026-08-05
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -1114,14 +1114,14 @@ errs.dm:38:error: P.slot: undefined type: /clothing
 
 `dmc diagdiff <dme>` runs both sides and reports the difference grouped by cause, since a hundred
 instances of one mistake is one thing to fix and a list of a hundred lines does not say so. Baselines
-as of 2026-08-04:
+as of 2026-08-05:
 
 | project | dm.exe | ours | agreed | missed | invented |
 |---|---|---|---|---|---|
 | mlaas | 0 | 0 | 0 | 0 | **0** |
 | madridspy | 2 | 0 | 0 | 2 | **0** |
 | the binder control | 8 | 3 | **3** | 5 | **0** |
-| /tg/station `-DCBT` | 0 | 317 | 0 | 0 | **317** — 11 of them the binder's |
+| /tg/station `-DCBT` | 0 | 0 | 0 | 0 | **0** — dm.exe says nothing on 1.5M lines, and so do we |
 
 ### /tg/station, measured for the first time on 2026-08-05
 
@@ -1173,12 +1173,21 @@ errors and proved nothing, so every type now carries a control name that must fa
 collapse; `ParsePath` consumed one and stopped, handing `.proc/Start` to member access. It now
 consumes the whole run.
 
-Five constructs came out of reading sites rather than counts, each verified against a fixture
+The constructs came out of reading sites rather than counts, each verified against a fixture
 `dm.exe` compiles with 0 errors, and each now a regression test:
 
 | construct | worth |
 |---|---|
 | a label followed by a brace block | 754 |
+| a `switch` whose arm list is a brace block | 90 |
+| a `;` run between a body and its `else`, do's `while`, or `catch` | 44 |
+| a ternary pasted through `##` losing the `:` whitespace fact | 32 |
+| `throw` as a type-path segment | 7, including both remaining binder reports |
+| `var/final = ...` — a modifier word as the variable's name | 10 |
+| `locate(X) in L` inside a ternary branch | 5 |
+| the newline after a skipped region's `#endif` collecting the level debt | 15, including the binder's whole `log_message` share |
+| an `#include` in expression position, spliced into the parent's run | 19 |
+| `TRUE` and `FALSE` as built-in macros | 3 — **and the count reached zero** |
 | `for(x in a to b step c)` with `x` already declared | ~70 |
 | `pick(20;"brown", 1;"albino")` — weighted arguments | ~50 |
 | `if(x in 12 to 20)` — a range test in expression position | ~50 |
@@ -1805,6 +1814,13 @@ that the two candidate behaviours produce different compiler output.
 | **`#pragma ignore` flows through include order rather than per file.** | With `#pragma ignore unused_var` in the first-included file, an offending var in the *second* file is silent; swap the two `#include` lines and it warns. So pragma level is sequential state like the macro table, and a diagnostic's level depends on what the compiler had already read — the same shape as §4a's include-order dependence. |
 | **A duplicate definition is two diagnostics, not one.** | `dup: duplicate definition` on the second declaration and `dup: previous definition` on the first, as separate lines. A model with one span per diagnostic cannot express it; the pair wants related locations. |
 | **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
+| **A `;` run before `else`, do's `while`, or `catch` is skipped.** | `if(a) { r = 1; }; else { r = 2; };` compiles, as do `};;`, `};` before a line break, and a bare `;` line between two indented bodies; the same holds for `do { }; while()` and `try { }; catch()`, in brace and inline forms alike. The separator is still required — `if(a) r = 1 else r = 2` is *"expected end of statement"* — and an orphan `else` is still *"'else' clause without preceding 'if' statement"*. Runtime-verified that the keywords bind: both branches reachable, the `while` closes the `do` rather than opening a fresh loop, the `catch` catches. The idiom every `\`-continued macro body forces; worth 44 invented diagnostics on /tg/station. Language notes §19. |
+| **A `switch`'s arm list may be a brace block.** | `switch(pH) { if(7 to 10) { c = "high" } if(2 to 7) { c = "mid" } else { c = "other" } }` compiles and dispatches to the right arm at runtime — the range arms and the `else` all verified by value on 516.1666, with the braces on the header line or the next one and indented arms inside them working identically. Another face of "braces and indentation nest freely", and again what a `\`-continued macro body has to write: tgstation's `CONVERT_PH_TO_COLOR` is exactly this shape. Worth 90 invented diagnostics — the entire "expected ')'" cluster and half the "expected an expression" one. |
+| **Thirteen statement keywords are legal type-path segments.** | `throw`, `set`, `step`, `if`, `else`, `for`, `while`, `switch`, `catch`, `try`, `do`, `spawn`, `null` — probed one per compilation unit, declaring `/datum/<kw>` and then reading a member through `var/datum/<kw>/x`, since the declaration compiling alone proves nothing. Rejected: `in`/`to` (*"missing expression"*), `as` (breaks at the use), `return`/`break`/`continue`/`del`/`new`/`goto` (*"instruction not allowed here"*), and `var`/`list`/`tmp`/`global`/`static`/`const`/`proc`/`verb`, which read as modifiers or group markers and declare no type. A keyword is still not a variable **name**: `var/throw = 1` is *"missing left-hand argument to ="*. Identical on 516.1686. tgstation declares `/datum/manipulator_task/cargo/dropoff_base/throw`. |
+| **Every var-modifier word is a legal variable name.** | `var/final = ""`, `var/const = 1`, `var/tmp = 1`, `var/global = 1`, `var/static = 1` all compile **with uses**, at proc level and type level alike — the word is a modifier only when a separator follows it (`var/final/x` carries 516's `final`), and a block header only when the line ends there (`var/const` + indented names, the stddef.dm shape). /tg/station writes `var/final = ""` five times. |
+| **`locate(X) in container` is one grammatical unit, not the relational `in`.** | Inside a ternary branch, `c ? locate(X) in L : y` compiles and runs — the found object comes back from the true branch — while `c ? 9 in L : y` is *"expected ':'"* and `c ? y : 9 in L` is *"unexpected 'in' expression"*. So the idiom is not the loosest-binding operator wearing a hat: it binds to the locate. That also decides statement level, where `x = locate(y) in L` must assign the **found object**, not evaluate the assignment first and test afterwards — a misparse with no diagnostic either way. tgstation writes the ternary form three times. |
+| **An `#include` is legal in expression position, splicing the file into the surrounding brackets.** | tgstation's `ApiVersion()` is `return new /datum/tgs_version(` + `#include "__interop_version.dm"` + `)`, where the included file is one string literal. Compiles clean and the value lands in the argument list — runtime-verified through the constructed object. The directive still ends at its own line even mid-expression. |
+| **`TRUE` and `FALSE` are built-in macros since 515.** | With no define anywhere: `#if TRUE` is taken, `#if FALSE` is silently not taken (no error — contrast §8's rule that `#if` rejects undefined names), `#ifdef TRUE` is defined, and the runtime values are 1 and 0. tgstation defines neither and writes `#define MERGERS_DEBUG FALSE` + `#if MERGERS_DEBUG`, which is what exposed the missing seed. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
 comment would otherwise nest and swallow the remainder of the file. Found in real code.
@@ -2328,3 +2344,96 @@ it.
   line-ending client guidance went to `INTEGRATION.txt` §5, which §4b had been *claiming* held it
   while ROADMAP held the only copy, and the pipeline-debugging commands (`includes`, `preprocess`,
   `tree`) went to §12, where an IDE dev asking "why is this type missing" will actually look.
+- **2026-08-05** — /tg/station **1,392 → 225 invented**, and it became measurable at all only because
+  `diagdiff` started passing `-D` to `dm.exe`; without it the compiler built a different program from
+  the one we analysed. Seven constructs, each found by opening a site rather than theorising: a label
+  followed by a brace block (754 on its own), doubled path separators, weighted `pick(20;"x")`, `in`
+  against a `to` range, trailing-dot numbers, `?[` counting as an opening bracket in both the lexer's
+  interpolation depth **and** the macro argument scanner, and the anonymous `M(...)` variadic. All
+  plain DM we had wrong; what /tg/station supplies is macro nesting deep enough to reach it.
+- **2026-08-05** — `tests/fixtures`, driven from `dotnet test`. It exists because a corpus is
+  one-directional: `dm.exe` reports zero diagnostics on 1.5M lines, so correct code shows only what
+  we wrongly *reject*. `ok/` compiles clean and **runs** with 38 self-checks, `errors/` must fail as
+  recorded, and 252 must-fail cases are mined from the author's diagnostic lab. A version stamp fails
+  loudly when the installed BYOND leaves the one the goldens came from, so an upgrade is a report
+  rather than a debugging session. Every finding gets a case, in the same change.
+- **2026-08-05** — The first two ratchet-raising checks: `DM0402` undefined type path, on
+  expression-position path literals only (a DECLARED type stays silent until used, §8), and the
+  "empty switch statement" warning (`DM0203`) on a DM-style switch with no arms. Probe agreement
+  **38 → 41 of 252**, with zero invented held on all three projects — after the gate caught two
+  real over-reaches the first time around: `/obj/small/trap/get` names a verb through its type
+  with no `verb` segment (mlaas ships it; the binder now tries a proc tail before reporting), and
+  a path ends at whitespace, which matters inside parens where the lexer suppresses newlines —
+  mlaas has a `gloves.`-for-`gloves,` typo that dm.exe tolerates and our path reader ran straight
+  through. Also from the same gate: `/alist` (516's associative list) is now in `builtins.txt`
+  with `len` and the whole `/list` proc surface, compiler-verified with a control, parentless like
+  `/list` — tgstation's `isalist()` family expands to `istype(X, /alist)`.
+- **2026-08-05** — **/tg/station reached zero invented.** The last two causes: an
+  expression-position `#include` (§8) — the tgs module splices a version file into an argument
+  list, which a per-file parse cannot see across — and the built-in `TRUE`/`FALSE` macros (§8),
+  which our predefined seed lacked. The splice needed two mechanisms: the lexer keeps a directive
+  line's newline even inside a group (grouping used to suppress it, so the directive scanner read
+  the next line's `)` as payload and the walk swallowed it), and an include fired at bracket depth
+  > 0 routes the whole subtree's tokens into the INCLUDING file's run — which then must never be
+  cached, so the walk poisons the parent's effect and the spliced files re-walk every build (2 of
+  7,160 files on /tg/station). `dmc bench --verify` holds: 335,656 declarations identical between
+  cached and uncached builds with the splice live, and position reporting needs nothing new —
+  `TokenSource.FromExpanded` already collapses cross-file spans onto the include site. From
+  1,392 at first measurement to **0**, matching `dm.exe` silence for silence on 1.5M lines.
+- **2026-08-05** — The newline after a skipped region's `#endif` no longer collects the level
+  debt. Directive lines are layout-neutral in the lexer, so that newline still sits at the SKIPPED
+  content's depth until the next live line dedents; levelling before it materialised an Indent
+  that opened an empty block — "expected a declaration" on the `#endif` line of every inactive
+  region with indented content. /tg/station **37 → 22**, and the fifteen included **all eleven
+  `log_message` binder reports**: they were `_logging.dm`'s declarations lost to this misparse,
+  which closes the "lost downstream" prediction completely — the binder now invents nothing on
+  1.5M lines. The debt is paid at the next real token instead, whose depth a surviving line
+  actually has.
+- **2026-08-05** — `locate(X) in container` is one grammatical unit (§8), and the parser now binds
+  it at the invocation: `c ? locate(X) in L : y` parses while the bare-`in` forms stay rejected on
+  both sides, matching the compiler exactly — probe in1 agrees error-for-error. The binding also
+  corrects a silent statement-level misparse: `x = locate(y) in L` assigned first and tested after.
+  Guarded by the same rule as `ParseIn`, so a `for` header still owns its `in`. /tg/station
+  **42 → 37**: the conditional-`:` and "expected a member name" clusters are both gone. One known
+  miss recorded: dm.exe rejects `c ? y : 9 in L` and we accept it — a must-fail for a later pass.
+- **2026-08-05** — Every var-modifier word is a legal variable name (§8): `var/final = ""` declares
+  a var named `final`, and the word is a modifier only when a separator follows (a block header
+  only when the line ends there). Two copies of the decision existed and both were wrong the same
+  way — `ParseLocalVarNames` for locals and `modifierBlock` in the declaration parser for type
+  level — found because "expected an expression" and "expected a variable name" shared the same
+  five /tg/station sites, all `var/final = ...`. /tg/station **52 → 42**.
+- **2026-08-05** — Thirteen statement keywords are legal type-path segments (§8), probed one per
+  compilation unit after tgstation's `/datum/manipulator_task/cargo/dropoff_base/throw` broke both
+  `big_manipulator` sites. `SyntaxFacts.IsPathSegmentKeyword` is shared by the expression and
+  statement parsers rather than copied — the M4 lesson — and a keyword counts in a local's TYPE
+  only when a separator and another segment follow, since `var/throw = 1` is rejected.
+  /tg/station **59 → 52**, including both `throw_range` binder reports, which were never binder
+  bugs: they were this type's declaration lost downstream, exactly as predicted.
+- **2026-08-05** — The suite ran against a standalone BYOND **516.1686** (portable zip,
+  `DM_BYOND_BIN` override, no system install): the only failing test is the version tripwire, by
+  design; all fixture goldens hold; the 52-check world compiles and runs clean under the new
+  compiler and daemon; and the probe ratchet agrees on the identical 38 of 252 — nothing lost,
+  nothing gained. The 516.1686 `::` codegen fix in its release notes is a compiler bug fix, not a
+  language change, and nothing we assert moved.
+- **2026-08-05** — A run pasted through `##` keeps each token's source, span and whitespace fact;
+  only the paste boundary is textual. A variadic tail holds synthesized separator commas, which
+  made `RawText`'s contiguity check fail and its fallback join the argument texts with no spacing —
+  so `INVOKE_ASYNC(..., (a) ? u : v)` re-lexed as `(a)?u:v` and the tight colon read as member
+  access (§4c's one spacing-sensitive parse). /tg/station **91 → 59 invented**: the conditional-`:`
+  cluster went 17 → 3 and "expected a member name" 9 → 2. The `###` repeat path still flattens to
+  text, since its repetitions genuinely glue into one token.
+- **2026-08-05** — A `switch`'s arm list may be a brace block (§8), and the parser now reads one:
+  arms, ranges and `else` inside `{ }` on or after the header line, runtime-verified by value.
+  Found by opening the first "expected ')'" site — `CONVERT_PH_TO_COLOR` at `chem_wiki_render.dm:60`
+  — and /tg/station went **181 → 91 invented**: the whole 45-strong "expected ')'" cluster and half
+  the "expected an expression" one were this single construct.
+- **2026-08-05** — A `;` run between a body and its `else`, do's `while`, or `catch` is skipped
+  (§8, language notes §19), which took /tg/station from 225 invented to **181**. Opened from the
+  top cluster's first site: `TRACK_AI_DATUM_TARGET` writes `}; \ else if(...) {`, and the else was
+  orphaned at the `;`. Probes pinned both boundaries — the separator is required, and an orphan
+  `else` is still an error — and the runtime binding is in `ok/parsing.dm` (47 checks now) because
+  the inline `do r += 1; while(x)` form misparses into a *fresh* loop without the rule, silently.
+  Two harness findings from the same session: the fixture world and the language-notes appendix run
+  under `-safe` — `-trusted` was never needed, and it hangs headless runs on a GUI approval prompt —
+  and the appendix as printed in the notes did not compile (`\:` in a string is an undefined text
+  macro), so the run instructions and the file are both corrected.

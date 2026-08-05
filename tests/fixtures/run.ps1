@@ -106,7 +106,10 @@ if (-not $haveByond) {
     if (-not (Test-Path $dmb)) {
         Fail 'ok/ runtime' 'no .dmb - the compile above must pass first'
     } else {
-        $p = Start-Process -FilePath $dd -ArgumentList "`"$dmb`" -trusted -invisible -once -logself" -PassThru -WindowStyle Hidden
+        # -safe, not -trusted: nothing in ok/ needs trusted mode, and a -trusted world
+        # waits on a GUI approval prompt when no interactive approval exists, so a
+        # headless run hangs to the timeout and reports "no log produced".
+        $p = Start-Process -FilePath $dd -ArgumentList "`"$dmb`" -safe -invisible -once -logself" -PassThru -WindowStyle Hidden
         if (-not $p.WaitForExit(60000)) { $p.Kill() }
 
         if (Test-Path $log) {

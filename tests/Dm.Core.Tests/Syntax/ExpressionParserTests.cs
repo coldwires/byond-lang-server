@@ -258,6 +258,59 @@ public class ExpressionParserTests
         Assert.Equal(PathAnchor.UpwardSearch, path.Path.Anchor);
     }
 
+    /// <summary>
+    /// <c>locate(X) in container</c> is one grammatical unit, not the relational <c>in</c>:
+    /// dm.exe accepts it inside a ternary branch where a bare <c>in</c> is "expected ':'" —
+    /// tgstation writes <c>cond ? locate(X) in L : null</c> three times — and at statement level
+    /// the idiom's value is the found object, so the <c>in</c> must bind to the locate rather
+    /// than to the enclosing assignment.
+    /// </summary>
+    [Fact]
+    public void Locate_in_a_container_is_one_unit_inside_a_ternary()
+    {
+        ConditionalExpressionSyntax conditional = Assert.IsType<ConditionalExpressionSyntax>(
+            Parse("c ? locate(x) in L : null"));
+
+        BinaryExpressionSyntax branch = Assert.IsType<BinaryExpressionSyntax>(conditional.WhenTrue);
+        Assert.Equal(TokenKind.KeywordIn, branch.OperatorToken);
+        Assert.IsType<InvocationExpressionSyntax>(branch.Left);
+    }
+
+    [Fact]
+    public void Locate_in_binds_to_the_locate_not_the_assignment()
+    {
+        AssignmentExpressionSyntax assignment = Assert.IsType<AssignmentExpressionSyntax>(
+            Parse("x = locate(y) in L"));
+
+        BinaryExpressionSyntax value = Assert.IsType<BinaryExpressionSyntax>(assignment.Value);
+        Assert.Equal(TokenKind.KeywordIn, value.OperatorToken);
+    }
+
+    /// <summary>
+    /// A statement keyword may be a path segment — tgstation's
+    /// <c>/datum/manipulator_task/cargo/dropoff_base/throw</c>. SyntaxFacts records which
+    /// thirteen dm.exe accepts; <c>throw</c> is the one real code uses, in any position.
+    /// </summary>
+    [Theory]
+    [InlineData("/datum/task/throw", new[] { "datum", "task", "throw" })]
+    [InlineData("/datum/if/thing", new[] { "datum", "if", "thing" })]
+    [InlineData("new /task/throw(x)", null)]
+    public void A_keyword_may_be_a_path_segment(string source, string[]? segments)
+    {
+        ExpressionSyntax expression = Parse(source);
+
+        if (segments is null)
+        {
+            NewExpressionSyntax created = Assert.IsType<NewExpressionSyntax>(expression);
+            Assert.Equal("/task/throw", Assert.IsType<PathExpressionSyntax>(created.Type).Path.Text);
+        }
+        else
+        {
+            PathExpressionSyntax path = Assert.IsType<PathExpressionSyntax>(expression);
+            Assert.Equal(segments, path.Path.Segments.ToArray());
+        }
+    }
+
     /// <summary>A bare <c>.</c> is the enclosing proc's return value, not a path.</summary>
     [Fact]
     public void A_bare_dot_is_the_return_value()

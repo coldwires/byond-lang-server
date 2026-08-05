@@ -282,7 +282,7 @@ internal sealed class MacroExpander
                         result.RemoveAt(result.Count - 1);
                     }
 
-                    AppendPasted(result, RawText(pasted), repeat, expansion);
+                    AppendPasted(result, pasted, repeat, expansion);
                     i = nameIndex;
                     continue;
                 }
@@ -359,11 +359,11 @@ internal sealed class MacroExpander
     /// </remarks>
     private static void AppendPasted(
         List<ExpandedToken> result,
-        string replacement,
+        List<ExpandedToken> replacement,
         int repeat,
         MacroExpansion expansion)
     {
-        if (repeat <= 0 || replacement.Length == 0)
+        if (repeat <= 0 || replacement.Count == 0)
         {
             if (result.Count > 0 && result[^1].Kind == TokenKind.Comma)
                 result.RemoveAt(result.Count - 1);
@@ -371,22 +371,49 @@ internal sealed class MacroExpander
             return;
         }
 
-        StringBuilder builder = new();
-        for (int i = 0; i < repeat; i++)
-            builder.Append(replacement);
-
-        string glued = builder.ToString();
-
-        // Glue onto the preceding token when the join could form a single name or number.
-        if (result.Count > 0 && CanPasteOnto(result[^1].Kind) && CanPasteFrom(glued))
+        // `###` repeats the replacement's TEXT and re-lexes it, since repetitions can glue into
+        // one token: `2###t` with `t = hi` is the single identifier `hihi`. One shared buffer,
+        // so every re-lexed token keeps a real span into it.
+        if (repeat > 1)
         {
-            string merged = result[^1].Text + glued;
-            result[^1] = SyntheticToken(ClassifySingle(merged), merged, expansion);
+            StringBuilder builder = new();
+            for (int i = 0; i < repeat; i++)
+                builder.Append(RawText(replacement));
+
+            string glued = builder.ToString();
+
+            if (result.Count > 0 && CanPasteOnto(result[^1].Kind) && CanPasteFrom(glued))
+            {
+                string merged = result[^1].Text + glued;
+                result[^1] = SyntheticToken(ClassifySingle(merged), merged, expansion);
+                return;
+            }
+
+            SourceText pasted = SourceText.From(glued, $"<macro:{expansion.Macro.Name}>");
+
+            foreach (Token token in Relex(pasted))
+                result.Add(new ExpandedToken(token.Kind, pasted, token.Span, expansion));
+
             return;
         }
 
-        foreach (Token token in Relex(glued))
-            result.Add(SyntheticToken(token.Kind, glued.Substring(token.Span.Start, token.Span.Length), expansion));
+        // `##param`: only the paste BOUNDARY is textual. The first replacement token may glue
+        // onto the preceding body token; the rest pass through unchanged, keeping their own
+        // source and span. Flattening the whole run to text and re-lexing lost the
+        // whitespace-before fact that decides a conditional's `:` (§4c) — a variadic tail holds
+        // synthesized commas, so the flattened text came from the no-spacing fallback, and
+        // `(a) ? u : v` re-lexed as `(a)?u:v` with the colon read as member access.
+        int start = 0;
+
+        if (result.Count > 0 && CanPasteOnto(result[^1].Kind) && CanPasteFrom(replacement[0].Text))
+        {
+            string merged = result[^1].Text + replacement[0].Text;
+            result[^1] = SyntheticToken(ClassifySingle(merged), merged, expansion);
+            start = 1;
+        }
+
+        for (int i = start; i < replacement.Count; i++)
+            result.Add(replacement[i]);
     }
 
     private static bool CanPasteOnto(TokenKind kind) => IsNameLike(kind) || kind == TokenKind.Number;
@@ -400,15 +427,15 @@ internal sealed class MacroExpander
     /// </summary>
     private static TokenKind ClassifySingle(string text)
     {
-        IReadOnlyList<Token> tokens = Relex(text);
+        IReadOnlyList<Token> tokens = Relex(SourceText.From(text));
         return tokens.Count == 1 ? tokens[0].Kind : TokenKind.Unknown;
     }
 
-    private static IReadOnlyList<Token> Relex(string text)
+    private static IReadOnlyList<Token> Relex(SourceText text)
     {
         List<Token> significant = new();
 
-        foreach (Token token in Lexer.Lex(SourceText.From(text)).Tokens)
+        foreach (Token token in Lexer.Lex(text).Tokens)
         {
             if (token.Kind is not (TokenKind.EndOfFile or TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent))
                 significant.Add(token);

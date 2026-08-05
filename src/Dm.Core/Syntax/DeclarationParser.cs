@@ -375,10 +375,14 @@ public sealed class DeclarationParser
         bool endsWithProc = path.Segments[^1] is "proc" or "verb";
 
         // `var/const` and friends head a block too: the trailing segment is a modifier, not a name.
-        // stddef.dm is full of these, declaring whole groups of constants at once.
+        // stddef.dm is full of these, declaring whole groups of constants at once. Only when the
+        // line ends there, though — a modifier word with anything after it is a variable NAMED
+        // const/tmp/global/static/final, which all compile with uses: /tg/station writes
+        // `var/final = ""` five times.
         bool modifierBlock = varIndex >= 0
                              && path.Segments.Count > varIndex + 1
-                             && Modifiers.Contains(path.Segments[^1]);
+                             && Modifiers.Contains(path.Segments[^1])
+                             && AtLineEnd;
 
         // A `proc` or `verb` block indented inside a `var` block declares nothing at all. dm.exe
         // takes it with 0 errors and 0 warnings and then drops everything under it: the name is not

@@ -19,10 +19,12 @@ one-line `edge_cases.dme` beside it containing `#include "edge_cases.dm"`, then:
 
 ```
 dm.exe edge_cases.dme
-dreamdaemon.exe edge_cases.dmb -trusted -invisible -once -logself
+dreamdaemon.exe edge_cases.dmb -safe -invisible -once -logself
 ```
 
-Output lands in `edge_cases.log`.
+Output lands in `edge_cases.log`. `-safe` is deliberate: nothing in the file needs trusted
+mode — pointers and `call()` both run under `-safe` — and a `-trusted` world waits on a GUI
+approval prompt when there is no interactive session to click it, which reads as a silent hang.
 
 ---
 
@@ -445,6 +447,38 @@ This is worth checking for in real code. It was found in a shipped game where fo
 were declared this way and one of them is called from another file — a runtime error waiting on a
 code path, with nothing in the build output to suggest it.
 
+## 19. A `;` run before `else`, `while` or `catch` is skipped
+
+```dm
+if(a) { r = 1; }; else { r = 2; };
+do { r += 1; }; while(r < a)
+try { r = a; }; catch(var/exception/e) { r = -1; };
+```
+
+All three compile and mean what the keywords suggest: the `else` binds to the `if`, the
+`while` closes the `do`, the `catch` belongs to the `try`. Any run of semicolons and blank
+lines may sit between a body and its continuation keyword — `};;`, `};` before a line break,
+even a bare `;` on its own line between two indented bodies.
+
+This is not an obscure corner. A `\`-continued macro body has no line breaks, so `;` is its
+only statement terminator, and ending every braced branch with `};` is the natural way to
+write one — /tg/station does it throughout. A parser that ends the `if` at the `;` then finds
+an orphaned `else` and errors on code the compiler accepts; it cost 44 invented diagnostics
+there. In the inline `do` form the failure is worse than a diagnostic: `do r += 1; while(r < a)`
+read without this rule becomes a *fresh* `while` loop over whatever follows, which is a
+misparse with no error at all.
+
+Two boundaries pin the rule down:
+
+| Written | Result |
+|---|---|
+| `if(a) r = 1; else r = 2` | compiles; both branches reachable |
+| `if(a) r = 1 else r = 2` — no separator | **compile error**, "else: expected end of statement" |
+| `r = 1; else r = 2` — no `if` | **compile error**, "'else' clause without preceding 'if' statement" |
+
+So the tolerance is for a *separator run*, not for `else` anywhere: the keyword still needs a
+`;` or a line break in front of it, and it still needs its statement.
+
 ---
 
 ## Compile-only: braces and indentation nest freely
@@ -503,6 +537,17 @@ One more trap in the same area, since macro-generated code writes `{ ... };` run
 line: the `}` ends the declaration in front of it. Skipping "to the end of the line" past a `}`
 runs into whatever follows the block, and the declarations after it are then read as members of the
 braced type. That produces no diagnostic — the paths still resolve, so only an outline shows it.
+
+The same freedom extends to a `switch`'s arm list:
+
+```dm
+switch(pH) { if(7 to 10) { c = "high" } if(2 to 7) { c = "mid" } else { c = "other" } }
+```
+
+compiles, and runtime-checked by value each arm dispatches correctly — ranges, the `else`, braces
+opening on the header line or the next one, and indented arms inside the braces all behave exactly
+as the indented form does. tgstation's `CONVERT_PH_TO_COLOR` macro is this shape, since a
+`\`-continued body has no lines to indent.
 
 ---
 
@@ -678,6 +723,95 @@ anchors at root** and therefore reaches only root's own children — `/b/target`
 The rule in one line: *walk the enclosing type's path ancestors nearest-first, including root, and
 take the first one under which the entire relative path resolves.* It works in type-level var
 initialisers, in proc bodies, and as a `parent_type` value.
+
+---
+
+## Compile-only: thirteen statement keywords are legal type names
+
+```dm
+/datum/throw
+	var/marker = 1
+
+/proc/f()
+	var/datum/throw/x = new
+	return x.marker      // compiles - the type, the local and the member all resolve
+```
+
+`throw`, `set`, `step`, `if`, `else`, `for`, `while`, `switch`, `catch`, `try`, `do`, `spawn`
+and `null` all work exactly like this — probed one keyword per compilation unit, and checked by
+*using* the type rather than only declaring it, since a clean compile of the declaration alone
+proves nothing.
+
+The rest of the keyword vocabulary fails, in three different ways worth telling apart:
+
+| Keyword | What happens |
+|---|---|
+| `in`, `to` | *"missing expression"* at the declaration |
+| `as` | the declaration passes; the typed local breaks at the use |
+| `return`, `break`, `continue`, `del`, `new`, `goto` | *"instruction not allowed here"* |
+| `var`, `list`, `tmp`, `global`, `static`, `const`, `proc`, `verb` | read as modifiers or group markers; **no type exists**, and only the use says so |
+
+And a keyword is a type *segment* only, never a variable name: `var/datum/throw/x` compiles while
+`var/throw = 1` is *"missing left-hand argument to ="*.
+
+The **modifier words go the other way**: every one of `final`, `const`, `tmp`, `global` and
+`static` is a legal variable *name*, with uses, at proc level and type level alike. The word is a
+modifier only when a separator follows it, and a block header only when the line ends there:
+
+```dm
+var/final = ""       // a var NAMED final - /tg/station writes this
+var/final/x = 1      // x, carrying 516's final modifier
+var/const            // heads a block of constants (the stddef.dm shape)
+	NORTH = 1
+```
+
+Neither of these is hypothetical: /tg/station declares
+`/datum/manipulator_task/cargo/dropoff_base/throw`, writes typed locals of it, and declares
+`var/final = ""` five times.
+
+---
+
+## Compile-only: `#include` works in expression position
+
+```dm
+/proc/apiver()
+	return new /datum/ver(
+		#include "ver_num.dm"
+	)
+```
+
+where `ver_num.dm` contains one line, `"5.11.0"`. Compiles clean, and the constructed object
+carries the string — the file is spliced into the argument list at the include point. The tgs
+module ships this shape in every /tg/station checkout (`ApiVersion()` +
+`__interop_version.dm`), so any tool that parses per file meets it in the wild.
+
+The directive still ends at its own physical line even mid-expression, and the reference never
+mentions that `#include` is legal anywhere but declaration position.
+
+`TRUE` and `FALSE` are also worth knowing as **built-in macros** (515+): with no define anywhere,
+`#if TRUE` is taken and `#if FALSE` is silently not — despite `#if` rejecting other undefined
+names outright — and the runtime values are 1 and 0.
+
+---
+
+## Compile-only: `in` inside a ternary branch, and the `locate` exception
+
+The relational `in` does not parse inside a ternary branch, in either position:
+
+| Written | Result |
+|---|---|
+| `c ? 9 in L : "no"` | **compile error**, *"expected ':'"* |
+| `c ? "yes" : 9 in L` | **compile error**, *"unexpected 'in' expression"* |
+| `c ? locate(/obj) in L : "no"` | compiles, **and runs**: the true branch yields the found object |
+
+So `locate(X) in container` is its own grammatical unit rather than the loosest-binding `in`
+operator wearing a hat — it binds to the locate, and it is welcome where the bare operator is
+rejected. tgstation writes `cond ? locate(X) in L : null` three times.
+
+The statement-level consequence is silent: in `x = locate(y) in L`, reading the `in` as the
+relational operator gives `(x = locate(y)) in L` — assign first, test afterwards, per `in` binding
+below `=` (§1) — which puts the wrong value in `x` with no diagnostic anywhere. The idiom's value
+is the found object.
 
 ---
 
@@ -857,9 +991,10 @@ continuing a `//` comment; the "inconsistent indentation" error, or any indentat
 all; hexadecimal and scientific number literal syntax; the whitespace rule on a conditional's `:`
 (§15); that a directive line carries no indentation of its own (§16); what `?[]` actually
 guards (§17); that a `proc` block misplaced inside a `var` block is discarded without a warning
-(§18); that indentation keeps its meaning inside a brace block, so the two nest freely; the infinity
-and indeterminate literals `1#INF` and `1#IND`, which appear in shipped library code and which a
-lexer splitting on `#` will read as a number, a directive, and a name.
+(§18); that indentation keeps its meaning inside a brace block, so the two nest freely; that a run
+of semicolons and blank lines may separate a body from its `else`, `while` or `catch` (§19); the
+infinity and indeterminate literals `1#INF` and `1#IND`, which appear in shipped library code and
+which a lexer splitting on `#` will read as a number, a directive, and a name.
 
 The precedence table also cannot express §15, since that distinction is lexical rather than a matter
 of binding strength. Reading the table alone will not tell you that `cond ? a:b` fails to compile.
@@ -1057,6 +1192,16 @@ two"
 	var/longform = N?.len >= 4 ? N[4] : null
 	return "L?\[4\] -> [oob]   null-list?\[1\] -> [isnull(guarded) ? "null" : "value"]   long form -> [isnull(longform) ? "null" : "value"]"
 
+// ---- 19. a `;` run before else / while / catch is skipped ----------------
+/proc/t_separator_runs()
+	var/r = 0
+	if(r) { r = 10; }; else { r = 1; };
+	do r += 1; while(r < 3)
+	var/list/N = null
+	var/caught = "no"
+	try { r += N[1]; }; catch(var/exception/e) { caught = isnull(e) ? "null" : "yes"; };
+	return "r=[r] caught=[caught]"
+
 world/New()
 	var/datum/child/C = new
 	world.log << " 1 in-precedence   : [t_in_precedence()]"
@@ -1074,10 +1219,11 @@ world/New()
 	world.log << "12 C switch n=2    : [t_c_switch(2)]"
 	world.log << "13 DM switch n=3   : [t_dm_switch(3)]"
 	world.log << "14 exponent        : [t_exponent()]"
-	world.log << "15 conditional \:   : [t_conditional_colon()]"
+	world.log << "15 conditional :   : [t_conditional_colon()]"
 	world.log << "16 directive indent: [t_directive_indent()]"
 	world.log << "17 null index      : [t_null_index()]"
 	world.log << "18 proc in var     : [t_proc_in_var()]"
+	world.log << "19 separator runs  : [t_separator_runs()]"
 	del src
 ```
 
@@ -1103,10 +1249,13 @@ world/New()
 16 directive indent: the guarded block parsed and ran
 17 null index      : L?[4] -> runtime: list index out of bounds   null-list?[1] -> null   long form -> null
 18 proc in var     : kept=this one survives  in vars=no  call -> runtime: undefined proc or verb /datum/swallowed/vanished().
+19 separator runs  : r=3 caught=yes
 ```
 
 The file compiles with 0 errors and 0 warnings, and the run above is its actual output.
 
-One caveat if you edit the file: do not put a `\~` inside a DM string literal. In string context a
-backslash begins a text macro, and `\~escaped_name` fails with *"undefined text macro or escape
-sequence"*. The escape is legal in a **name**, not in a string.
+One caveat if you edit the file: do not put a `\~` — or any other escaped punctuation, such as
+`\:` — inside a DM string literal. In string context a backslash begins a text macro, and both
+fail with *"undefined text macro or escape sequence"*. The escape is legal in a **name**, not in
+a string. An earlier revision of this appendix had exactly that bug: a `\:` in a log label meant
+the printed file did not compile, while the claim above said it did.

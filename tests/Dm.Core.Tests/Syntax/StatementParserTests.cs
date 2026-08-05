@@ -139,6 +139,22 @@ public class StatementParserTests
 
     // -- switch -------------------------------------------------------------
 
+    /// <summary>
+    /// A DM-style switch that ends with no arms is dm.exe's "empty switch statement" warning on
+    /// the switch's own line, beside whatever error the non-arm content already drew. Probed from
+    /// the mined corpus in three shapes: no body, a statement for a body, a body with no arms.
+    /// </summary>
+    [Theory]
+    [InlineData("\tswitch(x)\n\treturn\n")]
+    [InlineData("\tswitch(x)\n\t\tvar/y = 1\n")]
+    public void An_empty_switch_is_a_warning(string source)
+    {
+        Body("/mob/proc/F(x)\n" + source, out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.Contains(diagnostics, d =>
+            d.Severity == DiagnosticSeverity.Warning && d.Message == "empty switch statement");
+    }
+
     [Fact]
     public void A_switch_reads_its_arms_and_ranges()
     {
@@ -150,6 +166,23 @@ public class StatementParserTests
         Assert.Equal(2, statement.Cases[1].Values.Count);
         Assert.NotNull(statement.Cases[2].RangeEnds[0]);
         Assert.True(statement.Cases[3].IsDefault);
+    }
+
+    /// <summary>
+    /// The arm list may be a brace block — the form a <c>\</c>-continued macro body has to write,
+    /// as tgstation's <c>CONVERT_PH_TO_COLOR</c> does. Arms, ranges and <c>else</c> all work there,
+    /// and the braces may open on the header line or the next one with indented arms inside.
+    /// </summary>
+    [Theory]
+    [InlineData("\tswitch(n) { if(7 to 10) { a() } if(2 to 7) { b() } else { c() } }\n", 3)]
+    [InlineData("\tswitch(n)\n\t{\n\t\tif(7 to 10)\n\t\t\ta()\n\t\telse\n\t\t\tc()\n\t}\n", 2)]
+    public void A_switch_arm_list_may_be_a_brace_block(string source, int arms)
+    {
+        SwitchStatementSyntax statement = Single<SwitchStatementSyntax>(source);
+
+        Assert.Equal(arms, statement.Cases.Count);
+        Assert.NotNull(statement.Cases[0].RangeEnds[0]);
+        Assert.True(statement.Cases[arms - 1].IsDefault);
     }
 
     // -- the pragma-dependent grammars --------------------------------------
@@ -250,6 +283,114 @@ public class StatementParserTests
     public void Set_records_its_name_and_value()
     {
         Assert.Equal("category", Single<SetStatementSyntax>("\tset category = \"Debug\"\n").Name);
+    }
+
+    // -- separators before a continuation keyword ----------------------------
+    //
+    // dm.exe tolerates any run of `;` and blank lines between a body and its else / while / catch.
+    // A `\`-continued macro body forces the idiom — `if(a) { b; }; else { c; };` is what /tg/station
+    // writes — and it was worth 126 invented diagnostics there. Compiler-verified on 516.1666.
+
+    [Theory]
+    [InlineData("\tif(x) { a(); }; else { b(); };\n")]
+    [InlineData("\tif(x) { a(); };; else { b(); };\n")]
+    [InlineData("\tif(x) { a(); };\n\telse { b(); }\n")]
+    [InlineData("\tif(x) a(); else b();\n")]
+    [InlineData("\tif(x)\n\t\ta()\n\t;\n\telse\n\t\tb()\n")]
+    public void A_semicolon_run_before_else_belongs_to_the_if(string source)
+    {
+        IfStatementSyntax statement = Single<IfStatementSyntax>(source);
+
+        Assert.NotNull(statement.Then);
+        Assert.NotNull(statement.Otherwise);
+    }
+
+    [Theory]
+    [InlineData("\tdo { a(); }; while(x)\n")]
+    [InlineData("\tdo a(); while(x)\n")]
+    public void A_semicolon_before_while_still_closes_the_do(string source)
+    {
+        DoWhileStatementSyntax statement = Single<DoWhileStatementSyntax>(source);
+
+        // The while is the do's closer, not a nested loop over what follows.
+        BlockStatementSyntax body = Assert.IsType<BlockStatementSyntax>(statement.Body);
+        Assert.IsType<ExpressionStatementSyntax>(Assert.Single(body.Statements));
+        Assert.NotNull(statement.Condition);
+    }
+
+    [Theory]
+    [InlineData("\ttry { a(); }; catch(var/exception/e) { b(); };\n")]
+    [InlineData("\ttry a(); catch(var/exception/e) b();\n")]
+    public void A_semicolon_before_catch_still_binds_it(string source)
+    {
+        TryStatementSyntax statement = Single<TryStatementSyntax>(source);
+
+        Assert.NotNull(statement.Body);
+        Assert.NotNull(statement.CatchBody);
+    }
+
+    /// <summary>
+    /// The separator is required: <c>if(a) r = 1 else r = 2</c> is dm.exe's
+    /// "expected end of statement", so accepting it silently would diverge the other way.
+    /// </summary>
+    [Fact]
+    public void An_unseparated_else_is_still_a_diagnostic()
+    {
+        Body("/mob/proc/F()\n\tif(x) a() else b()\n", out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.NotEmpty(diagnostics);
+    }
+
+    /// <summary>
+    /// Thirteen statement keywords are legal type-path segments (SyntaxFacts has the probe
+    /// results) — tgstation declares <c>/datum/manipulator_task/cargo/dropoff_base/throw</c> and
+    /// then writes locals of that type. The keyword is a SEGMENT only: <c>var/throw = 1</c> is
+    /// rejected by dm.exe, so the name slot stays narrow.
+    /// </summary>
+    [Fact]
+    public void A_keyword_may_be_a_type_segment_of_a_local()
+    {
+        LocalVarStatementSyntax statement =
+            Single<LocalVarStatementSyntax>("\tvar/datum/task/throw/T = thing\n");
+
+        Assert.Equal("T", statement.Name);
+        Assert.Equal("/datum/task/throw", statement.DeclaredType!.Text);
+    }
+
+    [Fact]
+    public void A_keyword_is_still_not_a_local_name()
+    {
+        Body("/mob/proc/F()\n\tvar/throw = 1\n", out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.NotEmpty(diagnostics);
+    }
+
+    /// <summary>
+    /// A modifier word is a modifier only when a separator follows: <c>var/final/x</c> carries
+    /// 516's final modifier, <c>var/final = ""</c> declares a var NAMED final. All five modifier
+    /// words are legal names, compiler-verified with uses; /tg/station writes `var/final = ""`.
+    /// </summary>
+    [Theory]
+    [InlineData("final")]
+    [InlineData("const")]
+    [InlineData("tmp")]
+    [InlineData("static")]
+    [InlineData("global")]
+    public void A_modifier_word_without_a_separator_is_a_name(string word)
+    {
+        LocalVarStatementSyntax statement = Single<LocalVarStatementSyntax>($"\tvar/{word} = 1\n");
+
+        Assert.Equal(word, statement.Name);
+        Assert.Empty(statement.Modifiers);
+    }
+
+    [Fact]
+    public void A_modifier_word_before_a_separator_is_still_a_modifier()
+    {
+        LocalVarStatementSyntax statement = Single<LocalVarStatementSyntax>("\tvar/final/x = 1\n");
+
+        Assert.Equal("x", statement.Name);
+        Assert.Contains("final", statement.Modifiers);
     }
 
     // -- local variables ----------------------------------------------------

@@ -222,6 +222,16 @@ P / winexists player,control_id
 P / winget player,control_id,params
 P / winset player,control_id,params
 P / winshow player,window,show=1
+P /alist Add
+P /alist Copy
+P /alist Cut
+P /alist Find
+P /alist Insert
+P /alist Join
+P /alist Remove
+P /alist RemoveAll
+P /alist Splice
+P /alist Swap
 P /atom Click location,control,params
 P /atom Cross atom/movable/O
 P /atom Crossed atom/movable/O
@@ -400,6 +410,7 @@ P /world SetMedal medal,player
 P /world SetScores key,fields
 P /world Tick
 P /world Topic T,Addr,Master,Keys
+T /alist
 T /area
 T /area/room
 T /atom
@@ -438,6 +449,11 @@ V / const
 V / final
 V / global
 V / tmp
+V /alist len
+V /alist parent_type
+V /alist tag
+V /alist type
+V /alist vars
 V /area parent_type
 V /atom alpha
 V /atom appearance

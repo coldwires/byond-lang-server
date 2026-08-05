@@ -307,6 +307,30 @@ public sealed class IncludeGraph
         /// </remarks>
         private int _runStart;
 
+        /// <summary>
+        /// The run that receives everything below an expression-position include, or null in the
+        /// ordinary case.
+        /// </summary>
+        /// <remarks>
+        /// dm.exe allows an <c>#include</c> inside an open bracket, splicing the file into the
+        /// surrounding expression — tgstation's <c>ApiVersion()</c> returns
+        /// <c>new /datum/tgs_version(</c> + <c>#include "__interop_version.dm"</c> + <c>)</c>.
+        /// A parser working per-file run cannot see across that seam, so the spliced file's tokens
+        /// are routed into the INCLUDING file's run instead: the expression is whole again, and
+        /// the spliced file contributes no run of its own to parse as bogus declarations. Position
+        /// reporting needs nothing extra — <c>TokenSource.FromExpanded</c> already collapses a
+        /// span from another file onto the furthest point reached, which is the include site.
+        /// The field stays set for the whole subtree, so anything a spliced file itself includes
+        /// lands in the same expression.
+        /// </remarks>
+        private SourceText? _inlineTarget;
+
+        /// <summary>
+        /// True when the file currently being walked must not be cached: an inline include put
+        /// tokens into its run with no recorded step to cover them, so a replay would drop them.
+        /// </summary>
+        private bool _effectPoisoned;
+
         public void Walk(string path, string? includedFrom, int depth, bool fromLibrary)
         {
             // A file already being walked further up the stack is a cycle; stop rather than recurse.
@@ -350,7 +374,11 @@ public sealed class IncludeGraph
             // Replay, if this file's text and the macro state it is being entered with are both what
             // they were last time. Everything below - the lex, the directive scan, the token loop
             // and the expansion - is what that skips.
-            FileEffectCache? effects = Runs is null ? null : _options.Effects;
+            //
+            // A file inside an inline-include subtree never touches the cache in either direction:
+            // its tokens belong to another file's run, so a cached effect would be empty and a
+            // replayed one would append to the wrong place.
+            FileEffectCache? effects = Runs is null || _inlineTarget is not null ? null : _options.Effects;
             int entryHash = Macros.StateHash;
 
             if (effects is not null && effects.TryGet(path, text, entryHash, out FileEffect cached))
@@ -361,12 +389,16 @@ public sealed class IncludeGraph
 
             List<EffectStep>? outerRecording = _recording;
             int outerRunStart = _runStart;
+            bool outerPoisoned = _effectPoisoned;
 
             List<EffectStep>? steps = effects is null ? null : new List<EffectStep>();
             int runStart = Runs?.LengthOf(text) ?? 0;
 
             _recording = steps;
             _runStart = runStart;
+            _effectPoisoned = false;
+
+            bool poisoned;
 
             try
             {
@@ -374,11 +406,13 @@ public sealed class IncludeGraph
             }
             finally
             {
+                poisoned = _effectPoisoned;
                 _recording = outerRecording;
                 _runStart = outerRunStart;
+                _effectPoisoned = outerPoisoned;
             }
 
-            if (effects is not null && steps is not null)
+            if (effects is not null && steps is not null && !poisoned)
             {
                 // Read from the local: the field is back to the enclosing file's start by now.
                 ExpandedToken[] run = Runs?.Slice(text, runStart) ?? System.Array.Empty<ExpandedToken>();
@@ -414,6 +448,11 @@ public sealed class IncludeGraph
             int sourceDepth = 0;
             int emittedDepth = 0;
 
+            // Open brackets the live code has not closed yet. Non-zero at an #include means the
+            // include is EXPRESSION-POSITION - the file is spliced into the surrounding brackets -
+            // and its tokens have to join this file's run. See _inlineTarget.
+            int bracketDepth = 0;
+
             while (tokenIndex < lex.Tokens.Count)
             {
                 if (!byHashIndex.TryGetValue(tokenIndex, out Directive directive))
@@ -424,8 +463,32 @@ public sealed class IncludeGraph
                         sourceDepth++;
                     else if (token.Kind == TokenKind.Dedent)
                         sourceDepth--;
+                    else if (conditionals.IsActive && token.Kind == TokenKind.Newline)
+                    {
+                        // A newline is layout, so it does not collect the level debt. Directive
+                        // lines are layout-neutral in the lexer, which leaves the newline after an
+                        // `#endif` sitting at the SKIPPED content's depth until the next code line
+                        // dedents — levelling before it materialised that depth as an Indent
+                        // opening a block with nothing in it, reported as "expected a declaration"
+                        // on the directive's own line. The debt is paid at the next real token,
+                        // whose depth a surviving line actually has.
+                        pending.Add(token);
+                    }
                     else if (conditionals.IsActive && IsCode(token.Kind))
+                    {
                         AppendLevelled(pending, token, sourceDepth, ref emittedDepth);
+
+                        if (token.Kind is TokenKind.OpenParen or TokenKind.OpenBracket
+                            or TokenKind.QuestionOpenBracket or TokenKind.OpenBrace)
+                        {
+                            bracketDepth++;
+                        }
+                        else if (bracketDepth > 0 && token.Kind is TokenKind.CloseParen
+                            or TokenKind.CloseBracket or TokenKind.CloseBrace)
+                        {
+                            bracketDepth--;
+                        }
+                    }
 
                     tokenIndex++;
                     continue;
@@ -503,7 +566,15 @@ public sealed class IncludeGraph
                         // file has to say belongs to it, and it records its own.
                         RecordDiagnosticsFrom(diagnosticsBefore);
 
-                        if (resolved is not null)
+                        if (resolved is not null && bracketDepth > 0)
+                        {
+                            // Expression-position: the file is spliced into this file's open
+                            // brackets, so its tokens go into THIS run — with no recorded step to
+                            // cover them, which is why this walk must never be cached.
+                            EnterInclude(resolved, path, depth, fromLibrary || isLibrary, site, text);
+                            _effectPoisoned = true;
+                        }
+                        else if (resolved is not null)
                         {
                             EnterInclude(resolved, path, depth, fromLibrary || isLibrary, site);
                             _recording?.Add(
@@ -713,11 +784,17 @@ public sealed class IncludeGraph
             if (Runs is null || produced.Count == 0)
                 return;
 
+            // Below an expression-position include everything joins the including file's run, so
+            // the spliced expression is whole for the parser. Recording is off for the whole
+            // subtree (see WalkCore) and the including walk is poisoned, so the bogus step offset
+            // this would produce is never written.
+            SourceText target = _inlineTarget ?? origin;
+
             // Where this stretch lands inside the file's own run, which is what a replay needs to
             // put it back in compile order without carrying a copy of it.
-            int start = Runs.LengthOf(origin) - _runStart;
+            int start = Runs.LengthOf(target) - _runStart;
 
-            Runs.Append(origin, produced);
+            Runs.Append(target, produced);
             _recording?.Add(EffectStep.ForTokens(start, produced.Count));
         }
 
@@ -812,7 +889,13 @@ public sealed class IncludeGraph
         /// include-once check reads <c>_seen</c>, which a replay grows in the same order, so a
         /// repeat is still a repeat and the file that is reached is still reached once.
         /// </remarks>
-        private void EnterInclude(string resolved, string path, int depth, bool fromLibrary, IncludeSite site)
+        private void EnterInclude(
+            string resolved,
+            string path,
+            int depth,
+            bool fromLibrary,
+            IncludeSite site,
+            SourceText? inlineInto = null)
         {
             if (_seen.Contains(resolved) && !_reincludable.Contains(resolved))
             {
@@ -833,7 +916,18 @@ public sealed class IncludeGraph
             if (wasMain)
                 Macros.Undefine(MainMacro);
 
-            Walk(resolved, path, depth + 1, fromLibrary);
+            SourceText? outerInline = _inlineTarget;
+            if (inlineInto is not null)
+                _inlineTarget = inlineInto;
+
+            try
+            {
+                Walk(resolved, path, depth + 1, fromLibrary);
+            }
+            finally
+            {
+                _inlineTarget = outerInline;
+            }
 
             if (wasMain)
                 Macros.Define(MacroBuilder.Empty(MainMacro));

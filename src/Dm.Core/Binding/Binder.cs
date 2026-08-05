@@ -95,6 +95,53 @@ public sealed class Binder
         BindStatement(proc.Body, scope);
     }
 
+    /// <summary>
+    /// An expression-position path literal must name a type that exists: dm.exe reports
+    /// "undefined type path" eagerly there, unlike a DECLARED type, which is silent until the var
+    /// is used (§8). Restricted to what is certain:
+    /// </summary>
+    /// <remarks>
+    /// Absolute anchors only — a leading-`.` path is an upward search with its own rules, and
+    /// `.proc/X`, which PROC_REF expands to throughout /tg/station, names a proc. Paths carrying a
+    /// `proc`/`verb` segment are proc references, judged by a different rule, so they are skipped
+    /// too. Both are misses to close later rather than risks to take now.
+    /// </remarks>
+    private void BindPath(PathExpressionSyntax path)
+    {
+        if (path.Path.Anchor != PathAnchor.Absolute || path.Path.Segments.Count == 0)
+            return;
+
+        foreach (string segment in path.Path.Segments)
+        {
+            if (segment is "proc" or "verb")
+                return;
+        }
+
+        TypePath resolved = TypePath.FromSegments(path.Path.Segments);
+
+        if (_tree.Find(resolved) is not null)
+            return;
+
+        // `/obj/small/trap/get` names the verb `get` on /obj/small/trap with no `verb` marker
+        // segment — mlaas writes `verbs += /obj/small/trap/get` and dm.exe accepts it. Resolved
+        // through inheritance on purpose: leniency here costs a miss, strictness an invention.
+        if (path.Path.Segments.Count >= 2)
+        {
+            List<string> ownerSegments = new(path.Path.Segments.Count - 1);
+            for (int i = 0; i < path.Path.Segments.Count - 1; i++)
+                ownerSegments.Add(path.Path.Segments[i]);
+
+            if (_tree.Find(TypePath.FromSegments(ownerSegments)) is { } type
+                && _tree.ResolveProc(type, path.Path.Segments[^1]) is not null)
+            {
+                return;
+            }
+        }
+
+        _diagnostics.Add(Diagnostic.Error(
+            "DM0402", path.Span, $"{resolved}: undefined type path"));
+    }
+
     private void BindStatement(StatementSyntax? statement, Scope scope)
     {
         switch (statement)
@@ -223,6 +270,10 @@ public sealed class Binder
 
             case MemberAccessExpressionSyntax member:
                 BindMemberAccess(member, scope, invoked);
+                break;
+
+            case PathExpressionSyntax path:
+                BindPath(path);
                 break;
 
             case InvocationExpressionSyntax invocation:
