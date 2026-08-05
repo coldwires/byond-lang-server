@@ -81,6 +81,87 @@
 	proc/weighted_pick()
 		return pick(20;"only", 5;"only", 1;"only")
 
+	// A run of `;` and blank lines may sit between a body and its continuation
+	// keyword - else, do's while, catch. A `\`-continued macro body forces the
+	// idiom: with no lines to end statements, every braced branch ends `};`, so
+	// /tg/station writes `if(a) { b; }; else { c; };` throughout. Worth 44
+	// invented diagnostics there. Both branches are checked, because binding the
+	// else to the wrong thing would still run one of them.
+	proc/else_after_brace_semicolon(a)
+		var/r = 0
+		if(a) { r = 1; }; else { r = 2; };
+		return r
+
+	proc/else_after_inline_semicolon(a)
+		var/r = 0
+		if(a) r = 1; else r = 2;
+		return r
+
+	// The `;` may even sit on a line of its own between the two indented bodies.
+	proc/else_after_semicolon_line(a)
+		var/r = 0
+		if(a)
+			r = 1
+		;
+		else
+			r = 2
+		return r
+
+	// The while after `};` closes the do - it is not a fresh loop over what
+	// follows, which is what an unaware parser reads it as.
+	proc/while_after_semicolon(a)
+		var/r = 0
+		do { r += 1; }; while(r < a)
+		return r
+
+	proc/while_after_inline_body(a)
+		var/r = 0
+		do r += 1; while(r < a)
+		return r
+
+	// A switch's arm list may be a brace block - the form a `\`-continued
+	// macro body has to write, as tgstation's CONVERT_PH_TO_COLOR does. All
+	// three answers differ, so a wrong dispatch shows as a wrong value.
+	proc/brace_switch(pH)
+		var/color = "none"
+		switch(pH) { if(7 to 10) { color = "high" } if(2 to 7) { color = "mid" } else { color = "other" } }
+		return color
+
+	// A modifier word is a modifier only when a separator follows it. Without
+	// one it is a variable NAMED final - /tg/station writes `var/final = ""` -
+	// and the control declares x WITH the modifier in the same proc, so both
+	// readings are exercised side by side.
+	proc/modifier_word_as_name(a)
+		var/final = a * 2
+		var/static/x = 7
+		return final + x
+
+	// `locate(X) in container` is one grammatical unit, legal inside a ternary
+	// branch where a bare `in` is rejected with "expected ':'". tgstation
+	// writes `cond ? locate(X) in L : null` three times. The value is the
+	// found object, which is what the istype proves.
+	proc/locate_in_ternary(c)
+		var/list/L = list(src)
+		var/r = c ? locate(/datum/parsing) in L : "none"
+		return istype(r, /datum/parsing) ? "found" : r
+
+	// The catch must bind AND run: a negative argument indexes a null list, so
+	// the -1 can only come from the caught exception. `e` is read to keep
+	// unused_var quiet.
+	proc/catch_after_semicolon(a)
+		var/r = 0
+		var/list/L = null
+		try { r = a < 0 ? L[1] : a; }; catch(var/exception/e) { r = isnull(e) ? -2 : -1; };
+		return r
+
+// A statement keyword as a type-path segment. `throw` is the one real code
+// uses - tgstation's /datum/manipulator_task/cargo/dropoff_base/throw - and
+// the type must work end to end: declared, named in a local's type, and its
+// member read back. The keyword is a SEGMENT only; ../errors/names covers
+// `var/throw` being rejected.
+/datum/parsing/throw
+	var/marker = "thrown"
+
 /proc/run_parsing()
 	var/datum/parsing/P = new
 
@@ -95,3 +176,22 @@
 	CHECK("trailing-dot number", P.trailing_dot_number(), 0)
 	CHECK("doubled path separator", P.doubled_separator(), "helper")
 	CHECK("weighted pick", P.weighted_pick(), "only")
+	CHECK("}; else, then branch", P.else_after_brace_semicolon(1), 1)
+	CHECK("}; else, else branch", P.else_after_brace_semicolon(0), 2)
+	CHECK("x; else inline, then branch", P.else_after_inline_semicolon(1), 1)
+	CHECK("x; else inline, else branch", P.else_after_inline_semicolon(0), 2)
+	CHECK("; line before else", P.else_after_semicolon_line(0), 2)
+	CHECK("}; while closes the do", P.while_after_semicolon(3), 3)
+	CHECK("inline do body; while", P.while_after_inline_body(3), 3)
+	CHECK("}; catch binds", P.catch_after_semicolon(5), 5)
+	CHECK("}; catch runs", P.catch_after_semicolon(-3), -1)
+	CHECK("brace switch, range arm", P.brace_switch(8), "high")
+	CHECK("brace switch, second arm", P.brace_switch(3), "mid")
+	CHECK("brace switch, else arm", P.brace_switch(0), "other")
+
+	var/datum/parsing/throw/T = new
+	CHECK("keyword as a type segment", T.marker, "thrown")
+	CHECK("keyword type via istype", istype(T, /datum/parsing/throw), 1)
+	CHECK("modifier word as a name", P.modifier_word_as_name(5), 17)
+	CHECK("locate-in inside a ternary, hit", P.locate_in_ternary(1), "found")
+	CHECK("locate-in inside a ternary, miss", P.locate_in_ternary(0), "none")

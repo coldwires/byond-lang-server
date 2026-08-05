@@ -52,6 +52,43 @@ public class BinderTests
     }
 
     /// <summary>
+    /// An expression-position path literal that names no type is dm.exe's eager
+    /// "undefined type path". Would fail by reporting nothing.
+    /// </summary>
+    [Fact]
+    public void An_expression_path_to_no_type_is_reported()
+    {
+        IReadOnlyList<Diagnostic> found = Bind("/obj/item\n\n/proc/f()\n\treturn /obj/nothing\n");
+
+        Assert.Equal(new[] { "DM0402" }, Ids(found));
+    }
+
+    /// <summary>
+    /// A DECLARED type is resolved at the use site, not the declaration — `var/clothing/slot`
+    /// with no /clothing compiles clean until touched (§8). Would fail by inventing.
+    /// </summary>
+    [Fact]
+    public void A_declared_type_is_not_checked_by_the_path_rule()
+    {
+        IReadOnlyList<Diagnostic> found = Bind("/mob\n\tvar\n\t\tclothing/slot\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
+    /// `/obj/trap/get` names the verb `get` on /obj/trap with no `verb` marker segment — mlaas
+    /// writes `verbs += /obj/small/trap/get`. Would fail by inventing.
+    /// </summary>
+    [Fact]
+    public void A_path_naming_a_proc_through_its_type_is_silent()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/trap\n\tverb/get()\n\t\treturn\n\n/proc/f()\n\treturn /obj/trap/get\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
     /// `.` checks the declared type and nothing beneath it, so reaching a subtype's member through
     /// it is an error even though the member plainly exists. PLAN.md §4a.
     /// </summary>

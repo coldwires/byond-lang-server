@@ -17,6 +17,36 @@
 
 #define SECONDS *10
 
+// A skipped region whose content is indented. The newline after its #endif
+// sits at the SKIPPED depth until the next code line dedents, and levelling it
+// invented a block with nothing in it. The declaration after the region must
+// exist and the one inside it must not.
+//
+// FALSE is deliberately the BUILT-IN macro (515+), not a local define: this is
+// tgstation's own `#define MERGERS_DEBUG FALSE` + `#if MERGERS_DEBUG` shape,
+// which reported "'FALSE' is not defined" until the built-ins were seeded.
+#define MACROS_FIXTURE_OFF FALSE
+#if MACROS_FIXTURE_OFF
+/datum/macros_never
+	var/x = 1
+#endif
+/datum/macros_after
+	var/y = 2
+
+// An #include inside an open bracket splices a file into the expression - the
+// tgs module's ApiVersion() shape. The value proves the splice landed where it
+// was written, not merely that something compiled.
+/datum/spliced_ver
+	var/raw
+
+/datum/spliced_ver/New(raw_parameter)
+	raw = raw_parameter
+
+/proc/spliced_version()
+	return new /datum/spliced_ver(
+		#include "version_num.dm"
+	)
+
 /datum/macros
 	var/list/blacklist = list()
 
@@ -47,3 +77,10 @@
 	CHECK("stringify", STRINGIFY(abc), "abc")
 	CHECK("token paste", GLUE(2, 5), 25)
 	CHECK("repeat operator", TWICE(1), 11)   // 2###t repeats t twice; the 2 is consumed
+
+	CHECK("skipped region declares nothing", text2path("/datum/macros_never"), null)
+	var/datum/macros_after/A = new
+	CHECK("declaration after a skipped region", A.y, 2)
+
+	var/datum/spliced_ver/V = spliced_version()
+	CHECK("expression-position include", V.raw, "5.11.0")

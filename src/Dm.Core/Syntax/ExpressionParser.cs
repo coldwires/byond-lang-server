@@ -396,11 +396,32 @@ public sealed class ExpressionParser
             switch (Current)
             {
                 case TokenKind.OpenParen:
+                {
+                    bool isLocate = expression is IdentifierExpressionSyntax { Name: "locate" };
+
                     expression = new InvocationExpressionSyntax(
                         expression,
                         ParseArgumentList(TokenKind.OpenParen, TokenKind.CloseParen),
                         SpanTo(start));
+
+                    // `locate(X) in container` is one grammatical unit, not the relational `in`:
+                    // dm.exe accepts it inside a ternary branch, where a bare `in` is its own
+                    // "expected ':'", and the runtime probe confirms the `in` binds to the locate.
+                    // Binding here also gives `x = locate(y) in L` the value the idiom means — the
+                    // found object — where the loosest-`in` reading assigned first and tested
+                    // after, silently. The guard mirrors ParseIn's: a `for` header owns its `in`,
+                    // so `for(var/x = locate() in L)` still classifies as a for-in loop.
+                    if (isLocate && Current == TokenKind.KeywordIn && !(_stopAtIn && _groupDepth == 0))
+                    {
+                        _position++;
+                        SkipLayoutInGroup();
+
+                        expression = new BinaryExpressionSyntax(
+                            expression, TokenKind.KeywordIn, ParseBinary(1), SpanTo(start));
+                    }
+
                     break;
+                }
 
                 case TokenKind.OpenBracket:
                 case TokenKind.QuestionOpenBracket:
@@ -776,15 +797,21 @@ public sealed class ExpressionParser
 
         while (true)
         {
-            if (!IsNameLike(Current))
+            // Thirteen statement keywords are legal segments — tgstation declares a type named
+            // `throw` — so a path reader cannot stop at the keyword table. SyntaxFacts has the
+            // probe results.
+            if (!IsNameLike(Current) && !SyntaxFacts.IsPathSegmentKeyword(Current))
                 break;
 
             segments.Add(TextOf(_position));
             segmentSpans.Add(CurrentSpan);
             _position++;
 
-            if (Current is not (TokenKind.Slash or TokenKind.Dot))
+            if (Current is not (TokenKind.Slash or TokenKind.Dot)
+                || _source.HasWhitespaceBefore(_position))
+            {
                 break;
+            }
 
             // Doubled AND trailing separators collapse: `/obj/item/`, `/obj/.item` and `/obj./item`
             // all mean `/obj/item` — PLAN.md §4a. So consume the whole run rather than one, and let
@@ -795,8 +822,15 @@ public sealed class ExpressionParser
             // ends the path early and hands the rest to member access, which is how /tg/station's
             // `TYPE_PROC_REF(/datum/beam/, Start)` — expanding to `/datum/beam/.proc/Start` —
             // produced 71 reports of a member named `proc`.
-            while (Current is TokenKind.Slash or TokenKind.Dot)
+            //
+            // Whitespace ends the path, though. Inside parens the lexer suppresses newlines, so a
+            // list of paths where one entry ends `gloves.` — a missing-comma typo dm.exe tolerates,
+            // and mlaas ships — would otherwise continue the path onto the next line's entry.
+            while (Current is TokenKind.Slash or TokenKind.Dot
+                && !_source.HasWhitespaceBefore(_position))
+            {
                 _position++;
+            }
         }
 
         return new PathSyntax(anchor, segments, SpanFrom(start), segmentSpans);

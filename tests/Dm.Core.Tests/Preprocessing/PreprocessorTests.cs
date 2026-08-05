@@ -1,3 +1,4 @@
+using Dm.Core.Diagnostics;
 using Dm.Core.Preprocessing;
 using Dm.Core.Syntax;
 
@@ -168,6 +169,97 @@ public class PreprocessorTests
 
         Assert.Equal(0, lowest);
         Assert.Equal(0, depth);
+    }
+
+    /// <summary>
+    /// The newline after a skipped region's <c>#endif</c> must not collect the level debt.
+    /// </summary>
+    /// <remarks>
+    /// Directive lines are layout-neutral in the lexer, so that newline still sits at the SKIPPED
+    /// content's depth until the next live code line dedents. Levelling before it materialised an
+    /// Indent that opened a block with nothing in it — "expected a declaration" reported on the
+    /// <c>#endif</c> line of every inactive region whose content was indented. On /tg/station that
+    /// was four directive-line diagnostics, and the misparse of <c>_logging.dm</c> behind one of
+    /// them cost the declarations the binder's eleven <c>log_message</c> reports resolved against.
+    /// </remarks>
+    [Fact]
+    public void The_newline_after_a_skipped_region_carries_no_level()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write(
+            "code.dm",
+            "#define FALSE 0\n#if FALSE\n/datum/never\n\tvar/x = 1\n#endif\n/datum/always\n\tvar/y = 2\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        // The surviving stream must open exactly one block: /datum/always's. A second Indent is
+        // the skipped region's depth leaking through the directive's newline.
+        int indents = result.Tokens.Count(t => t.Kind == TokenKind.Indent);
+
+        Assert.Equal(1, indents);
+        Assert.DoesNotContain(result.Tokens, t => t.Text == "never");
+        Assert.Contains(result.Tokens, t => t.Text == "always");
+    }
+
+    /// <summary>
+    /// <c>TRUE</c> and <c>FALSE</c> are built-in macros since BYOND 515: <c>#if TRUE</c> is taken,
+    /// <c>#if FALSE</c> is silently not, and neither needs a define anywhere. tgstation defines
+    /// neither and writes <c>#define MERGERS_DEBUG FALSE</c> + <c>#if MERGERS_DEBUG</c>.
+    /// </summary>
+    [Fact]
+    public void True_and_false_are_predefined()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"code.dm\"\n");
+        temp.Write(
+            "code.dm",
+            "#define NEVER_ON FALSE\n#if NEVER_ON\n/datum/never\n#endif\n#if TRUE\n/datum/always\n#endif\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.DoesNotContain(result.Tokens, t => t.Text == "never");
+        Assert.Contains(result.Tokens, t => t.Text == "always");
+    }
+
+    /// <summary>
+    /// An <c>#include</c> inside an open bracket splices the file into the surrounding
+    /// expression — tgstation's <c>ApiVersion()</c> wraps <c>new /datum/tgs_version(</c> around an
+    /// included version literal. The spliced file's tokens must join the INCLUDING file's run, or
+    /// the parent parses with a hole mid-expression and the fragment parses alone as a bogus
+    /// declaration.
+    /// </summary>
+    [Fact]
+    public void An_expression_position_include_splices_into_the_parent()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#include \"api.dm\"\n");
+        temp.Write(
+            "api.dm",
+            "/datum/ver\n\tvar/raw\n\n/datum/ver/New(raw_parameter)\n\traw = raw_parameter\n\n"
+            + "/proc/apiver()\n\treturn new /datum/ver(\n\t\t#include \"ver.dm\"\n\t)\n");
+        temp.Write("ver.dm", "\"5.11.0\"\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        // The spliced token sits inside the parent's stream, in place.
+        Assert.Contains(result.Tokens, t => t.Text == "5.11.0");
+
+        // The spliced file contributes no run of its own to parse as declarations, and the
+        // parent's run parses whole.
+        List<(string File, TokenSource Source)> files = PreprocessedSplitter.Split(result).ToList();
+
+        Assert.DoesNotContain(files, f => f.File.EndsWith("ver.dm", StringComparison.Ordinal));
+
+        (string _, TokenSource parent) = files.Single(
+            f => f.File.EndsWith("api.dm", StringComparison.Ordinal));
+        ParseResult parse = DeclarationParser.Parse(parent);
+
+        Assert.Empty(parse.Diagnostics);
+
+        // The include still appears in the file list, which is what dm.exe -l reports.
+        Assert.Contains(result.Graph.Files, f => f.Path.EndsWith("ver.dm", StringComparison.Ordinal));
     }
 
     /// <summary>

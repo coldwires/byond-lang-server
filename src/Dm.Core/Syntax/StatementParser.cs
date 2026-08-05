@@ -139,6 +139,18 @@ public sealed class StatementParser
     private static bool IsDeclarationName(TokenKind kind)
         => IsNameLike(kind) || kind is TokenKind.KeywordStep;
 
+    /// <summary>
+    /// A path-segment keyword in a local declaration counts only as a TYPE segment, never the
+    /// name: `var/datum/throw/x` compiles and `var/throw = 1` is dm.exe's "missing left-hand
+    /// argument to =". So the keyword qualifies only when a separator and another segment follow.
+    /// </summary>
+    private bool IsKeywordTypeSegment(int index)
+        => index + 2 < _tokens.Count
+           && SyntaxFacts.IsPathSegmentKeyword(_tokens[index].Kind)
+           && _tokens[index + 1].Kind is TokenKind.Slash or TokenKind.Dot
+           && (IsDeclarationName(_tokens[index + 2].Kind)
+               || SyntaxFacts.IsPathSegmentKeyword(_tokens[index + 2].Kind));
+
     private void Report(TextSpan span, string message)
         => _diagnostics.Add(Diagnostic.Error("DM0202", span, message));
 
@@ -156,6 +168,23 @@ public sealed class StatementParser
     private void SkipNewlines()
     {
         while (Current == TokenKind.Newline)
+            _position++;
+    }
+
+    /// <summary>
+    /// Skips the <c>;</c> and newline run that may sit between a body and its continuation keyword.
+    /// </summary>
+    /// <remarks>
+    /// <c>dm.exe</c> tolerates any run of semicolons and blank lines between an if-body and its
+    /// <c>else</c>, a do-body and its <c>while</c>, and a try-body and its <c>catch</c> —
+    /// <c>if(a) { b; }; else { c; };</c> is the idiom a <c>\</c>-continued macro body forces, since
+    /// it has no lines to separate statements with. Compiler-verified on 516.1666 across
+    /// <c>};;</c>, <c>};</c> before a line break, and a bare <c>;</c> line between indented blocks.
+    /// Callers save their position first: eating this run is only right when the keyword follows.
+    /// </remarks>
+    private void SkipContinuationSeparators()
+    {
+        while (Current is TokenKind.Newline or TokenKind.Semicolon)
             _position++;
     }
 
@@ -212,7 +241,13 @@ public sealed class StatementParser
     // -- blocks ------------------------------------------------------------
 
     /// <summary>Parses a body in any of its three shapes: inline, brace block, or indented block.</summary>
-    private BlockStatementSyntax? ParseBody()
+    /// <param name="closer">
+    /// The keyword that continues the enclosing statement — <c>else</c> for an if-body, <c>while</c>
+    /// for a do-body, <c>catch</c> for a try-body. An inline body must hand it back rather than
+    /// parse it: in <c>do r += 1; while(r &lt; a)</c> the <c>while</c> closes the <c>do</c>, and
+    /// without the closer it would be read as a fresh loop over whatever follows.
+    /// </param>
+    private BlockStatementSyntax? ParseBody(TokenKind? closer = null)
     {
         int start = _position;
 
@@ -221,7 +256,7 @@ public sealed class StatementParser
         if (Current is not (TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent
             or TokenKind.EndOfFile or TokenKind.OpenBrace or TokenKind.Hash))
         {
-            List<StatementSyntax> inline = ParseInlineStatements();
+            List<StatementSyntax> inline = ParseInlineStatements(closer);
 
             if (Current == TokenKind.Newline)
                 _position++;
@@ -339,23 +374,34 @@ public sealed class StatementParser
     }
 
     /// <summary>Parses the statements on one line, which <c>;</c> may separate.</summary>
-    private List<StatementSyntax> ParseInlineStatements()
+    private List<StatementSyntax> ParseInlineStatements(TokenKind? closer = null)
     {
         List<StatementSyntax> statements = new();
+
+        // Whether a `;` (or the header itself) separates the previous statement from here. The
+        // closer binds only across a separator: `if(a) r = 1; else r = 2` compiles and
+        // `if(a) r = 1 else r = 2` is dm.exe's "expected end of statement" — falling through to
+        // the statement parser reports on the same line, which is where the compiler reports.
+        bool separated = true;
 
         while (!AtEnd && Current is not (TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent))
         {
             if (Current == TokenKind.Semicolon)
             {
                 _position++;
+                separated = true;
                 continue;
             }
 
             if (Current == TokenKind.CloseBrace)
                 break;
 
+            if (closer is not null && Current == closer && separated)
+                break;
+
             int before = _position;
             statements.Add(ParseStatement());
+            separated = false;
 
             if (_position == before)
             {
@@ -515,11 +561,11 @@ public sealed class StatementParser
         _position++;
 
         ExpressionSyntax condition = ParseParenthesised();
-        StatementSyntax? then = ParseBody();
+        StatementSyntax? then = ParseBody(TokenKind.KeywordElse);
 
         StatementSyntax? otherwise = null;
         int save = _position;
-        SkipNewlines();
+        SkipContinuationSeparators();
 
         if (Current == TokenKind.KeywordElse)
         {
@@ -552,9 +598,10 @@ public sealed class StatementParser
         int start = _position;
         _position++;
 
-        StatementSyntax? body = ParseBody();
+        StatementSyntax? body = ParseBody(TokenKind.KeywordWhile);
 
-        SkipNewlines();
+        int save = _position;
+        SkipContinuationSeparators();
 
         ExpressionSyntax? condition = null;
         if (Current == TokenKind.KeywordWhile)
@@ -564,6 +611,7 @@ public sealed class StatementParser
         }
         else
         {
+            _position = save;
             Report(CurrentSpan, "expected 'while' to close a 'do' loop");
         }
 
@@ -593,8 +641,10 @@ public sealed class StatementParser
         int start = _position;
         _position++;
 
-        StatementSyntax? body = ParseBody();
-        SkipNewlines();
+        StatementSyntax? body = ParseBody(TokenKind.KeywordCatch);
+
+        int save = _position;
+        SkipContinuationSeparators();
 
         LocalVarStatementSyntax? exception = null;
         StatementSyntax? catchBody = null;
@@ -618,6 +668,10 @@ public sealed class StatementParser
             }
 
             catchBody = ParseBody();
+        }
+        else
+        {
+            _position = save;
         }
 
         return new TryStatementSyntax(body, exception, catchBody, SpanFrom(start));
@@ -722,11 +776,16 @@ public sealed class StatementParser
         List<string> segments = new();
         List<TextSpan> spans = new();
 
-        while (IsDeclarationName(Current))
+        while (IsDeclarationName(Current) || IsKeywordTypeSegment(_position))
         {
             string word = CurrentText;
 
-            if (VarModifiers.Contains(word) && segments.Count == 0)
+            // A modifier word is a modifier only when a separator follows it: `var/final/x`
+            // declares `x` with 516's final modifier, while `var/final = ""` declares a var NAMED
+            // final — /tg/station writes both. All five modifier words are legal names,
+            // compiler-verified with uses, at proc level and type level alike.
+            if (VarModifiers.Contains(word) && segments.Count == 0
+                && Peek() is TokenKind.Slash or TokenKind.Dot)
             {
                 modifiers.Add(word);
                 _position++;
@@ -738,7 +797,8 @@ public sealed class StatementParser
                 _position++;
             }
 
-            if (Current is TokenKind.Slash or TokenKind.Dot && IsDeclarationName(Peek()))
+            if (Current is TokenKind.Slash or TokenKind.Dot
+                && (IsDeclarationName(Peek()) || IsKeywordTypeSegment(_position + 1)))
             {
                 _position++;
                 continue;
@@ -1096,8 +1156,62 @@ public sealed class StatementParser
 
         SkipNewlinesAndDirectives();
 
-        if (Current != TokenKind.Indent)
+        // A DM-style switch with no arms is dm.exe's "empty switch statement" warning plus an
+        // "expected if or else" error, both on the switch's own line — even when nothing follows
+        // the header at all.
+        TextSpan headerSpan = _tokens[start].Span;
+
+        // The arm list may be a brace block instead of an indented one — on the header line or
+        // after it — which is what a `\`-continued macro body has to write, having no lines to
+        // indent: `switch(pH) { if(7 to 10) { ... } if(2 to 7) { ... } }`. Compiler- and
+        // runtime-verified, including an `else` arm and indented arms inside the braces.
+        if (Current == TokenKind.OpenBrace)
+        {
+            _position++;
+
+            while (!AtEnd && Current != TokenKind.CloseBrace)
+            {
+                if (Current is TokenKind.Newline or TokenKind.Indent
+                    or TokenKind.Dedent or TokenKind.Semicolon)
+                {
+                    _position++;
+                    continue;
+                }
+
+                if (Current == TokenKind.Hash)
+                {
+                    ConsumeDirective();
+                    continue;
+                }
+
+                int before = _position;
+                SwitchCaseSyntax? arm = cStyle ? ParseCStyleCase() : ParseDmCase();
+
+                if (arm is not null)
+                    cases.Add(arm);
+
+                if (_position == before)
+                    _position++;
+            }
+
+            if (Current == TokenKind.CloseBrace)
+                _position++;
+            else
+                Report(CurrentSpan, "expected '}'");
+
+            WarnIfEmpty(cases, cStyle, headerSpan);
             return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
+        }
+
+        if (Current != TokenKind.Indent)
+        {
+            // Nothing follows the header at all. dm.exe reports the pair here too.
+            if (!cStyle)
+                Report(headerSpan, "expected 'if' or 'else' in a switch");
+
+            WarnIfEmpty(cases, cStyle, headerSpan);
+            return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
+        }
 
         _position++;
 
@@ -1127,7 +1241,20 @@ public sealed class StatementParser
         if (Current == TokenKind.Dedent)
             _position++;
 
+        WarnIfEmpty(cases, cStyle, headerSpan);
         return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
+    }
+
+    /// <summary>
+    /// A DM-style switch that ends with no arms is dm.exe's "empty switch statement", a WARNING on
+    /// the switch's own line beside whatever error the non-arm content already drew. Probed from
+    /// the mined corpus: it fires with no body, with a statement for a body, and with a body that
+    /// opens but holds no `if`/`else`.
+    /// </summary>
+    private void WarnIfEmpty(List<SwitchCaseSyntax> cases, bool cStyle, TextSpan headerSpan)
+    {
+        if (!cStyle && cases.Count == 0)
+            _diagnostics.Add(Diagnostic.Warning("DM0203", headerSpan, "empty switch statement"));
     }
 
     /// <summary>DM's own arms: <c>if(1)</c>, <c>if(2,3)</c>, <c>if(a to b)</c> and <c>else</c>.</summary>

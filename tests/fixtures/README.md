@@ -73,7 +73,9 @@ ok/        _harness.dm   CHECK(), the world, the summary line
            parsing.dm    constructs we once rejected on code dm.exe accepts
            macros.dm     preprocessor shapes real codebases use
 errors/    semantic.dm   undefined member, subtype through `.`, untyped receiver
+           else_*.dm     the boundaries of the separator-run rule (notes §19)
            names/        one .dme per case - see the masking note below
+           pragma/       numeric pragma ids, unknown warning names
 run.ps1
 ```
 
@@ -134,19 +136,23 @@ and a finding that does not land in it will be re-learned.
 ## Expected output
 
 ```
-[1] ok/ compiles and runs
-  ok    ok/ compiles with 0 errors, 0 warnings
-  ok    ok/ runtime, 38 checks
-[2] errors/ is rejected as recorded
-  ok    errors/semantic
-  ok    errors/as
-  ok    errors/in
-  ok    errors/to
+[1] every fixture compiles as recorded
+  ok    errors/else_orphan
+  ok    errors/else_unseparated
+  ok    names/in
+  ...
+  ok    ok/ok compiles clean
+[2] ok/ runs, every check passing
+  ok    ok/ runtime, 58 checks
 [3] diagdiff: zero invented
   ok    diagdiff errors/semantic.dme
   ...
-passed 11   failed 0   skipped 0
+passed 19   failed 0   skipped 0
 ```
+
+The runtime step runs DreamDaemon with `-safe`, not `-trusted`: nothing in `ok/`
+needs trusted mode, and a `-trusted` world waits on a GUI approval prompt when
+nothing interactive can click it, which reads as a hang and "no log produced".
 
 BYOND is Windows-only and is not on CI runners. With no `dm.exe` the
 compiler-side checks **skip** and ours still run; a skip is reported as a skip,

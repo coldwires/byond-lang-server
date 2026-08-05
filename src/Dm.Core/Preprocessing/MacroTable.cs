@@ -80,11 +80,19 @@ public sealed class MacroTable
     /// the definition site, so they are handled by the expander rather than stored here.
     ///
     /// <c>DM_VERSION</c> is not constant across a build — <c>#pragma compatibility</c> lowers it.
+    ///
+    /// <c>TRUE</c> and <c>FALSE</c> are built-in since BYOND 515 and behave as ordinary macros:
+    /// compiler-verified on 516.1666 that <c>#if TRUE</c> is taken, <c>#if FALSE</c> is silently
+    /// not, <c>#ifdef TRUE</c> is defined, and the runtime values are 1 and 0. tgstation never
+    /// defines either name and writes <c>#define MERGERS_DEBUG FALSE</c> + <c>#if MERGERS_DEBUG</c>,
+    /// which without this seed reported "'FALSE' is not defined".
     /// </remarks>
     public void SeedPredefined(int dmVersion = 516, int dmBuild = 1666)
     {
         Define(MacroBuilder.Number("DM_VERSION", dmVersion));
         Define(MacroBuilder.Number("DM_BUILD", dmBuild));
+        Define(MacroBuilder.Number("TRUE", 1));
+        Define(MacroBuilder.Number("FALSE", 0));
     }
 
     /// <summary>Order-sensitive mix, so define/undef sequences that differ produce different hashes.</summary>

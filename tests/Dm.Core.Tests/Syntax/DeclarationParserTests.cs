@@ -133,6 +133,21 @@ public class DeclarationParserTests
         Assert.All(block.Members, m => Assert.IsType<VarDeclarationSyntax>(m));
     }
 
+    /// <summary>
+    /// The modifier word heads a block only when the line ends there. With anything after it,
+    /// it is a variable NAMED final/const/tmp — /tg/station writes <c>var/final = ""</c> and
+    /// dm.exe accepts every modifier word as a name, with uses, at type level too.
+    /// </summary>
+    [Fact]
+    public void A_modifier_word_with_an_initializer_is_a_var_named_that()
+    {
+        VarDeclarationSyntax var = Assert.IsType<VarDeclarationSyntax>(Single("var/final = 3\n"));
+
+        Assert.Equal("final", var.Name);
+        Assert.Empty(var.Modifiers);
+        Assert.True(var.HasInitializer);
+    }
+
     [Theory]
     [InlineData("var/L[]\n")]
     [InlineData("var/M[10]\n")]

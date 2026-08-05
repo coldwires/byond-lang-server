@@ -205,6 +205,43 @@ public class MacroExpanderTests
         Assert.Equal("list ( 1 , src , 2 , 3 )", Expand("PREFIX(1,2,3)", "PREFIX(x, y...) list(x, src, ##y)"));
     }
 
+    /// <summary>
+    /// A pasted run keeps each token's whitespace-before fact. Spacing decides a conditional's
+    /// <c>:</c> (PLAN §4c), and tgstation routes ternaries through <c>##</c> constantly —
+    /// <c>INVOKE_ASYNC(..., (a) ? u : v)</c> — so losing the fact misparses the colon as member
+    /// access on code the compiler accepts.
+    /// </summary>
+    [Fact]
+    public void A_pasted_run_keeps_the_whitespace_fact()
+    {
+        MacroTable table = new();
+        LexResult defLex = Lexer.Lex(SourceText.From("#define LISTIFY(args...) list(##args)"));
+        List<Diagnostic> ignored = new();
+        table.Define(MacroDefinition.Parse(defLex, DirectiveScanner.Scan(defLex)[0], ignored)!);
+
+        SourceText text = SourceText.From("LISTIFY(u, null, (a) ? u : v)");
+        LexResult lex = Lexer.Lex(text);
+
+        List<Token> significant = lex.Tokens
+            .Where(t => t.Kind is not (TokenKind.EndOfFile or TokenKind.Newline or TokenKind.Indent
+                or TokenKind.Dedent or TokenKind.Comment))
+            .ToList();
+
+        List<Diagnostic> diagnostics = new();
+        IReadOnlyList<ExpandedToken> expanded = MacroExpander.Expand(text, significant, table, diagnostics);
+        TokenSource source = TokenSource.FromExpanded(text, expanded);
+
+        int colon = -1;
+        for (int i = 0; i < source.Tokens.Count; i++)
+        {
+            if (source.Tokens[i].Kind == TokenKind.Colon)
+                colon = i;
+        }
+
+        Assert.True(colon > 0, "no colon in the expansion");
+        Assert.True(source.HasWhitespaceBefore(colon), "the pasted colon lost its whitespace fact");
+    }
+
     // -- recursion ---------------------------------------------------------
 
     /// <summary>

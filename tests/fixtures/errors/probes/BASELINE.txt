@@ -1,4 +1,4 @@
-# How many of the mined probes we currently say ANYTHING about, and which.
+﻿# How many of the mined probes we currently say ANYTHING about, and which.
 #
 # A ratchet, not a gate. These are 252 messages dm.exe produces; we implement a
 # fraction of them, so "must agree on all" would fail 252 times and teach
@@ -13,7 +13,7 @@
 # is malformed on every keystroke. So extra diagnostics on a must-fail file are
 # not spurious, and the zero-invented rule applies to code that COMPILES CLEAN.
 #
-agreed 38
+agreed 41
 total 252
 probe b1_backtick
 probe b1_bad_embed
@@ -35,12 +35,15 @@ probe b1_unterm_embed
 probe b1_while_empty
 probe b2_as_five
 probe b2_at_eof
+probe b2_def_in_proc
 probe b2_macro_bracket_arg
 probe b2_malformed_for
+probe b2_parent_type_bad
 probe b2_step_in_list
 probe b2_switch_needs_if
 probe b2_switch_stmt_body
 probe b2_switch_unclosed
+probe b2_undefined_type_path
 probe b2_var_quoted
 probe b2_var_reserved
 probe b3_for_var_bare
