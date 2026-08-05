@@ -305,16 +305,16 @@ P /datum Read savefile/F
 P /datum Topic href,href_list[]
 P /datum Write savefile/F
 P /exception New name,file,line
-P /generator New type,a,b,rand
+P /generator New type,a,b,rand = 0
 P /generator Rand
 P /generator Turn a
+P /generator operator a
 P /generator operator* a
 P /generator operator*= a
 P /generator operator+ a
 P /generator operator+= a
 P /generator operator-
 P /generator operator-= a
-P /generator operator/ a
 P /generator operator/= a
 P /generator operator_turn a
 P /icon Blend icon,function=ICON_ADD,x=1,y=1
@@ -359,19 +359,19 @@ P /matrix operator:= m
 P /mob Login
 P /mob Logout
 P /regex Find haystack,Start=1,End=0
-P /regex Find_char text,start,end
+P /regex Find_char text,start = 1,end
 P /regex New
 P /regex Replace haystack,replacement,Start=1,End=0
-P /regex Replace_char text,rep,start,end
+P /regex Replace_char text,rep,start = 1,end
 P /savefile ExportText path=cd,file
 P /savefile Flush
 P /savefile ImportText path=cd,source
 P /savefile Lock timeout
 P /savefile New filename,timeout
 P /savefile Unlock
-P /sound New file,repeat,wait,channel,volume
+P /sound New file,repeat,wait,channel,volume = 100
 P /sound RscFile
-P /sound operator:= sound
+P /sound operator:= /sound/sound
 P /vector Cross vector/B
 P /vector Dot B
 P /vector Interpolate B,t
@@ -505,12 +505,27 @@ V /atom/movable screen_loc
 V /atom/movable step_size
 V /atom/movable step_x
 V /atom/movable step_y
+V /callee args
+V /callee caller
+V /callee desc
+V /callee file
+V /callee invisibility
+V /callee line
+V /callee name
+V /callee proc
+V /callee src
+V /callee type
+V /callee usr
 V /client CGI
 V /client PASSWORD_TRIGGER
 V /client URL
 V /client address
 V /client alias
 V /client authenticate
+V /client bound_height
+V /client bound_width
+V /client bound_x
+V /client bound_y
 V /client bounds
 V /client browser
 V /client byond_build
@@ -535,6 +550,7 @@ V /client lazy_eye
 V /client macro
 V /client mob
 V /client mouse_pointer_icon
+V /client parent_type
 V /client perspective
 V /client pixel_step_size
 V /client pixel_w
@@ -550,8 +566,11 @@ V /client show_verb_panel
 V /client statobj
 V /client statpanel
 V /client style
+V /client tag
 V /client tick_lag
 V /client timezone
+V /client type
+V /client vars
 V /client verbs
 V /client view
 V /client virtual_eye
@@ -583,8 +602,62 @@ V /generator _binobj
 V /generator _dm_interface
 V /icon _dm_interface
 V /icon icon
+V /image alpha
+V /image animate_movement
+V /image appearance
+V /image appearance_flags
+V /image blend_mode
+V /image color
+V /image contents
+V /image density
+V /image desc
+V /image dir
+V /image filters
+V /image gender
+V /image glide_size
+V /image icon
+V /image icon_state
+V /image infra_luminosity
+V /image invisibility
+V /image layer
 V /image loc
+V /image luminosity
+V /image maptext
+V /image maptext_height
+V /image maptext_width
+V /image maptext_x
+V /image maptext_y
+V /image mouse_drag_pointer
+V /image mouse_drop_pointer
+V /image mouse_drop_zone
+V /image mouse_opacity
+V /image mouse_over_pointer
+V /image name
+V /image opacity
+V /image overlays
+V /image override
+V /image pixel_w
+V /image pixel_x
+V /image pixel_y
+V /image pixel_z
+V /image plane
+V /image render_source
+V /image render_target
+V /image screen_loc
+V /image suffix
+V /image text
+V /image transform
+V /image underlays
+V /image verbs
+V /image vis_contents
+V /image x
+V /image y
+V /image z
 V /list len
+V /list parent_type
+V /list tag
+V /list type
+V /list vars
 V /matrix _dm_interface
 V /matrix a
 V /matrix b
@@ -601,6 +674,17 @@ V /mob see_in_dark
 V /mob see_infrared
 V /mob see_invisible
 V /mob sight
+V /mutable_appearance animate_movement
+V /mutable_appearance density
+V /mutable_appearance glide_size
+V /mutable_appearance infra_luminosity
+V /mutable_appearance mouse_drop_pointer
+V /mutable_appearance mouse_drop_zone
+V /mutable_appearance opacity
+V /mutable_appearance screen_loc
+V /mutable_appearance verbs
+V /mutable_appearance vis_contents
+V /mutable_appearance vis_flags
 V /obj parent_type
 V /particles bound1
 V /particles bound2
@@ -647,6 +731,10 @@ V /savefile cd
 V /savefile dir
 V /savefile eof
 V /savefile name
+V /savefile parent_type
+V /savefile tag
+V /savefile type
+V /savefile vars
 V /sound _dm_interface
 V /sound atom
 V /sound channel
@@ -716,6 +804,7 @@ V /world timeofday
 V /world timezone
 V /world turf
 V /world url
+V /world vars
 V /world version
 V /world view
 V /world visibility

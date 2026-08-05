@@ -110,13 +110,42 @@ public sealed class StatementParser
         or TokenKind.KeywordWorld
         or TokenKind.KeywordGlobal;
 
+    /// <summary>
+    /// Tokens that may be a declared variable's name or a segment of its type.
+    /// </summary>
+    /// <remarks>
+    /// Wider than <see cref="IsNameLike"/> by exactly one word. /tg/station writes
+    /// <c>for(var/step in 1 to steps)</c>, which we rejected with "expected a variable name" —
+    /// <c>step</c> lexes as a keyword only because <c>step()</c> is also a builtin proc.
+    ///
+    /// <b><c>step</c> is the only one, and getting that right needed the variable to be USED.</b>
+    /// A first pass declared each contextual keyword and read it back, which compiled for
+    /// <c>step</c>, <c>in</c>, <c>as</c> and <c>set</c> alike — so all four went in. Adding a single
+    /// <c>name += 1</c> rejects three of them:
+    /// <code>
+    /// var/step = 40   step += 1   compiles, and runs: 41
+    /// var/in = 40     in += 1     error, "missing left-hand argument to in."
+    /// var/as = 40     as += 1     error
+    /// var/set = 40    set += 1    error
+    /// var/to = 40                 error at the declaration itself
+    /// </code>
+    /// The declaration compiling says only that the parser allowed it (PLAN.md §8). <c>step</c> is
+    /// confirmed at runtime, as a local and as a loop variable.
+    ///
+    /// Deliberately separate rather than folded into <see cref="IsNameLike"/>: that predicate also
+    /// decides labels, <c>set</c> statements and switch cases, where a contextual keyword means
+    /// something.
+    /// </remarks>
+    private static bool IsDeclarationName(TokenKind kind)
+        => IsNameLike(kind) || kind is TokenKind.KeywordStep;
+
     private void Report(TextSpan span, string message)
         => _diagnostics.Add(Diagnostic.Error("DM0202", span, message));
 
-    private ExpressionSyntax ParseExpression(bool colonTerminates = false)
+    private ExpressionSyntax ParseExpression(bool colonTerminates = false, bool stopAtIn = false)
     {
         (ExpressionSyntax expression, int next) =
-            ExpressionParser.Parse(_tokens, _source, _diagnostics, _position, colonTerminates);
+            ExpressionParser.Parse(_tokens, _source, _diagnostics, _position, colonTerminates, stopAtIn);
 
         _position = next > _position ? next : _position + 1;
         return expression;
@@ -426,8 +455,18 @@ public sealed class StatementParser
 
             default:
             {
-                // A loop label is `name:` alone on its line.
-                if (IsNameLike(Current) && Peek() == TokenKind.Colon && IsLineEnd(_position + 2))
+                // A loop label is `name:` alone on its line — or immediately followed by a brace
+                // block, which is how a label reaches macro-generated code: a `\`-continued body
+                // has no lines to put it on. /tg/station's SEARCH_ADJ_IN_DIR writes
+                // `set_adj_in_dir: { ... }` and breaks out of it by name.
+                //
+                // A `:` followed by `{` is unambiguous. Member access needs a name after the colon,
+                // so there is no reading of `x: {` where the colon is an operator — which is what
+                // we were doing, reporting "expected a member name" on the brace and then failing
+                // to find an expression for every line of the block. 973 of them on /tg/station.
+                if (IsNameLike(Current)
+                    && Peek() == TokenKind.Colon
+                    && (IsLineEnd(_position + 2) || Peek(2) == TokenKind.OpenBrace))
                 {
                     string name = CurrentText;
                     _position += 2;
@@ -683,7 +722,7 @@ public sealed class StatementParser
         List<string> segments = new();
         List<TextSpan> spans = new();
 
-        while (IsNameLike(Current))
+        while (IsDeclarationName(Current))
         {
             string word = CurrentText;
 
@@ -699,7 +738,7 @@ public sealed class StatementParser
                 _position++;
             }
 
-            if (Current is TokenKind.Slash or TokenKind.Dot && IsNameLike(Peek()))
+            if (Current is TokenKind.Slash or TokenKind.Dot && IsDeclarationName(Peek()))
             {
                 _position++;
                 continue;
@@ -991,7 +1030,11 @@ public sealed class StatementParser
             return ParseLocalVarNames(start, null, IsAssociativeForHeader());
         }
 
-        return new ExpressionStatementSyntax(ParseExpression(), SpanFrom(start));
+        // The header's `in` belongs to the loop, not to this clause. `for(x in L)` with an already
+        // declared x would otherwise parse as the single expression `x in L`, leaving the loop
+        // modelled as a bare `for` over a nonsense initializer - which parsed silently, so nothing
+        // caught it until `for(x in a to b step c)` turned it into a visible error.
+        return new ExpressionStatementSyntax(ParseExpression(stopAtIn: true), SpanFrom(start));
     }
 
     /// <summary>

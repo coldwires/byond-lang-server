@@ -146,20 +146,38 @@ public sealed class IndexExpressionSyntax : ExpressionSyntax
 
 /// <summary>
 /// One argument. DM allows an associative form, <c>list(a = 1, b = 2)</c>, where the name is a key
-/// rather than a parameter name.
+/// rather than a parameter name, and a weighted form, <c>pick(20;"brown", 1;"albino")</c>.
 /// </summary>
 public sealed class ArgumentSyntax : SyntaxNode
 {
-    public ArgumentSyntax(ExpressionSyntax? name, ExpressionSyntax value, TextSpan span) : base(span)
+    public ArgumentSyntax(
+        ExpressionSyntax? name,
+        ExpressionSyntax value,
+        TextSpan span,
+        ExpressionSyntax? weight = null)
+        : base(span)
     {
         Name = name;
         Value = value;
+        Weight = weight;
     }
 
     /// <summary>The left side of an <c>=</c> inside an argument list, or null for a plain argument.</summary>
     public ExpressionSyntax? Name { get; }
 
     public ExpressionSyntax Value { get; }
+
+    /// <summary>
+    /// The left side of a <c>;</c> inside an argument, as <c>pick()</c> takes: null for everything
+    /// else.
+    /// </summary>
+    /// <remarks>
+    /// The separator is a semicolon rather than a comma because a comma already separates the
+    /// arguments, so <c>pick(20;"brown", 1;"albino")</c> is two weighted choices and not four
+    /// arguments. Kept as its own slot rather than folded into the value, so a consumer counting
+    /// arguments still counts two.
+    /// </remarks>
+    public ExpressionSyntax? Weight { get; }
 }
 
 public sealed class InvocationExpressionSyntax : ExpressionSyntax

@@ -213,7 +213,11 @@ public static class TypeTreeBuilder
     /// separate: a proc's leading segments are always a type path, while a variable's may be its
     /// declared type instead.
     /// </remarks>
-    private static TypePath ProcOwner(TypePath enclosing, PathSyntax path)
+    /// <remarks>
+    /// Internal for the same reason as <see cref="GroupOwner"/>: the binder must agree with the tree
+    /// about which type a proc sits on, and a second copy of this rule would drift.
+    /// </remarks>
+    internal static TypePath ProcOwner(TypePath enclosing, PathSyntax path)
     {
         IReadOnlyList<string> segments = path.Segments;
         int take = Math.Max(segments.Count - 1, 0);
@@ -263,7 +267,15 @@ public static class TypeTreeBuilder
     /// leaves the enclosing type alone, but <c>mob/proc</c> owns its children on <c>/mob</c>.
     /// Found by diffing against <c>dm.exe -o</c> on mlaas: 34 procs were landing on the root.
     /// </remarks>
-    private static TypePath GroupOwner(TypePath enclosing, PathSyntax path)
+    /// <summary>
+    /// The type a bare <c>var</c>/<c>proc</c>/<c>verb</c> group header's children belong to.
+    /// </summary>
+    /// <remarks>
+    /// Internal rather than private because <see cref="Dm.Core.Binding.Binder"/> has to agree with
+    /// the tree about which type a member sits on. Two copies of this would disagree eventually,
+    /// and the symptom would be diagnostics reported against the wrong type.
+    /// </remarks>
+    internal static TypePath GroupOwner(TypePath enclosing, PathSyntax path)
     {
         IReadOnlyList<string> segments = path.Segments;
 

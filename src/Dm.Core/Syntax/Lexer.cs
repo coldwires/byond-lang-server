@@ -561,6 +561,15 @@ public sealed class Lexer
                 _position++;
         }
 
+        // A trailing dot with nothing name-like after it is part of the number, not an operator.
+        // /tg/station writes `COOLDOWN_START(src, x, 0. SECONDS)` and `SECONDS` is `*10`, so the
+        // stream is `0. *10`. Split, the dot reads as member access and asks for a member name.
+        // The name check is what keeps `1.Foo()` a member access, which is the case above.
+        else if (Current == '.' && Peek() != '.' && !char.IsLetter(Peek()) && Peek() != '_')
+        {
+            _position++;
+        }
+
         // The infinity and indeterminate literals, `1#INF` and `1#IND`. Left split, the `#` reads as
         // a directive and the rest as a name. Found in ter13's HudLib.
         if (Current == '#' && MatchesAhead("INF"))
@@ -819,7 +828,12 @@ public sealed class Lexer
 
         if (enclosing is not null)
         {
-            if (c == '[')
+            // `?[` is a single token, so the `[` never arrives on its own — but it still opens a
+            // bracket that the matching `]` closes. Missed, the hole ends at that `]` instead:
+            // `"[( L?["[k]"] ? 0 : 1 )]"` closed after `L?["[k]"`, and everything after it was
+            // read as an expression that then failed. 174 diagnostics on /tg/station, all from
+            // OFFSET_RENDER_TARGET, which nests exactly this shape.
+            if (c == '[' || (c == '?' && Peek() == '['))
             {
                 enclosing.BracketDepth++;
             }

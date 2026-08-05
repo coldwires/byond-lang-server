@@ -65,6 +65,7 @@ internal static class Program
 
         int fromReference = ScrapeReference(html, entries);
         int parents = ScrapeParentTypes(html, entries) + AddVerifiedParentTypes(entries);
+        int verifiedMembers = AddVerifiedMembers(entries);
         int fromStddef = stddefPath is not null && File.Exists(stddefPath)
             ? ReadStddef(stddefPath, entries)
             : 0;
@@ -73,7 +74,7 @@ internal static class Program
 
         Console.Out.WriteLine($"builtins for BYOND {version}");
         Console.Out.WriteLine(
-            $"  {fromReference} from the reference ({parents} parent links), {fromStddef} from stddef.dm");
+            $"  {fromReference} from the reference ({parents} parent links), {verifiedMembers} verified members, {fromStddef} from stddef.dm");
         Console.Out.WriteLine($"  {entries.Count} entries -> {outputPath}");
 
         if (stddefPath is null)
@@ -227,6 +228,55 @@ internal static class Program
         {
             if (Add(entries, new Entry { Kind = 'X', Owner = type, Name = parent }))
                 added++;
+        }
+
+        return added;
+    }
+
+    /// <summary>
+    /// Members the reference does not document, read off the compiler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The scrape only finds what <c>info.html</c> carries an <c>&lt;a name=...&gt;</c> anchor for, and
+    /// for several types it carries almost nothing: <c>/callee</c> had no members at all, and
+    /// <c>/image</c> had exactly one. A language server that checks whether a member exists cannot
+    /// use a table with holes in it — every hole is reported as the author's mistake.
+    /// </para>
+    /// <para>
+    /// Established by compiling a matrix: every candidate name read into a var off every type, one
+    /// file, one compile, and whatever the compiler rejects drops out. Over-guessing the candidate
+    /// list is free; under-guessing is what leaves a hole. <b>Each type carries a control name that
+    /// must fail</b> — the first version of the probe wrote a bare <c>R.member</c> statement, which
+    /// dm.exe does not type-check, so it compiled with 0 errors and proved nothing.
+    /// </para>
+    /// <para>
+    /// Found by /tg/station reporting 97 invented diagnostics, 80-odd of which were these. Verified
+    /// on 516.1666. Re-run the probe after a BYOND upgrade, the same as the rest of this file.
+    /// </para>
+    /// </remarks>
+    private static int AddVerifiedMembers(SortedDictionary<string, Entry> entries)
+    {
+        Dictionary<string, string[]> members = new()
+        {
+            ["/callee"] = new[] { "args", "caller", "desc", "file", "invisibility", "line", "name", "proc", "src", "type", "usr" },
+            ["/client"] = new[] { "bound_height", "bound_width", "bound_x", "bound_y", "parent_type", "tag", "type", "vars" },
+            ["/image"] = new[] { "alpha", "animate_movement", "appearance", "appearance_flags", "blend_mode", "color", "contents", "density", "desc", "dir", "filters", "gender", "glide_size", "icon", "icon_state", "infra_luminosity", "invisibility", "layer", "luminosity", "maptext", "maptext_height", "maptext_width", "maptext_x", "maptext_y", "mouse_drag_pointer", "mouse_drop_pointer", "mouse_drop_zone", "mouse_opacity", "mouse_over_pointer", "name", "opacity", "overlays", "override", "pixel_w", "pixel_x", "pixel_y", "pixel_z", "plane", "render_source", "render_target", "screen_loc", "suffix", "text", "transform", "underlays", "verbs", "vis_contents", "x", "y", "z" },
+            ["/list"] = new[] { "parent_type", "tag", "type", "vars" },
+            ["/mutable_appearance"] = new[] { "animate_movement", "density", "glide_size", "infra_luminosity", "mouse_drop_pointer", "mouse_drop_zone", "opacity", "screen_loc", "verbs", "vis_contents", "vis_flags" },
+            ["/savefile"] = new[] { "parent_type", "tag", "type", "vars" },
+            ["/world"] = new[] { "vars" },
+        };
+
+        int added = 0;
+
+        foreach ((string owner, string[] names) in members)
+        {
+            foreach (string name in names)
+            {
+                if (Add(entries, new Entry { Kind = 'V', Owner = owner, Name = name }))
+                    added++;
+            }
         }
 
         return added;

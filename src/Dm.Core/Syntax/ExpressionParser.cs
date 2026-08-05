@@ -53,19 +53,22 @@ public sealed class ExpressionParser
     /// grammar — the compiler reads <c>case</c> as a name.
     /// </remarks>
     private bool _colonTerminates;
+    private readonly bool _stopAtIn;
 
     private ExpressionParser(
         IReadOnlyList<Token> tokens,
         TokenSource source,
         List<Diagnostic> diagnostics,
         int position,
-        bool colonTerminates)
+        bool colonTerminates,
+        bool stopAtIn)
     {
         _tokens = tokens;
         _source = source;
         _diagnostics = diagnostics;
         _position = position;
         _colonTerminates = colonTerminates;
+        _stopAtIn = stopAtIn;
     }
 
     /// <summary>Parses one expression starting at <paramref name="position"/>.</summary>
@@ -75,13 +78,14 @@ public sealed class ExpressionParser
         TokenSource source,
         List<Diagnostic> diagnostics,
         int position,
-        bool colonTerminates = false)
+        bool colonTerminates = false,
+        bool stopAtIn = false)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(diagnostics);
 
-        ExpressionParser parser = new(tokens, source, diagnostics, position, colonTerminates);
+        ExpressionParser parser = new(tokens, source, diagnostics, position, colonTerminates, stopAtIn);
         ExpressionSyntax expression = parser.ParseExpression();
         return (expression, parser._position);
     }
@@ -250,11 +254,28 @@ public sealed class ExpressionParser
         int start = _position;
         ExpressionSyntax left = ParseAssignment();
 
-        while (Current == TokenKind.KeywordIn)
+        // A `for` header owns its own `in`: `for(x in L)` has to leave the keyword for the
+        // statement parser, or the whole header collapses into one expression and the loop is
+        // modelled as a bare `for` over a nonsense initializer. Only at the top level - a nested
+        // `in` inside parentheses is an ordinary operator.
+        while (Current == TokenKind.KeywordIn && !(_stopAtIn && _groupDepth == 0))
         {
             _position++;
             SkipLayoutInGroup();
             ExpressionSyntax right = ParseAssignment();
+
+            // `x in lo to hi` is a range membership test rather than a lookup in a list, and it is
+            // ordinary expression position — not the switch-case form the statement parser handles.
+            // `to` binds tighter than `in`, so the range is the whole right operand.
+            if (Current == TokenKind.KeywordTo)
+            {
+                _position++;
+                SkipLayoutInGroup();
+
+                ExpressionSyntax high = ParseAssignment();
+                right = new BinaryExpressionSyntax(right, TokenKind.KeywordTo, high, SpanFrom(start));
+            }
+
             left = new BinaryExpressionSyntax(left, TokenKind.KeywordIn, right, SpanFrom(start));
         }
 
@@ -574,12 +595,23 @@ public sealed class ExpressionParser
             int before = _position;
             int argumentStart = _position;
             ExpressionSyntax value = ParseExpression();
+            ExpressionSyntax? weight = null;
+
+            // `pick(20;"brown", 1;"albino")` weights each choice, with a semicolon between the
+            // weight and the value. What we just parsed is the weight; the value follows.
+            if (Current == TokenKind.Semicolon)
+            {
+                _position++;
+                SkipLayoutInGroup();
+                weight = value;
+                value = ParseExpression();
+            }
 
             // `list(a = 1, b = 2)` builds an associative list, so the left side is a key rather than
             // a parameter name. It arrives here as an assignment and is split back apart.
             ArgumentSyntax argument = value is AssignmentExpressionSyntax { OperatorToken: TokenKind.Assign } assignment
-                ? new ArgumentSyntax(assignment.Target, assignment.Value, SpanFrom(argumentStart))
-                : new ArgumentSyntax(null, value, SpanFrom(argumentStart));
+                ? new ArgumentSyntax(assignment.Target, assignment.Value, SpanFrom(argumentStart), weight)
+                : new ArgumentSyntax(null, value, SpanFrom(argumentStart), weight);
 
             arguments.Add(argument);
             SkipLayoutInGroup();
@@ -754,16 +786,17 @@ public sealed class ExpressionParser
             if (Current is not (TokenKind.Slash or TokenKind.Dot))
                 break;
 
-            // Doubled and trailing separators collapse, so `/obj/item/` means `/obj/item` — see
-            // PLAN.md §4a. The trailing one must still be consumed: left behind, `istype(a, /mob/)`
-            // reads it as division and then fails looking for a right operand.
-            if (!IsNameLike(Peek()))
-            {
+            // Doubled AND trailing separators collapse: `/obj/item/`, `/obj/.item` and `/obj./item`
+            // all mean `/obj/item` — PLAN.md §4a. So consume the whole run rather than one, and let
+            // the top of the loop decide whether a name follows.
+            //
+            // Both halves are load-bearing. A trailing separator left behind reads as division —
+            // `istype(a, /mob/)` then fails looking for a right operand. A doubled one left behind
+            // ends the path early and hands the rest to member access, which is how /tg/station's
+            // `TYPE_PROC_REF(/datum/beam/, Start)` — expanding to `/datum/beam/.proc/Start` —
+            // produced 71 reports of a member named `proc`.
+            while (Current is TokenKind.Slash or TokenKind.Dot)
                 _position++;
-                break;
-            }
-
-            _position++;
         }
 
         return new PathSyntax(anchor, segments, SpanFrom(start), segmentSpans);

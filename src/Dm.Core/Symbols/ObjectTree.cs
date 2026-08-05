@@ -76,8 +76,26 @@ public sealed class ObjectTree
                 : null;
         }
 
+        // A type the project declares at root level derives from /datum, which nothing in its path
+        // says. Compiler-verified on 516.1666: `src.type`, `src.tag` and `src.vars` all resolve
+        // inside a bare `/market_values`, while a name no type declares still errors — so the
+        // members are genuinely inherited rather than the check being switched off.
+        //
+        // Restricted to types the project declares, because the builtins carry their own verified
+        // links and three of them (/client, /list, /savefile) genuinely have no parent at all. A
+        // blanket rule would invent one for those, and for /world, whose parent was never probed.
+        //
+        // Without this a root-level datum offers no `type`, `tag` or `vars`, which is how the binder
+        // came to report two undefined vars on a project that compiles clean.
+        // A one-segment path's parent is the root, and the root is deliberately outside the
+        // inheritance chain, so these types currently inherit nothing at all.
+        if (type.Path.Segments.Count == 1 && type.Sites.Count > 0 && type.Path != DatumPath)
+            return Find(DatumPath);
+
         return type.Parent;
     }
+
+    private static readonly TypePath DatumPath = TypePath.Parse("/datum");
 
     /// <summary>
     /// Walks a type and everything it inherits from, nearest first.

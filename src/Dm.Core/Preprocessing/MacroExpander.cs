@@ -172,7 +172,12 @@ internal sealed class MacroExpander
 
             switch (token.Kind)
             {
-                case TokenKind.OpenParen or TokenKind.OpenBracket:
+                // `?[` is a single token and still opens a bracket the matching `]` closes. Left
+                // uncounted, the depth goes negative inside an argument and the scanner takes that
+                // `]` as the end of the invocation — /tg/station's
+                // `OUTER(rt, blacklist?["[rt]"] ? 0 : off)` lost everything from the `]` onward,
+                // silently, so the parse failed on a stream that was simply missing its tail.
+                case TokenKind.OpenParen or TokenKind.OpenBracket or TokenKind.QuestionOpenBracket:
                     depth++;
                     if (depth == 1 && token.Kind == TokenKind.OpenParen)
                         continue;

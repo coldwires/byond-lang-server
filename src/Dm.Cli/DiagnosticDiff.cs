@@ -4,8 +4,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Dm.Core.Binding;
 using Dm.Core.Diagnostics;
 using Dm.Core.Includes;
+using Dm.Core.Symbols;
 using Dm.Core.Preprocessing;
 using Dm.Core.Syntax;
 
@@ -77,7 +79,7 @@ internal static class DiagnosticDiff
         Console.Out.WriteLine($"diagdiff {Path.GetFileName(dme)}");
         Console.Out.WriteLine();
 
-        List<(Entry Key, string Message)> theirs = RunCompiler(compiler, dme, root);
+        List<(Entry Key, string Message)> theirs = RunCompiler(compiler, dme, root, args);
         List<(Entry Key, string Message)> ours = Ours(dme, root, args);
 
         Console.Out.WriteLine($"  dm.exe   {theirs.Count} diagnostic(s)");
@@ -172,9 +174,20 @@ internal static class DiagnosticDiff
         return colon >= 0 && colon + 1 < message.Length ? message[(colon + 1)..].Trim() : message.Trim();
     }
 
-    private static List<(Entry, string)> RunCompiler(string compiler, string dme, string root)
+    /// <summary>Runs dm.exe over the project, with the same injected defines we were given.</summary>
+    /// <remarks>
+    /// The defines have to reach BOTH sides or the diff compares two different programs: anything
+    /// behind an <c>#ifdef</c> is in one build and not the other, and every diagnostic inside it
+    /// reads as missing or invented. /tg/station builds with <c>-DCBT</c>, so without this it is not
+    /// measurable at all.
+    /// </remarks>
+    private static List<(Entry, string)> RunCompiler(string compiler, string dme, string root, string[] args)
     {
-        ProcessStartInfo start = new(compiler, $"\"{dme}\"")
+        string flags = string.Join(' ', args
+            .Where(a => a.StartsWith("-D", StringComparison.Ordinal) && a.Length > 2)
+            .Select(a => $"\"{a}\""));
+
+        ProcessStartInfo start = new(compiler, $"{flags} \"{dme}\"".TrimStart())
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -229,24 +242,42 @@ internal static class DiagnosticDiff
                 $"{diagnostic.Id} {diagnostic.Message}"));
         }
 
+        // Parse every file first, then bind. Binding needs the FINISHED tree: a type is reopened
+        // across files and a proc is overridden in a later one, so a member checked against a
+        // half-built tree would be reported missing purely because its file has not been read yet.
+        List<(string File, TokenSource Source, ParseResult Parse)> files = new();
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+
         foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed))
         {
             ParseResult parse = DeclarationParser.Parse(source);
+            files.Add((file, source, parse));
+            TypeTreeBuilder.AddFile(tree, file, parse);
+        }
 
+        foreach ((string file, TokenSource source, ParseResult parse) in files)
+        {
             foreach (Diagnostic diagnostic in parse.Diagnostics)
-            {
-                if (!Comparable(diagnostic))
-                    continue;
+                Add(file, source, diagnostic);
 
-                int line = source.Text.GetLinePosition(diagnostic.Span.Start).Line + 1;
-
-                found.Add((
-                    new Entry(Relative(root, file), line, Severity(diagnostic)),
-                    $"{diagnostic.Id} {diagnostic.Message}"));
-            }
+            foreach (Diagnostic diagnostic in Binder.Bind(tree, parse.Root))
+                Add(file, source, diagnostic);
         }
 
         return found;
+
+        void Add(string file, TokenSource source, Diagnostic diagnostic)
+        {
+            if (!Comparable(diagnostic))
+                return;
+
+            int line = source.Text.GetLinePosition(diagnostic.Span.Start).Line + 1;
+
+            found.Add((
+                new Entry(Relative(root, file), line, Severity(diagnostic)),
+                $"{diagnostic.Id} {diagnostic.Message}"));
+        }
     }
 
     /// <summary>
