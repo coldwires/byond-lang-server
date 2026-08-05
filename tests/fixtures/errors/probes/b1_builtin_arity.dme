@@ -1,0 +1,2 @@
+/proc/t()
+	return cos(1,2,3)

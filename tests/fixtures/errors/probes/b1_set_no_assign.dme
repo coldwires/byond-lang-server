@@ -1,0 +1,3 @@
+/proc/t()
+	set waitfor 0
+	return 1

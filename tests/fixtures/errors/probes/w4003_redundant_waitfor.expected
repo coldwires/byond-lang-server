@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w4003_redundant_waitfor
+2 warning =: waitfor = TRUE is now obsolete, since it is the default behavior

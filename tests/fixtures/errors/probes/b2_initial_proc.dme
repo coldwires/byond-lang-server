@@ -1,0 +1,4 @@
+/datum/proc/p()
+	return 1
+/datum/proc/t()
+	return initial(p)

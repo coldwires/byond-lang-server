@@ -1,0 +1,2 @@
+#define M(a) a
+var/x = M([1

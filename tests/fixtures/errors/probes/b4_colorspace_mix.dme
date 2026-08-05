@@ -1,0 +1,1 @@
+/mob/color = list(rgb(255,0,0), rgb(50,100,50, space=1))

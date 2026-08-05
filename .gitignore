@@ -42,3 +42,11 @@ Thumbs.db
 
 # Test result files from --logger trx
 TestResults/
+
+# BYOND build output from the fixture suite. The .dm/.dme are the fixtures; the
+# .dmb/.rsc/.log are what running them produces.
+tests/fixtures/**/*.dmb
+tests/fixtures/**/*.rsc
+tests/fixtures/**/*.int
+tests/fixtures/**/*.lk
+tests/fixtures/**/*.log

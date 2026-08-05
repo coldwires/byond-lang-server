@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w3009_call_by_ref
+5 error p: undefined proc
+4 warning p: variable defined but not used

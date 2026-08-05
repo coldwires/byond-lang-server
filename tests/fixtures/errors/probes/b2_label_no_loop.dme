@@ -1,0 +1,4 @@
+/proc/t()
+	lbl:
+		var/x = 1
+	return 1

@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b4_c_for_commas
+3 error i: duplicate definition
+3 error i: previous definition
+3 error for: malformed for statement

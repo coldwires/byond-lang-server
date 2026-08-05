@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_switch_bad_range
+3 error to: range in switch must be from low to high number

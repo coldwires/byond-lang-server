@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b4_def_after_global
+3 error name: undefined var
+3 error : empty type name (indentation error?)

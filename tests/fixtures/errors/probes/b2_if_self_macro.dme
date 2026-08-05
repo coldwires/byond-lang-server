@@ -1,0 +1,5 @@
+#define SELFX SELFX
+#if SELFX
+#endif
+/proc/t()
+	return 1

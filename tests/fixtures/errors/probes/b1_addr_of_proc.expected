@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_addr_of_proc
+4 error f: undefined var
+4 error : & pointer operator cannot be used on a non-modifiable value

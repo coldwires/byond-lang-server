@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_still_skipping
+4 error still skipping code at end of file (possibly an unclosed #if/#ifdef/#ifndef)

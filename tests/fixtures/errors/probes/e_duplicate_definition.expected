@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: e_duplicate_definition
+3 error t: duplicate definition
+1 error t: previous definition

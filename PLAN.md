@@ -1622,14 +1622,77 @@ lint.dm:3:warning (frequent_call): New: this proc will be called very frequently
 So the vocabulary is discoverable from any build log, which is how to enumerate it — the reference
 does not list them.
 
-**At least five names exist**, and the two below are only the off-by-default pair. Seen firing with
-no flags at all: `unused_var` on an unused local, `no_parent` on a `..()` with no parent proc to
-call, and `new_name` on a deprecated builtin (`lentext is being phased out; replace with length`).
-The last two came out of compiling madridspy for the diagnostic diff. Since the reference does not
-list them, the vocabulary has to be collected the way these were — off real build logs.
+**The whole vocabulary is known, and it is 30 warnings rather than the five we had.** This document
+previously said the names "have to be collected off real build logs", which was true of the method
+available at the time and is no longer the best one. The author's lab extracted the compiler's own
+warning-id table — `{u32 id, char* name}` records in `byondcore.dll`'s `.rdata`, terminated by id 0,
+confirmed by disassembling the registration loop that walks it. See **§8a** for what that supplies
+and what it corrects.
 
-Two ship **off by default** and exist for linting rather than for correctness. `dm.exe -warn
-init_proc,frequent_call game.dme` turns them on.
+Three ship **off by default**: `init_proc` (5001), `frequent_call` (5002) and `lint_type_mismatch`
+(6001) — the third of which we did not know about. `dm.exe -warn init_proc,frequent_call game.dme`
+turns the first two on.
+
+### §8a. The compiler's own diagnostic catalogue
+
+Source: `~/Desktop/byondtest/lab/errors/` — `CATALOG.md` plus `final_compile_messages.txt`,
+`catalog_warns.txt`, `coverage.json` and 447 reproduction probes with cached compiler output. Built
+by PE analysis of `byondcore.dll` 516.1666 and verified by bench compiles, not by scraping build
+logs. It is the authoritative answer to a question this project had been answering one name at a
+time.
+
+What it supplies that we did not have:
+
+- **The full warning table**, 30 ids with their `#pragma` names, including three retired gaps (2007,
+  3003, 4002). We had five names. The band structure is observational — 2xxx input filters, 3xxx
+  semantic, 4xxx deprecation, 5xxx/6xxx default-off lints.
+- **The complete message inventory**: 306 unique compile-time strings, plus ~16 more that are passed
+  in a register and can only be found by reproducing them. That is a hard upper bound on what
+  `dm.exe` can ever say, which finally gives `dmc diagdiff`'s *missed* column a denominator.
+- **Errors carry no ids at all.** All 700+ error sites pass a bare message string, so there is no
+  code table to match against — our private `DM0xxx` space is right for errors, and warnings should
+  carry the compiler's *name*.
+- Confirmation of the output format we match on: `file:line:error: msg` and
+  `file:line:warning: (name): msg`, with the numeric id never printed.
+
+**Numeric ids work in `#pragma`, and the reference documents only names.** Verified here
+independently rather than taken on trust:
+
+| written | result |
+|---|---|
+| `#pragma ignore 3006` | suppresses `unused_var` |
+| `#pragma warn 5001` | enables the default-off `init_proc` |
+| `#pragma ignore 9999` | **silently accepted** — no diagnostic, and the warning still fires |
+| `#pragma ignore bogus_name_xyz` | `error: unrecognized warning bogus_name_xyz` |
+
+The asymmetry is the part that matters for M11: an **unknown name is a hard error while an unknown
+number is ignored**, so a project can carry `#pragma ignore 9999` forever and never learn it does
+nothing. Our pragma handling has to accept both spellings, and if we ever warn about a useless
+pragma we would be reporting something `dm.exe` does not.
+
+#### `diagnostics_spec.json`
+
+The lab also emits a machine-readable spec — `lab/errors/diagnostics_spec.json`, regenerated with
+`python gen_spec.py` so adding probes enriches it. Per record: the warning id and name,
+`default_enabled`, both `#pragma` spellings, each message as a template **and a regex**, a
+`reproduced` flag, and a worked example with the source that triggers it. Plus 278 errors and the 16
+`extra_observed`.
+
+Three things to honour when consuming it, two of them from the author:
+
+- **`reproduced: false` means "known message, no golden test"** — recognise it by regex if `dm.exe`
+  ever emits it, but do not expect a fixture behind it.
+- **`extra_observed` is not optional.** Those 16 are passed to the compiler's printer in a register,
+  so a spec built only from the binary's string table drops them. `missing =` and
+  `location of top-most unmatched {` are both in there, and both are messages we have already hit.
+- **Its `promoted_warning_line` regex does not match.** It expects `error:` then `(name)`; the
+  compiler prints `file:line:error (unused_var): msg` with **no colon after `error`**, which is what
+  §8 already recorded and what `DiagnosticDiff.CompilerLine` already handles. Verified by compiling
+  `#pragma error 3006`. A worked example in the spec would have caught it — the promoted form is one
+  of the few records with no `example` behind it.
+
+The wider lesson is the same one as `-o`: an oracle is worth more than our own guessing and is still
+not authority. Everything imported from here gets checked the way the numeric-pragma rows were.
 
 Both are narrower than their descriptions suggest, and the shape of the restriction is unusual
 enough that two plausible readings of it are both wrong. Measured on 516.1666:
@@ -1834,6 +1897,25 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   preprocessor (including macro-expansion source maps), parser error recovery, path splitting,
   object tree merging. Snapshot helper is `tests/Dm.Core.Tests/Snapshot.cs`;
   `DM_UPDATE_SNAPSHOTS=1` rewrites expected files.
+- **Fixture suite** — `tests/fixtures`, run with `pwsh tests/fixtures/run.ps1`. Real DM compiled and
+  **run** by the real compiler, then diffed against what we say about it. It answers three separate
+  questions: does DM do what we think (`ok/` runs, every check comparing a value to a constant), does
+  `dm.exe` reject what we think (`errors/`, against diagnostics captured from the compiler), and do
+  we agree with it (`diagdiff`, zero invented).
+
+  **It exists because a corpus is one-directional.** `dm.exe` reports zero diagnostics on
+  /tg/station's 1.5M lines, so correct code can only ever show what we wrongly *reject* — it cannot
+  show what we wrongly *accept*, because it does not contain the wrong thing. Two bugs on 2026-08-05
+  prove the gap: `for(x in L)` with `x` already declared parsed as a bare `for` over a nonsense
+  initializer **with no diagnostic**, and we accepted `var/in`, which the compiler rejects. Neither
+  was reachable from any amount of real DM.
+
+  **Every new finding gets a case, in the same change** — the suite is the regression net for things
+  learned expensively, and anything left out gets re-learned. Two rules the layout encodes: one
+  expectation per compilation unit, since **a syntax error stops `dm.exe` before the semantic checks
+  and two failing cases in one file mask each other**; and the harness uses none of the constructs it
+  tests.
+
 - **Cross-codebase corpus.** `tests/corpus` must not contain only the team's game. Add open BYOND
   codebases including an SS13 fork such as /tg/station; it is the harshest available preprocessor
   stress test and free to obtain.

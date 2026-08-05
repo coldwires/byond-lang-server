@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_implied_type_global
+1 error x: unknown variable type
+1 error __IMPLIED_TYPE__: __IMPLIED_TYPE__ macro cannot be used here

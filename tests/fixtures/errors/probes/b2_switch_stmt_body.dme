@@ -1,0 +1,4 @@
+/proc/t(a)
+	switch(a)
+		var/x = 1
+	return 2

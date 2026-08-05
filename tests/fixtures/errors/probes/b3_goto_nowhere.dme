@@ -1,0 +1,3 @@
+/proc/t()
+	goto nowhere_lbl
+	return 1

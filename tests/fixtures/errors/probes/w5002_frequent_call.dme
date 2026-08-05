@@ -1,0 +1,3 @@
+#pragma warn frequent_call
+/datum/New()
+	return ..()

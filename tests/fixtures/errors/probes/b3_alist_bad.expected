@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b3_alist_bad
+2 error 2: missing comma ',' or right-paren ')'
+2 error 2: expected end of statement
+2 error expected expression

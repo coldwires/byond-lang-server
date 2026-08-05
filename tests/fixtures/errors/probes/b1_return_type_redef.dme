@@ -1,0 +1,4 @@
+/datum/proc/p() as num
+	return 1
+/datum/sub/p() as text
+	return "x"

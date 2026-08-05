@@ -1,0 +1,2 @@
+# Empty: `#pragma ignore 3006` suppresses unused_var by number, and an unknown
+# numeric id is silently accepted, so this compiles with 0 errors, 0 warnings.

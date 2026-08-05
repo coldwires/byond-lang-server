@@ -1,0 +1,4 @@
+/obj/foo
+/proc/t()
+	var/o = new(/obj/foo)
+	return o

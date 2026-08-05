@@ -1,0 +1,4 @@
+/datum/proc/p()
+	return 1
+/proc/t()
+	return /datum.p()

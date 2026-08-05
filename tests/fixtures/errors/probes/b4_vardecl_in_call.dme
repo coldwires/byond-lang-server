@@ -1,0 +1,4 @@
+/proc/t2(a)
+	return a
+/proc/t()
+	return t2(var/x)

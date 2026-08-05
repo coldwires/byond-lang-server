@@ -1,0 +1,4 @@
+var/const/ca = cb
+var/const/cb = ca
+/proc/t()
+	return ca

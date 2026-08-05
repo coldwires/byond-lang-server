@@ -1,0 +1,3 @@
+/proc/t()
+	/mob/var/x = 1
+	return 1

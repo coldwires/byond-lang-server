@@ -1,0 +1,3 @@
+#include x
+/proc/t()
+	return 1

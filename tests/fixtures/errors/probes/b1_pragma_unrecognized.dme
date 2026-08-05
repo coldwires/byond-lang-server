@@ -1,0 +1,3 @@
+#pragma frobnicate on
+/proc/t()
+	return 1

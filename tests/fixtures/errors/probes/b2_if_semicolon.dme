@@ -1,0 +1,3 @@
+/proc/t(a)
+	if(a);
+	return 1

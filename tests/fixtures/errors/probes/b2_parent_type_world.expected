@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_parent_type_world
+1 error mine: illegal parent type
+2 error parent_type: undefined var
+2 error /world: not a prototype

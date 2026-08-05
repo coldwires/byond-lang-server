@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b3_loop_checks_world
+1 warning 0: Disabling loop_checks is dangerous and should only be used as a temporary debugging measure. Without these checks an infinite loop in your code can cause the world to hang. Proceed with caution.

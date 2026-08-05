@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_arglist_bad_ctx
+3 error arglist: arglist() or named arguments cannot be used here
+3 error : missing expression
+2 warning L: variable defined but not used

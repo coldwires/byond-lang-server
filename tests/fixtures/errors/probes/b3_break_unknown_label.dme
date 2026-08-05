@@ -1,0 +1,4 @@
+/proc/t()
+	for(var/i in 1 to 3)
+		break nolbl
+	return 1

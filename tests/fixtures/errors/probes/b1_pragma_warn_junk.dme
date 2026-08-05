@@ -1,0 +1,3 @@
+#pragma warn unused_var $!
+/proc/t()
+	return 1

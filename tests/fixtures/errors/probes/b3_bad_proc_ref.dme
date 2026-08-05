@@ -1,0 +1,3 @@
+/proc/t()
+	var/p = .proc/nope
+	return p

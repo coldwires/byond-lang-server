@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w2008_empty_else
+4 warning empty 'else' clause
+5 error : invalid expression

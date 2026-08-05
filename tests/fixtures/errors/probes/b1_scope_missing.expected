@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_scope_missing
+3 error /datum::nope: undefined var
+3 error ::: bad var or proc() after :: operator

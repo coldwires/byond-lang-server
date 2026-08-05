@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_self_recursive_macro
+3 error macro recursion level too deep
+3 error end of file: expected }
+3 error location of top-most unmatched {

@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b3_byond_version_neg
+1 error byond_version: may not be set at compile-time

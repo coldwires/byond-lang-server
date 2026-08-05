@@ -1,0 +1,2 @@
+/mob/verb/v(a as bogusfilter)
+	return a

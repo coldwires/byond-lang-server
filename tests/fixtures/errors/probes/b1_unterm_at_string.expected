@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_unterm_at_string
+3 error unterminated text (expecting ")
+3 error return: expected end of statement

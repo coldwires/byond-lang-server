@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_rgb_one
+1 error rgb: expected 3 to 5 arguments (found 1)

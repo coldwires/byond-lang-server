@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_new_implicit_stmt
+2 error new: implicit type may only be used in an assignment.  (The revised syntax for new(Type,...) is new Type(...).)

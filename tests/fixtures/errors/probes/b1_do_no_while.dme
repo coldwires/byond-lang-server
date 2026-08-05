@@ -1,0 +1,3 @@
+/proc/t()
+	do
+		return 1

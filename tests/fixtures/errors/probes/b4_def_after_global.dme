@@ -1,0 +1,3 @@
+/obj/thing
+var/g = 1
+	name = "t"

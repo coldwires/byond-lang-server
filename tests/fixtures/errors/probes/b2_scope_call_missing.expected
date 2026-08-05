@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_scope_call_missing
+4 error /datum::nope: undefined proc
+4 error ::: bad var or proc() after :: operator

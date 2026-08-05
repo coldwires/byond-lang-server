@@ -1,0 +1,4 @@
+#if defined()
+#endif
+/proc/t()
+	return 1

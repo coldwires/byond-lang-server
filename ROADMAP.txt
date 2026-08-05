@@ -228,6 +228,7 @@ WHERE THE DETAIL LIVES
     how to CALL any of it, ownership, encodings,
       troubleshooting by symptom, what an edit costs  INTEGRATION.txt
     runnable proofs of 18 DM edge cases               docs/dm-language-notes.md
+    the fixture suite: compile + RUN + diagdiff       tests/fixtures/README.md
     working notes, verified commands, dead ends       docs/internal/  (ignored)
 
   THE RULE THAT KEEPS THIS TRUE: the doc edit belongs in the commit that makes
@@ -250,6 +251,11 @@ CONVENTIONS
   - PLAN.md, ROADMAP.txt, INTEGRATION.txt and docs/dm-language-notes.md are all
     LIVE docs: they describe now, at every commit.
   - docs/internal/ is Claude's working notes. Gitignored. Not team-facing.
+  - EVERY NEW FINDING GETS A FIXTURE CASE, in the same change. tests/fixtures
+    is the regression net; anything left out of it gets re-learned. A corpus of
+    correct code cannot tell us what we wrongly ACCEPT - dm.exe reports zero
+    diagnostics on tgstation's 1.5M lines - so the must-fail and must-mean-this
+    cases only exist if someone writes them.
   - Commits: concise and factual. Group related changes; don't split per line,
     don't lump unrelated work together. No AI attribution lines.
   - Prose: no hype, no "it's not X, it's Y", fact-driven.

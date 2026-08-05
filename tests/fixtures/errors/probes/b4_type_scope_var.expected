@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b4_type_scope_var
+5 error ::: type::procname() must have a constant type path
+5 error return: missing expression
+4 warning T: variable defined but not used

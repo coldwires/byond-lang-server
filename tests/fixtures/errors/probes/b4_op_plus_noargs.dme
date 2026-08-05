@@ -1,0 +1,5 @@
+/datum/proc/operator+()
+	return 1
+/proc/t()
+	var/datum/d = new
+	return d + 1

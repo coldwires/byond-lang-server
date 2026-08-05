@@ -1,0 +1,4 @@
+/proc/t()
+	rand(50)
+		return 1
+	return 2

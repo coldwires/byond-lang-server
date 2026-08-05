@@ -1,0 +1,4 @@
+/proc/t()
+	var/list/L = list(1)
+	var/x = L[1
+	return x

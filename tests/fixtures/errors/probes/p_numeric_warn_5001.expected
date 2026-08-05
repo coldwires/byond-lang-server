@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: p_numeric_warn_5001
+2 warning L: var will be initialized in a hidden init proc; prefer initializing only as needed

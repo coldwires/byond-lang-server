@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_label_no_loop
+2 warning lbl: unused label
+3 warning x: variable defined but not used

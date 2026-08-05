@@ -1,0 +1,3 @@
+/proc/t(a)
+	switch(a)
+	return 1

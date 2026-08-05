@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w3011_var_before_def
+2 warning z: use of z precedes its definition
+3 warning z: definition is here

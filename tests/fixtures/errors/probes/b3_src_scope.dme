@@ -1,0 +1,2 @@
+/datum/proc/t()
+	return src::nope

@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b3_rand_block
+2 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+3 error : missing expression

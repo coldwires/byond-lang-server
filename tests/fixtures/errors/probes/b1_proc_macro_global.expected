@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_proc_macro_global
+1 error __PROC__: __PROC__ macro cannot be used here

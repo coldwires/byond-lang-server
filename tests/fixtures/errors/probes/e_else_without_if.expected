@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: e_else_without_if
+2 warning empty 'else' clause
+2 error else: 'else' clause without preceding 'if' statement

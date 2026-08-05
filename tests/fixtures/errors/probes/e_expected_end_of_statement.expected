@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: e_expected_end_of_statement
+2 error 2: expected end of statement
+3 error expected expression

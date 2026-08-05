@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_scope_var_type
+5 error T::p: undefined proc
+5 error ::: bad var or proc() after :: operator
+4 warning T: variable defined but not used

@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b4_set_srcloc_in
+2 error src.loc: undefined var
+2 error in: expected src on left-hand side
