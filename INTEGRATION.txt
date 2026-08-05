@@ -6,7 +6,7 @@
  bug in the doc - say so.
 
  ABI version at last update: 0.11  (19 exports, cdecl, six RIDs)
- Last updated: 2026-08-03
+ Last updated: 2026-08-04
 ================================================================================
 
 
@@ -513,6 +513,37 @@ WHAT YOU GET TODAY
   character in it and check the colours still line up.
 
 
+  LINE ENDINGS - THE OTHER TEXT TRAP, AND THIS ONE IS YOUR PROBLEM NOT OURS
+  --------------------------------------------------------------------------
+  DM files are usually CRLF on Windows. Editor frameworks normalise hard:
+  Qt's QTextDocument and QPlainTextEdit::toPlainText() always hand you \n
+  whatever was on disk, and QIODevice::Text translates on read.
+
+  FOR US THAT IS HARMLESS, as long as you push your buffer via dm_set_buffer.
+  We then analyse exactly what your editor displays, and every position we
+  return is line/column, which a \r cannot shift. SourceText treats \r\n,
+  bare \n and a lone \r as terminators, and \r never appears inside token
+  text.
+
+  FOR YOU IT IS NOT HARMLESS, for three reasons:
+
+    1. Reading with translation and writing without it rewrites EVERY LINE
+       on save. Whole-file diffs, and git blame is dead for the rest of the
+       team.
+    2. DM's {" multiline "} strings carry their newlines as CONTENT.
+       Converting endings inside one changes program data, not formatting.
+    3. Offsets computed from your buffer will not match offsets into the
+       file on disk.
+
+  DO THE ROUND TRIP YOURSELF. No editor framework does it for you:
+
+    - open with QFile::ReadOnly WITHOUT QIODevice::Text, so bytes arrive raw
+    - sniff the dominant ending, store it per document
+    - normalise to LF internally - correct, and what this library wants
+    - re-apply the stored ending on save
+    - put "*.dm text" in the game repo's .gitattributes so git agrees
+
+
 --------------------------------------------------------------------------------
  6. COLOURS
 --------------------------------------------------------------------------------
@@ -655,9 +686,36 @@ WHAT YOU GET TODAY
   Do not call dm_set_buffer with identical text on every paint. That throws
   away the cache and re-lexes. Call it when the text actually changes.
 
-  Incremental re-lexing (only the edited region) is a later milestone. Say
-  something if you hit a file where the current approach is too slow, ideally
-  with the file size.
+  WHAT AN EDIT COSTS NOW, WHICH IS THE NUMBER BEHIND EVERY "DEBOUNCE IT"
+  ABOVE. The calls that need the object tree - dm_complete_at,
+  dm_definition_at, dm_hover_at, dm_workspace_symbols, dm_query_json - used
+  to rebuild the entire project on the first call after any edit. They no
+  longer do. A file is re-read, re-walked and re-parsed only when its text or
+  the macro state reaching it actually changed, which after one keystroke is
+  one file:
+
+    100 files    (a real game)        131 ms  ->   10 ms
+    7,161 files  (/tg/station)         13.7 s  ->  909 ms
+
+  Both figures are one keystroke, warm, Release, and both were verified
+  against a build of the same text with every cache off - 335,519
+  declarations identical on the large one. Editing a #define is the
+  expensive case by design: everything downstream of it genuinely changed,
+  so that one edit costs a full rebuild and the next is fast again.
+
+  What is still whole-project is the final merge into the object tree, which
+  is most of what remains on the large figure. So: still debounce, but the
+  budget you are debouncing against is tens of milliseconds on a normal
+  project rather than a rebuild you can see.
+
+  You need do nothing to get this. We revalidate each file against its
+  last-write time and length rather than trusting the cache, chosen so that a
+  git checkout under your running IDE is still seen - no API call, nothing to
+  remember, and no staleness if a build script rewrites files behind you.
+
+  Incremental re-lexing WITHIN a single edited file (only the changed region)
+  is still not done. Say something if you hit a file where re-lexing the whole
+  buffer per keystroke is too slow, ideally with the file size.
 
 
 --------------------------------------------------------------------------------
@@ -735,6 +793,25 @@ WHAT YOU GET TODAY
         the same answers dm_query_json gives, rendered as a tree
         --subtypes <path> / --members <path> for the other two queries
 
+  WHEN A TYPE OR MEMBER IS MISSING AND YOU WANT TO KNOW WHY, these three walk
+  the same pipeline we do, one stage at a time. Work down the list - the first
+  one that looks wrong is the stage that broke.
+
+    dotnet run --project src/Dm.Cli -- includes <dme>
+        every file the project compiles, IN COMPILE ORDER. if a file is not
+        here, nothing in it exists to us
+        --tree      show the include nesting
+        --orphans   .dm files on disk the .dme never reaches
+    dotnet run --project src/Dm.Cli -- preprocess <dme>
+        the whole project expanded, in compile order
+        --macros    which macros produced how many tokens
+        --dump      every token, showing where it traces back to
+    dotnet run --project src/Dm.Cli -- tree <dme>
+        the object tree, built in compile order
+        --under <path>     what is declared beneath a type
+        --members <path>   one type's members, inherited included
+        --problems         parse diagnostics grouped by message
+
     dotnet run --project src/Dm.Cli -- complete <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- definition <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- hover <dme> <file> <line> <col>
@@ -766,14 +843,23 @@ WHAT YOU GET TODAY
     M7   go to definition, hover, workspace symbols,
          object tree bulk queries                            DONE
          that is team v1: everything an IDE needs for its panels
-    M8   .dmi icon states                   (independent, could come earlier)
-    M9   incremental reparse + performance
+    M9   incremental reparse + performance                   DONE
+         no API change. after an edit we re-read, re-walk and re-parse only
+         the files whose text or macro state actually changed - 1 of 7,161
+         on a project that size. see section 10 for what this means for you
+    M8   .dmi icon states                   (independent, unscheduled)
+         passed over so M9 could land before public users arrive with large
+         codebases. still an afternoon's work - say so if you are building
+         an icon browser and it moves back up
     M10  LSP server, for editors that speak it
-    M11  semantic diagnostics, find-references, rename
+    M11  semantic diagnostics, find-references, rename       STARTED
+         the differential harness is in: we run dm.exe over a project and
+         diff its diagnostics against ours, so every check added from here
+         is measured against the compiler from its first commit. no calls
+         for you yet - when they arrive they come through the same
+         dm_document_symbols document the syntax errors already use
 
-  If your ordering needs differ from this, say so. M8 in particular is a small
-  self-contained piece and can be pulled forward if you are building an icon
-  browser sooner.
+  If your ordering needs differ from this, say so.
 
 
 --------------------------------------------------------------------------------

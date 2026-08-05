@@ -148,8 +148,11 @@ is not the one you wrote. Comment detection beats path separation.
 Identical values, not merely equivalent. They can be mixed inside one path.
 
 This holds **mid-path only**. A *leading* `.` is a different thing entirely — a relative path that
-searches upward through the code tree from the current position, first hit wins. So a leading dot
-carries search semantics a mid-path dot does not, and the two should not be conflated.
+searches upward through the code tree from the current position, and the search is more particular
+than "first hit wins": it validates the whole remaining path, backtracks when a nearer candidate
+does not carry it, and ignores `parent_type`. The exact rule, with the cases that pin it down, is
+[further below](#compile-only-what-a-leading--actually-searches). A leading dot carries search
+semantics a mid-path dot does not, and the two should not be conflated.
 
 ## 9. Raw strings take any delimiter
 

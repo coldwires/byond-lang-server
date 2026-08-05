@@ -3,8 +3,11 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M7 complete · M9 past its target · M11 started · ABI 0.11**
-> · Last updated: 2026-08-04
+> Status: **M0–M7 complete · M8 passed over · M9 past its target · M11 started · ABI 0.11**
+> · 638 tests · Last updated: 2026-08-05
+>
+> No commit count here: it is wrong again the moment anything is committed, which
+> is exactly how the last one went stale.
 
 ---
 
@@ -312,8 +315,9 @@ DM files are commonly CRLF on Windows. Editors normalize aggressively — Qt's `
 - Combined with the pushed-buffer rule in §4, a client that normalizes its buffer to LF is
   analysing exactly what it displays, and nothing drifts.
 
-**Client guidance** (in `INTEGRATION.txt`): detect the dominant line ending on load, normalize
-to LF internally, store the original, and re-apply on save. Round-tripping is the client's job; no
+**Client guidance** lives in `INTEGRATION.txt` §5, beside the position-encoding trap, since both are
+ways a client's text representation can silently disagree with ours: detect the dominant line ending
+on load, normalize to LF internally, store the original, and re-apply on save. Round-tripping is the client's job; no
 editor framework does it automatically. Failing to do so rewrites every line of a file on save,
 which destroys `git blame` for the rest of the team. Note also that DM's `{" ... "}` multiline
 strings carry their newlines as content, so converting endings inside one changes program data,
@@ -913,14 +917,17 @@ collapsed row costs a second call. And a capped listing reports `truncated` rath
 caller to compare counts, because a list exactly as long as the limit is indistinguishable from one
 that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is lying.
 
-### M8 — `.dmi` icon states *(independent; schedule anytime)*
+### M8 — `.dmi` icon states *(independent; passed over, unscheduled)*
 
 - Parse the PNG `zTXt` chunk. BYOND stores a plaintext metadata block enumerating every
   `state = "..."` with dirs and frame counts.
 - No dependency on the compiler pipeline. Roughly an afternoon, and it parallelizes cleanly to
-  another team member during M4.
+  another team member.
+- **Passed over at the M8/M9 fork by the user's call**, on the argument that M10 brings public users
+  with /tg/station-sized codebases and incrementality has to land before they arrive. Nothing blocks
+  it; it can be picked up in any gap. mlaas has 166 `.dmi` files to test against.
 
-### M9 — Incrementality and performance *(in progress)*
+### M9 — Incrementality and performance *(target met; the tree merge remains)*
 
 - ✅ `dmc bench` — the baseline, because an optimisation without one is a guess. It times a cold open
   by phase and then the thing that actually matters: push a buffer, ask a question, measure. The
@@ -941,12 +948,15 @@ that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is
   5,806 → 3,133 ms**, with 1 of 7,161 files re-walked. Verified end to end by `dmc bench --verify`,
   which builds the same edited project with the caches off and compares: **335,519 declarations
   identical** on /tg/station.
-- ⬜ Reparse only the edited file. Preprocessor state flows sequentially through include order, so
-  editing a file containing `#define`s invalidates everything downstream — mitigate via the M3
-  boundary snapshots: re-run downstream files only if the exit-state hash changed.
-- ⬜ Cache the object tree per-file, rebuilding affected subtrees only.
-- Target: warm completion under 30ms on the team's game. Complete before M10 — public users will
-  arrive with larger codebases.
+- ✅ Reparse only the edited file. Preprocessor state flows sequentially through include order, so
+  editing a file containing `#define`s invalidates everything downstream; the mitigation is the one
+  planned here — each include step records the macro state hash it produced, and a mismatch on
+  replay makes the build redo itself with the caches off. **1 of 7,161 files is re-read, re-walked
+  and re-parsed after an edit** on /tg/station.
+- ⬜ Cache the object tree per-file, rebuilding affected subtrees only. **The last phase still
+  rebuilding the whole project**, and at 411 ms of /tg/station's 909 the largest one.
+- Target: warm completion under 30ms on the team's game. **Met — mlaas is at 10 ms.** Complete
+  before M10, since public users will arrive with larger codebases.
 
 **Measured 2026-08-03/04, Release build, `dmc bench`.** Where it stands after the two caches:
 
@@ -1677,9 +1687,29 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   answer, so the check is a diff rather than a judgement call: `-o` for the object tree, `-l` for the
   include graph, `-code_tree` for declarations. `-o` already found three declaration bugs. **`-l` is
   now checked too, and `dmc includes` matches it exactly on mlaas** — 102 of 102 source files,
-  nothing missing and nothing extra. Re-run it when M9 makes the include walk incremental, since that
-  is the change most likely to reorder the walk silently. `-code_tree` is the one oracle still
-  unwired.
+  nothing missing and nothing extra. **Re-run after M9, 2026-08-05, and still exact**: the set is
+  102/102 and the 100 DM source files are identical *position for position*, so making the walk
+  incremental did not reorder it. That was worth checking separately, because `dmc bench --verify`
+  compares declarations rather than file order and could not have seen a reordering.
+  `-code_tree` is the one oracle still unwired.
+
+  **Set equality is the weaker half of this check and it is the one a `sort | comm` gives you.**
+  Include order decides override resolution, so two identical sets in different orders are different
+  programs. Diff the sequences positionally, and perturb one side to confirm the diff can actually
+  see a swap — the ordered check here was written with a two-line swap as its control, on the same
+  reasoning as every accuracy test in §8.
+
+  Three traps in this particular diff, each of which produces a confident wrong answer, and all
+  three fired on the first attempt:
+
+  - **`-l` lists the `.dmf` and `.dmm` twice**, once relative and once absolute. Left alone,
+    `sort -u` keeps both spellings and reports four misses that are one file each.
+  - **`dmc includes` annotates non-source entries** (`  [interface]`, `  [map]`), so an
+    extension-anchored regex silently drops them from *our* side and the counts disagree by two.
+  - **`-l` lists those two files at the end of its block** while we list them at their `#include`
+    position, so the ordered diff shows a difference that is not one. Neither contributes
+    declarations, and `dm.exe` in fact loads both *before* any source; filter to `.dm`/`.dme` before
+    comparing order.
 
   One wrinkle worth knowing: **`-l` lists every file the build touches, not just the include
   graph.** On mlaas it reports 234 entries where the include graph has 102, the difference being
@@ -1901,10 +1931,10 @@ it.
 | 5 | Third IDE's language | Nothing; may justify a prebuilt binding package | Open |
 | 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | Deferred |
 | 7 | Can a brace block contain indented sub-blocks? | M4 | **Resolved** — yes, and the two nest freely. `-o` prints an identical tree for the braced and indented forms. See §8. |
+| 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | **Resolved** — mlaas is the correctness harness and is exact against `dm.exe -o`. See §9. |
 | 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
 | 10 | Source encoding: some old files are Windows-1252, not UTF-8 | M3 | **Resolved** — `SourceFileReader` detects it. |
 | 11 | What does `#include` do inside a false `#ifdef`? | M3 | **Resolved** — not followed. `IncludeGraph` walks includes only while `ConditionalStack.IsActive`. |
-| 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | Open — see §9 |
 
 ---
 
@@ -2023,3 +2053,30 @@ it.
 - **2026-08-03** — `#pragma syntax` now survives preprocessing. It is the one directive the parser
   rather than the preprocessor consumes, so the walk emits it back into the stream along with the
   `push`/`pop` that scope it.
+- **2026-08-04** — Doc accuracy pass across all four live docs, with every countable fact
+  re-measured rather than copied: 638 tests, 109 commits, 19 exports all `cdecl`, six RIDs,
+  `dm_core.dll` 1.98 MB, `abi-smoke` 110 checks reporting 0.11. What was wrong was the same shape
+  both earlier syncs found — a settled decision still described as open. `ROADMAP.txt` and
+  `state.md` both still had the x86 calling convention undecided, the C++ smoke test never built
+  32-bit and `win-x86` missing from CI, all three of which had landed in the same session that
+  wrote them; `ROADMAP.txt` also carried the DreamMaker-editor-is-a-RichEdit inference the 32-bit
+  client's measurement had already retired. M9's "reparse only the edited file" bullet was still
+  open here against five landed levers, and the corrected leading-`.` rule had not reached
+  `ROADMAP.txt` or the language notes, both of which still said "first hit wins" — the exact
+  wording §4a records as the one that would have been implemented against the inheritance chain.
+- **2026-08-05** — `dmc includes` re-diffed against `dm.exe -l` after M9, which §9 had been asking
+  for since the walk went incremental. **Exact both ways**: 102/102 files, and the 100 DM source
+  files identical position for position, so five levers of caching reordered nothing. The ordered
+  check is the one that matters and is not the one a `sort | comm` performs — include order decides
+  override resolution — so it carries a two-line swap as its control. Three harness traps fired on
+  the first attempt and it confidently reported four misses that were two files; they are written
+  down in §9 rather than left to be rediscovered.
+- **2026-08-05** — `ROADMAP.txt` cut from 1,047 lines to 234. It was meant to be "the short version"
+  and had become a paraphrase of this document in different words, which is *why* the two
+  contradicted each other twice: the same fact in two places drifts, and the lint matrix, the `-o`
+  blind spot and the leading-`.` rule each had three or four copies across the docs. It is a status
+  board now, with a "where the detail lives" routing table pointing here. Nothing was deleted
+  outright — what was ROADMAP-only moved to the doc that should always have held it. The
+  line-ending client guidance went to `INTEGRATION.txt` §5, which §4b had been *claiming* held it
+  while ROADMAP held the only copy, and the pipeline-debugging commands (`includes`, `preprocess`,
+  `tree`) went to §12, where an IDE dev asking "why is this type missing" will actually look.
