@@ -23,6 +23,7 @@ internal static class MacroBuilder
             name,
             parameters: null,
             isVariadic: false,
+            hasNamedRest: false,
             body: new[] { new Token(TokenKind.Number, new TextSpan(0, literal.Length)) },
             source: text,
             nameSpan: new TextSpan(0, 0));
@@ -36,6 +37,7 @@ internal static class MacroBuilder
             name,
             parameters: null,
             isVariadic: false,
+            hasNamedRest: false,
             body: System.Array.Empty<Token>(),
             source: text,
             nameSpan: new TextSpan(0, 0));

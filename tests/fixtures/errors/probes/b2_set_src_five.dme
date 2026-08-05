@@ -1,0 +1,3 @@
+/mob/verb/v()
+	set src = 5
+	return 1

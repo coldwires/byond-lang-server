@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_pragma_warn_junk
+1 error unexpected character '$' (ascii 36)
+1 error expected warning, comma, or end of line

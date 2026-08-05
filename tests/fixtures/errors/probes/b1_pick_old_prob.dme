@@ -1,0 +1,2 @@
+/proc/t()
+	return pick(50:1, 30:2)

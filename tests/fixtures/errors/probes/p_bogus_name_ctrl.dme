@@ -1,0 +1,3 @@
+#pragma ignore bogus_warning_name
+/proc/t()
+	return 1

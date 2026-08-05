@@ -1,0 +1,7 @@
+// Must compile with 0 errors and 0 warnings, and every check must pass.
+// The harness is included last so the globals it declares are defined before
+// world/New() runs, and first in the file list so its own code is simple.
+#include "_harness.dm"
+#include "semantics.dm"
+#include "parsing.dm"
+#include "macros.dm"

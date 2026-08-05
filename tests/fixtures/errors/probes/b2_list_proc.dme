@@ -1,0 +1,2 @@
+/list/proc/p()
+	return 1

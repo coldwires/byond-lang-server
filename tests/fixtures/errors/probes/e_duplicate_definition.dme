@@ -1,0 +1,4 @@
+/proc/t()
+	return 1
+/proc/t()
+	return 2

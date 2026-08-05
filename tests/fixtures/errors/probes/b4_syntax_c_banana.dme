@@ -1,0 +1,3 @@
+#pragma syntax C banana
+/proc/t()
+	return 1

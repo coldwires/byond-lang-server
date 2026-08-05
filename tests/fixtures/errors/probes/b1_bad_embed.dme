@@ -1,0 +1,3 @@
+/proc/t()
+	var/x = "[+]"
+	return x

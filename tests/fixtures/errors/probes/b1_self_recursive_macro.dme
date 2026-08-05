@@ -1,0 +1,3 @@
+#define SELF SELF+1
+/proc/t()
+	return SELF

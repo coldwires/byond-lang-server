@@ -1,0 +1,2 @@
+# Empty: ok.dme must compile with 0 errors and 0 warnings.
+# It is also the only fixture that is RUN - see run.ps1 section 1.

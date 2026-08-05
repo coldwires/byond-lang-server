@@ -1,0 +1,55 @@
+# How many of the mined probes we currently say ANYTHING about, and which.
+#
+# A ratchet, not a gate. These are 252 messages dm.exe produces; we implement a
+# fraction of them, so "must agree on all" would fail 252 times and teach
+# nothing. What must not happen is going DOWN - a change that silences a check
+# we already had.
+#
+# Regenerate deliberately, and only after reading why the number moved:
+#   pwsh tests/fixtures/run.ps1 -Probes -UpdateBaseline
+#
+# NOTE ON `invented` HERE: these files are broken on purpose. dm.exe stops after
+# the first error; we recover and carry on, which is a FEATURE - an editor buffer
+# is malformed on every keystroke. So extra diagnostics on a must-fail file are
+# not spurious, and the zero-invented rule applies to code that COMPILES CLEAN.
+#
+agreed 38
+total 252
+probe b1_backtick
+probe b1_bad_embed
+probe b1_do_no_while
+probe b1_dot_string
+probe b1_for_no_commas
+probe b1_if_unclosed
+probe b1_in_no_rhs
+probe b1_index_unclosed
+probe b1_list_unclosed
+probe b1_macro_missing_paren
+probe b1_missing_lhs
+probe b1_pick_old_prob
+probe b1_self_recursive_macro
+probe b1_stray_char
+probe b1_switch_two_args
+probe b1_ternary_no_colon
+probe b1_unterm_embed
+probe b1_while_empty
+probe b2_as_five
+probe b2_at_eof
+probe b2_macro_bracket_arg
+probe b2_malformed_for
+probe b2_step_in_list
+probe b2_switch_needs_if
+probe b2_switch_stmt_body
+probe b2_switch_unclosed
+probe b2_var_quoted
+probe b2_var_reserved
+probe b3_for_var_bare
+probe b3_return_var
+probe b4_bracket_literal
+probe b4_for_typed_bare
+probe b4_op_index_three
+probe b4_vardecl_in_call
+probe e_catch_without_try
+probe e_else_without_if
+probe e_incorrect_macro_args
+probe e_missing_expression

@@ -1,0 +1,3 @@
+/proc/t()
+	set background
+	return 1

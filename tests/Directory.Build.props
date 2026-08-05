@@ -15,6 +15,9 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <!-- Dynamic skips. xunit 2.x cannot skip at runtime, and a fixture that
+         quietly does nothing because BYOND is absent must not report as a pass. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
   </ItemGroup>
 
   <ItemGroup>

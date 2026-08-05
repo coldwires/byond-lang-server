@@ -1,0 +1,4 @@
+/proc/t()
+	for(var/i in )
+		return i
+	return 2

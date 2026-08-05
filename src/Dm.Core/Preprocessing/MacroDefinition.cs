@@ -21,6 +21,7 @@ public sealed class MacroDefinition
         string name,
         IReadOnlyList<string>? parameters,
         bool isVariadic,
+        bool hasNamedRest,
         IReadOnlyList<Token> body,
         SourceText source,
         TextSpan nameSpan)
@@ -28,6 +29,7 @@ public sealed class MacroDefinition
         Name = name;
         Parameters = parameters;
         IsVariadic = isVariadic;
+        HasNamedRest = hasNamedRest;
         Body = body;
         Source = source;
         NameSpan = nameSpan;
@@ -43,6 +45,18 @@ public sealed class MacroDefinition
     /// and is optional.
     /// </summary>
     public bool IsVariadic { get; }
+
+    /// <summary>
+    /// True for <c>M(a, rest...)</c>, false for the anonymous <c>M(...)</c>.
+    /// </summary>
+    /// <remarks>
+    /// Both are variadic and they bind differently. A named rest parameter absorbs every remaining
+    /// argument, so the last parameter is where they land. An anonymous one has nowhere to put them
+    /// and simply discards them — so <c>#define MIXED(a, ...) (a)</c> called as
+    /// <c>MIXED(7, 8, 9)</c> is <c>(7)</c>, not <c>(7, 8, 9)</c>. Treating the two alike made the
+    /// first named parameter swallow the lot.
+    /// </remarks>
+    public bool HasNamedRest { get; }
 
     /// <summary>Replacement tokens, indexing <see cref="Source"/>.</summary>
     public IReadOnlyList<Token> Body { get; }
@@ -90,6 +104,7 @@ public sealed class MacroDefinition
 
         List<string>? parameters = null;
         bool variadic = false;
+        bool namedRest = false;
 
         // Function-like only when the '(' touches the name. With whitespace between, the paren is
         // part of the replacement text instead.
@@ -115,6 +130,7 @@ public sealed class MacroDefinition
                     if (index < directive.ArgumentEnd && IsEllipsis(tokens, index, directive.ArgumentEnd))
                     {
                         variadic = true;
+                        namedRest = true;
                         index = SkipEllipsis(tokens, index);
                     }
 
@@ -123,6 +139,19 @@ public sealed class MacroDefinition
                 else if (parameter.Kind == TokenKind.Comma)
                 {
                     index++;
+                }
+
+                // A bare `...` with no name in front of it. DM has both spellings and real code uses
+                // both: /tg/station defines PERFORM_ALL_TESTS as `(focus...)` in one branch of an
+                // `#ifdef` and `(...)` in the other, so which one is live depends on the build's
+                // flags. Rejecting the anonymous form made every call to it an arity error.
+                //
+                // The arguments are unreachable without a name, so nothing is recorded for them -
+                // the macro simply accepts any number.
+                else if (IsEllipsis(tokens, index, directive.ArgumentEnd))
+                {
+                    variadic = true;
+                    index = SkipEllipsis(tokens, index);
                 }
                 else
                 {
@@ -150,7 +179,7 @@ public sealed class MacroDefinition
                 body.Add(tokens[i]);
         }
 
-        return new MacroDefinition(name, parameters, variadic, body, lex.Text, nameToken.Span);
+        return new MacroDefinition(name, parameters, variadic, namedRest, body, lex.Text, nameToken.Span);
     }
 
     /// <summary>

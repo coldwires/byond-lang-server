@@ -1,0 +1,3 @@
+/datum/var/v = 1
+/proc/t()
+	return /datum::nope

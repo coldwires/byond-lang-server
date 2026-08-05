@@ -1,0 +1,4 @@
+/proc/t()
+	for(var/mob/ in world)
+		break
+	return 0

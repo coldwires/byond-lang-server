@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_typed_var_undefined
+3 error returno: undefined type: /obj/never_defined
+2 warning o: variable defined but not used

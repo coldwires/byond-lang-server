@@ -1,0 +1,3 @@
+/mob/verb/v()
+	set bogus in world
+	return 1

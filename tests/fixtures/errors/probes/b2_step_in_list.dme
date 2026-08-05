@@ -1,0 +1,5 @@
+/proc/t()
+	var/list/L = list(1,2)
+	for(var/i in L step 2)
+		return i
+	return 0

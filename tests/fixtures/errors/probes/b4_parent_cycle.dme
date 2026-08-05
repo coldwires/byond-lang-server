@@ -1,0 +1,4 @@
+/obj/a
+	parent_type = /obj/b
+/obj/b
+	parent_type = /obj/a

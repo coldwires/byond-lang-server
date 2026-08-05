@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w4001_old_new_syntax
+3 error o: unknown variable type
+3 warning new: This appears like the old syntax for new().  The type is now passed like this: new Type(args).  You can leave out the type if assigning a variable of the same type.

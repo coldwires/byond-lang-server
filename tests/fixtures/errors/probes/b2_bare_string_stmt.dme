@@ -1,0 +1,3 @@
+/proc/t()
+	"just a string"
+	return 1

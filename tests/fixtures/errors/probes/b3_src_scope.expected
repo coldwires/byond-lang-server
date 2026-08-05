@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b3_src_scope
+2 error src::nope: undefined var
+2 error ::: bad var or proc() after :: operator

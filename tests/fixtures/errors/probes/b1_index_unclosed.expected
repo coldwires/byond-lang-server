@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_index_unclosed
+4 error return: missing comma ',' or right-paren ')'
+4 error return: expected end of statement

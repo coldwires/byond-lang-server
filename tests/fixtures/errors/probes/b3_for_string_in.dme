@@ -1,0 +1,4 @@
+/proc/t()
+	for("x" in list(1))
+		return 1
+	return 0

@@ -1,0 +1,4 @@
+#if (1
+/proc/t()
+	return 1
+#endif

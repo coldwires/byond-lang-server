@@ -40,18 +40,15 @@ internal static class DiagnosticDiff
         RegexOptions.Compiled);
 
     /// <summary>
-    /// Diagnostics we emit on purpose that <c>dm.exe</c> has no opinion about.
+    /// Why a deliberate divergence is here, for printing beside its count.
     /// </summary>
     /// <remarks>
-    /// Without this the invented column is never empty, and a column that is never empty is one
-    /// people stop reading — which is the whole value of the diff. Anything listed here is a
-    /// deliberate divergence with a reason, not a gap to close. Adding to it should feel expensive.
+    /// The set itself lives in <see cref="DeliberateDivergences"/> so the fixture tests use the same
+    /// one. A second copy sat here until the tests were written, and the two disagreed immediately:
+    /// a fixture that compiles clean failed a zero-invented check over a warning we meant to emit.
     /// </remarks>
-    private static readonly Dictionary<string, string> ByDesign = new()
-    {
-        ["DM0102"] = "duplicate include - the compiler ignores the repeat silently, we surface it",
-        ["DM0300"] = "proc block inside a var block - compiles clean and declares nothing",
-    };
+    private static string Reason(string id)
+        => DeliberateDivergences.TryGetReason(id, out string reason) ? reason : string.Empty;
 
     private readonly record struct Entry(string File, int Line, string Severity)
     {
@@ -93,10 +90,10 @@ internal static class DiagnosticDiff
         List<(Entry Key, string Message)> unmatched = ours.Where(o => !theirKeys.Contains(o.Key)).ToList();
 
         List<(Entry Key, string Message)> designed =
-            unmatched.Where(o => ByDesign.ContainsKey(IdOf(o.Message))).ToList();
+            unmatched.Where(o => DeliberateDivergences.Contains(IdOf(o.Message))).ToList();
 
         List<(Entry Key, string Message)> extra =
-            unmatched.Where(o => !ByDesign.ContainsKey(IdOf(o.Message))).ToList();
+            unmatched.Where(o => !DeliberateDivergences.Contains(IdOf(o.Message))).ToList();
 
         Report("WE MISS", missed, args);
         Report("WE INVENT", extra, args);
@@ -108,7 +105,7 @@ internal static class DiagnosticDiff
             foreach (IGrouping<string, (Entry Key, string Message)> group in
                      designed.GroupBy(d => IdOf(d.Message)).OrderByDescending(g => g.Count()))
             {
-                Console.Out.WriteLine($"    {group.Count(),6}  {group.Key}  {ByDesign[group.Key]}");
+                Console.Out.WriteLine($"    {group.Count(),6}  {group.Key}  {Reason(group.Key)}");
             }
 
             Console.Out.WriteLine();

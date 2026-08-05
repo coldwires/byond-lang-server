@@ -1,0 +1,2 @@
+#pragma warn 5001
+/datum/var/list/L = list(1)

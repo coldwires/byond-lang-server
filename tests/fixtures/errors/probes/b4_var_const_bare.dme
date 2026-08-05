@@ -1,0 +1,3 @@
+/proc/t()
+	var/const/
+	return 1

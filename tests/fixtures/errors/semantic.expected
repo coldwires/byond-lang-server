@@ -1,0 +1,11 @@
+# dm.exe 516.1666. Format: <line> <severity> <substring of the message>
+# Captured from the compiler rather than written by hand.
+28 error undefined var
+27 warning unused_var
+32 error undefined proc
+31 warning unused_var
+38 error undefined var
+37 warning unused_var
+44 error undefined var
+43 warning unused_var
+53 error undefined type: /clothing

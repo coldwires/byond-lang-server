@@ -1,0 +1,2 @@
+/datum/var/global/g = 1
+/datum/sub/g = 2

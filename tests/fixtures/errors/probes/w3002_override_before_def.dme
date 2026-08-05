@@ -1,0 +1,4 @@
+/datum/d/mine()
+	return 1
+/datum/d/proc/mine()
+	return 2

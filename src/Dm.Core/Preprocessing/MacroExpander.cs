@@ -223,7 +223,11 @@ internal sealed class MacroExpander
 
         for (int p = 0; p < parameters.Count; p++)
         {
-            bool isVariadicTail = macro.IsVariadic && p == parameters.Count - 1;
+            // Only a NAMED rest parameter absorbs the remainder. With the anonymous `M(a, ...)`
+            // form there is nowhere to put the extras and they are discarded, so `MIXED(7, 8, 9)`
+            // on `#define MIXED(a, ...) (a)` is `(7)`. Treating the two alike made `a` swallow all
+            // three.
+            bool isVariadicTail = macro.HasNamedRest && p == parameters.Count - 1;
 
             if (isVariadicTail)
             {

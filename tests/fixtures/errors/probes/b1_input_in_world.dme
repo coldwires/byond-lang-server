@@ -1,0 +1,3 @@
+/proc/t()
+	var/x = input("p") as num|text in world
+	return x

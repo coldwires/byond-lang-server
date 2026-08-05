@@ -1,0 +1,5 @@
+/datum/proc/p()
+	return 1
+/proc/t()
+	var/datum/T = new
+	return T::p()

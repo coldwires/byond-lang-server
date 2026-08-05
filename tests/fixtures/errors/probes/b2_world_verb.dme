@@ -1,0 +1,2 @@
+/world/verb/v()
+	return 1

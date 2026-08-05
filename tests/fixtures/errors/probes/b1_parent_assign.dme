@@ -1,0 +1,3 @@
+/proc/t()
+	.. = 5
+	return 1

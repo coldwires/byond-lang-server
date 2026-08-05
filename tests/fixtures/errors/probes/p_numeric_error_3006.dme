@@ -1,0 +1,4 @@
+#pragma error 3006
+/proc/t()
+	var/x
+	return 1

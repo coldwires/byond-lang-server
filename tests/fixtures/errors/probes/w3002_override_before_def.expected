@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w3002_override_before_def
+1 warning mine: procedure override precedes definition
+3 warning mine: definition is here

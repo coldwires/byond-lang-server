@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_var_quoted
+2 error "x": bad variable definition
+2 error var: invalid variable name: reserved word

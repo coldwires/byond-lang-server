@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_if_self_macro
+2 error macro recursion level too deep
+2 error unexpected token: end of file

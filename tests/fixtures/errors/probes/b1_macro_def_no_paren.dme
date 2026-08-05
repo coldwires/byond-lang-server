@@ -1,0 +1,3 @@
+#define M(a b) a
+/proc/t()
+	return 1

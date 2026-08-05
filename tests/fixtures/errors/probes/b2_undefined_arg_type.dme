@@ -1,0 +1,2 @@
+/mob/verb/v(a as /obj/thing)
+	return a

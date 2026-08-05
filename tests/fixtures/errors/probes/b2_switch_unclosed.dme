@@ -1,0 +1,4 @@
+/proc/t(a)
+	switch(a
+		if(1)
+			return 1

@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b1_bad_arg_def
+1 error bad: missing comma ',' or right-paren ')'
+1 error bad argument definition
+1 error unbalanced )

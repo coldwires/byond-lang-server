@@ -1,0 +1,2 @@
+var/q = 30
+/world/fps = q

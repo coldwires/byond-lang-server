@@ -326,6 +326,29 @@ public class MacroExpanderTests
     }
 
     /// <summary>
+    /// The anonymous <c>M(...)</c> variadic, which is a different binding from <c>M(a, rest...)</c>.
+    /// </summary>
+    /// <remarks>
+    /// /tg/station defines <c>PERFORM_ALL_TESTS</c> both ways, one per branch of an <c>#ifdef</c>,
+    /// so which is live depends on the build's flags. Rejecting the anonymous form made every call
+    /// an arity error — 54 on that project. Then accepting it was not enough: a named rest absorbs
+    /// the remaining arguments while an anonymous one has nowhere to put them and discards them, so
+    /// treating the two alike made the first parameter swallow the lot.
+    /// </remarks>
+    [Fact]
+    public void An_anonymous_variadic_takes_any_arity_and_discards_the_extras()
+    {
+        Assert.Equal("( 1 )", Expand("ANON(a, b, c)", "ANON(...) (1)"));
+        Assert.Equal("( 1 )", Expand("ANON()", "ANON(...) (1)"));
+        Assert.Equal("( 7 )", Expand("MIXED(7, 8, 9)", "MIXED(a, ...) (a)"));
+    }
+
+    /// <summary>A named rest parameter still absorbs the remainder, commas included.</summary>
+    [Fact]
+    public void A_named_rest_parameter_still_absorbs()
+        => Assert.Equal("( 8 , 9 )", Expand("NAMED(7, 8, 9)", "NAMED(a, rest...) (rest)"));
+
+    /// <summary>
     /// An argument containing <c>?[</c> keeps everything after the matching <c>]</c>.
     /// </summary>
     /// <remarks>

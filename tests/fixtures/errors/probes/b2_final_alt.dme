@@ -1,0 +1,4 @@
+/datum/final/proc/p()
+	return 1
+/datum/sub/p()
+	return 2

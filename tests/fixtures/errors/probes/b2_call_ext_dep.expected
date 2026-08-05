@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b2_call_ext_dep
+2 warning call: call() for external libraries has been deprecated; Use call_ext() instead

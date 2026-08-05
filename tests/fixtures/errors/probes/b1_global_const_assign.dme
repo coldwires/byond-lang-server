@@ -1,0 +1,4 @@
+var/const/gc = 1
+/proc/t()
+	gc = 2
+	return gc

@@ -1,0 +1,5 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: b3_for_var_bare
+2 error var: invalid variable name: reserved word
+2 error /:  compile failed (possible infinite cross-reference loop)

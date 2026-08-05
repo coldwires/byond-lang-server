@@ -1,0 +1,4 @@
+/datum/var/v = 1
+/proc/t()
+	/datum::v = 2
+	return 1

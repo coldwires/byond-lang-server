@@ -1,0 +1,6 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: e_missing_expression
+2 error missing expression
+3 error return: missing comma ',' or right-paren ')'
+3 error return: expected end of statement

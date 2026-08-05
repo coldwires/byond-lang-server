@@ -1,0 +1,4 @@
+/proc/a()
+	proc/b()
+		return 1
+	return 2

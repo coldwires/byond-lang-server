@@ -1,0 +1,6 @@
+/proc/t()
+	lbl:
+		var/x = 1
+	for(var/i in 1 to 3)
+		break lbl
+	return 1

@@ -1,0 +1,4 @@
+# Mined from the diagnostic lab by tools/mine_probes.py.
+# Recompiled here, so this records what dm.exe said on this machine.
+# probe: w3015_requires_version
+3 warning alist: feature requires version 516 but #pragma compatibility is set to 515

@@ -1,0 +1,4 @@
+#if 12abc
+#endif
+/proc/t()
+	return 1

@@ -1,0 +1,4 @@
+/proc/t()
+	try
+		return 1
+	return 2

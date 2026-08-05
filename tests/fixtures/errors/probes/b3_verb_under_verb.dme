@@ -1,0 +1,2 @@
+/mob/verb/v/verb/w()
+	return 1

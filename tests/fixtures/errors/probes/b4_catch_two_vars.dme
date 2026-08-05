@@ -1,0 +1,5 @@
+/proc/t()
+	try
+		return 1
+	catch(var/a, var/b)
+	return 2

@@ -1,0 +1,3 @@
+/proc/t()
+	usr.filters = filter(5)
+	return 1

@@ -1,0 +1,4 @@
+#pragma compatibility 515
+/proc/t()
+	var/alist/a = alist("k" = 1)
+	return a

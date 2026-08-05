@@ -1,0 +1,5 @@
+/proc/f()
+	return 1
+/proc/t()
+	var/p = .proc/f
+	return p()
