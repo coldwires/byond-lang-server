@@ -762,6 +762,16 @@ A bare override shows up in `-o` as a second entry rather than replacing the fir
 
 ## The two lint warnings, and what actually triggers them
 
+There are at least three warning names, and they do not all behave the same way. **`unused_var` is
+on by default** — `var/unused = 1` reports `warning (unused_var): unused: variable defined but not
+used` with no flags at all. The two below ship **off**, which is what makes them easy to mistake for
+the whole vocabulary.
+
+The level also **flows through include order rather than resetting per file**. With
+`#pragma ignore unused_var` in the first file a `.dme` includes, an offending var in the second file
+is silent; swap the two `#include` lines and it warns. Pragma level is sequential state, like the
+macro table.
+
 `init_proc` and `frequent_call` ship **off**. `dm.exe -warn init_proc,frequent_call game.dme` turns
 them on, and the name prints inline so you can read the vocabulary off a build log:
 

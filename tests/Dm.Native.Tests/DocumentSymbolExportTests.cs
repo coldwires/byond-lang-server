@@ -16,10 +16,10 @@ public unsafe class DocumentSymbolExportTests
 {
     // Taken as function pointers because [UnmanagedCallersOnly] methods cannot be called directly
     // from managed code — which is the point: this exercises the same entry a C caller uses.
-    private static readonly unsafe delegate* unmanaged<byte*, IntPtr*, int> Open = &Exports.WorkspaceOpen;
-    private static readonly unsafe delegate* unmanaged<IntPtr, void> Close = &Exports.WorkspaceClose;
-    private static readonly unsafe delegate* unmanaged<IntPtr, byte*, byte*, int, int> Push = &Exports.SetBuffer;
-    private static readonly unsafe delegate* unmanaged<IntPtr, byte*, int, byte**, int> Symbols =
+    private static readonly unsafe delegate* unmanaged[Cdecl]<byte*, IntPtr*, int> Open = &Exports.WorkspaceOpen;
+    private static readonly unsafe delegate* unmanaged[Cdecl]<IntPtr, void> Close = &Exports.WorkspaceClose;
+    private static readonly unsafe delegate* unmanaged[Cdecl]<IntPtr, byte*, byte*, int, int> Push = &Exports.SetBuffer;
+    private static readonly unsafe delegate* unmanaged[Cdecl]<IntPtr, byte*, int, byte**, int> Symbols =
         &Exports.DocumentSymbols;
 
     private const int Utf16 = 1;

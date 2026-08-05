@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.11  (19 exports)
+ ABI version at last update: 0.11  (19 exports, cdecl, six RIDs)
  Last updated: 2026-08-03
 ================================================================================
 
@@ -76,7 +76,19 @@ WHAT YOU GET TODAY
 
     dotnet publish src/Dm.Native/Dm.Native.csproj -c Release -r win-x64
 
-  Valid RIDs: win-x64, linux-x64, linux-arm64, osx-x64, osx-arm64.
+  Valid RIDs: win-x64, win-x86, linux-x64, linux-arm64, osx-x64, osx-arm64.
+
+  ** CALLING CONVENTION IS cdecl ON EVERY PLATFORM **
+  Declared explicitly on the exports rather than left to the default. On x64
+  there is only one convention and this never comes up; on 32-bit Windows
+  NativeAOT would otherwise emit stdcall, which C, Rust, Go, Zig and Python's
+  ctypes all assume otherwise. Include dm_core.h and call - no annotation, no
+  WINAPI, no extern "stdcall". If you hand-write declarations instead, cdecl is
+  what to write, and getting it wrong on x86 corrupts the stack rather than
+  failing to link.
+
+  win-x86 exists for hosts that are themselves 32-bit. It is in CI and the C++
+  smoke test runs there, not merely links: cmake -A Win32 -DDM_RID=win-x86.
 
   ** WINDOWS GOTCHA **
   If that fails with MSB3073 and something about link.exe, the real cause is
@@ -610,11 +622,16 @@ WHAT YOU GET TODAY
   Anything you hand us is copied before the call returns. Free your own copy
   whenever you like.
 
-  USING A FREED HANDLE IS SAFE-ISH BY DESIGN. Handles carry a generation
-  counter, so a stale one returns DM_ERR_INVALID_HANDLE (or -1 / NULL) rather
-  than silently resolving to whatever object took its slot. Do not rely on
+  USING A FREED HANDLE IS SAFE-ISH BY DESIGN. A handle is an opaque id that is
+  never reused, so a stale one returns DM_ERR_INVALID_HANDLE (or -1 / NULL)
+  rather than silently resolving to whatever was opened next. Do not rely on
   this, but it means a use-after-free in your code is a clean error you can
   find, not memory corruption you cannot.
+
+  Treat the value as opaque. It is not a pointer, not an index, and carries no
+  structure worth reading - it changed shape once already, when the previous
+  encoding turned out to need 64-bit pointers and silently did not have them on
+  win-x86.
 
   Closing twice is a no-op, not a crash.
 

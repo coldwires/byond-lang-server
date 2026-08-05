@@ -39,3 +39,6 @@ tests/corpus/external/
 # OS
 Thumbs.db
 .DS_Store
+
+# Test result files from --logger trx
+TestResults/
