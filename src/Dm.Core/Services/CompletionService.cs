@@ -79,7 +79,39 @@ public static class CompletionService
         IReadOnlyCollection<string>? macros,
         Func<string, SourceText?>? fileText,
         PositionEncoding encoding = PositionEncoding.Utf16,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int limit = 0)
+        => CompleteAt(tree, document, line, character, macros, fileText, encoding, cancellationToken,
+            documentOnly: null, limit);
+
+    /// <summary>
+    /// As above, collecting documentation for one item only.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The lazy-resolve half: a bare identifier on /tg/station offers <b>19,898</b> items and the
+    /// user reads one. With <paramref name="documentOnly"/> set, exactly one item is documented —
+    /// the rest come back with an empty string, which is what an unresolved item looks like anyway.
+    /// </para>
+    /// <para>
+    /// <b>This is a payload saving, not a speed one</b>, and it was measured rather than assumed.
+    /// Documentation is 12.7% of that 1.0 MB payload, so omitting it cuts the bytes — but the
+    /// lookups themselves run over already-cached text, and full-versus-brief timing on
+    /// /tg/station came back inside run-to-run noise (+210 ms, then −132 ms on ~11 s). The item
+    /// COUNT is the rest of the payload and neither half of this addresses it; see PLAN §9.
+    /// </para>
+    /// </remarks>
+    internal static CompletionResult CompleteAt(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        IReadOnlyCollection<string>? macros,
+        Func<string, SourceText?>? fileText,
+        PositionEncoding encoding,
+        CancellationToken cancellationToken,
+        string? documentOnly,
+        int limit = 0)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(document);
@@ -93,7 +125,7 @@ public static class CompletionService
         int index = IndexBefore(tokens, offset);
 
         if (index < 0)
-            return Identifiers(tree, document, offset, macros, fileText);
+            return Identifiers(tree, document, offset, macros, fileText, documentOnly, limit);
 
         // A partly typed word is not context; the trigger is whatever sits before it.
         if (tokens[index].Kind == TokenKind.Identifier && tokens[index].Span.End >= offset)
@@ -103,20 +135,128 @@ public static class CompletionService
 
         switch (trigger)
         {
+            // A `.` with no value in front of it is DM's return-value variable, not member access.
+            // Distinct context, empty list: the variable is untyped, and every client was having to
+            // guess that the user did not want an identifier dump after typing `.`.
+            case TokenKind.Dot when !HasValueBefore(tokens, index):
+                return new CompletionResult(CompletionContext.ReturnValue, Array.Empty<CompletionItem>());
+
             case TokenKind.Dot:
             case TokenKind.QuestionDot:
-                return Members(tree, document, tokens, index, offset, false, fileText, cancellationToken);
+                return Members(tree, document, tokens, index, offset, false, fileText, cancellationToken, documentOnly, limit);
 
             case TokenKind.Colon:
             case TokenKind.QuestionColon:
-                return Members(tree, document, tokens, index, offset, true, fileText, cancellationToken);
+                return Members(tree, document, tokens, index, offset, true, fileText, cancellationToken, documentOnly, limit);
 
             case TokenKind.Slash:
                 return TypePaths(tree, tokens, index);
 
             default:
-                return Identifiers(tree, document, offset, macros, fileText);
+                return Identifiers(tree, document, offset, macros, fileText, documentOnly, limit);
         }
+    }
+
+    /// <summary>
+    /// Whether the token before a <c>.</c> can end a value — a name, <c>)</c>, <c>]</c>, a literal.
+    /// A dot after anything else opens no member access: it is the return-value variable, or the
+    /// start of a leading-dot relative path.
+    /// </summary>
+    private static bool HasValueBefore(IReadOnlyList<Token> tokens, int operatorIndex)
+    {
+        for (int i = operatorIndex - 1; i >= 0; i--)
+        {
+            switch (tokens[i].Kind)
+            {
+                case TokenKind.Comment:
+                    continue;
+
+                case TokenKind.CloseParen:
+                case TokenKind.CloseBracket:
+                case TokenKind.StringEnd:
+                case TokenKind.Number:
+                    return true;
+
+                default:
+                    return IsName(tokens[i].Kind);
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The completion list with no documentation attached, for a client that resolves lazily.
+    /// </summary>
+    /// <remarks>
+    /// Identical to <see cref="CompleteAt(ObjectTree, Document, int, int, IReadOnlyCollection{string}?, Func{string, SourceText?}?, PositionEncoding, CancellationToken)"/>
+    /// except that no item carries a doc comment. Pair it with
+    /// <see cref="ResolveDocumentation"/> when the user highlights one.
+    /// </remarks>
+    public static CompletionResult CompleteBriefAt(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        IReadOnlyCollection<string>? macros = null,
+        PositionEncoding encoding = PositionEncoding.Utf16,
+        CancellationToken cancellationToken = default,
+        int limit = 0)
+        => CompleteAt(tree, document, line, character, macros, fileText: null, encoding,
+            cancellationToken, documentOnly: null, limit);
+
+    /// <summary>
+    /// The documentation for one item of the list a position offers, or empty.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Stateless by design: the position and the item's name identify it, so nothing is retained
+    /// between the list call and this one and a stale handle is impossible. DM has no overloads,
+    /// so a name at a position is unambiguous.
+    /// </para>
+    /// <para>
+    /// The list is rebuilt to find the item, which costs the scope walk again but exactly ONE doc
+    /// lookup — the file read and comment scan that lazy resolve exists to defer.
+    /// </para>
+    /// </remarks>
+    public static string ResolveDocumentation(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        string name,
+        IReadOnlyCollection<string>? macros = null,
+        Func<string, SourceText?>? fileText = null,
+        PositionEncoding encoding = PositionEncoding.Utf16,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        CompletionResult result = CompleteAt(
+            tree, document, line, character, macros, fileText, encoding, cancellationToken,
+            documentOnly: name);
+
+        foreach (CompletionItem item in result.Items)
+        {
+            if (string.Equals(item.Name, name, StringComparison.Ordinal))
+                return item.Documentation;
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Scope-distance bands, nearest first. A builtin sinks to the bottom whatever band it sits in:
+    /// BYOND's own members are the least likely thing a user is reaching for by name.
+    /// </summary>
+    private static class Rank
+    {
+        public const int Local = 0;
+        public const int Parameter = 1;
+        public const int Member = 2;
+        public const int Global = 3;
+        public const int Macro = 4;
+        public const int Builtin = 5;
     }
 
     /// <summary>The last token starting at or before the cursor.</summary>
@@ -153,9 +293,12 @@ public static class CompletionService
         int offset,
         bool widen,
         Func<string, SourceText?>? fileText,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? documentOnly = null,
+        int limit = 0)
     {
-        TypeSymbol? receiver = ResolveReceiver(tree, document, tokens, operatorIndex - 1, offset);
+        TypeSymbol? receiver = ResolveReceiver(
+            tree, document, tokens, operatorIndex - 1, offset, out bool inferred);
 
         CompletionContext context = widen ? CompletionContext.SubtypeMember : CompletionContext.Member;
 
@@ -164,11 +307,12 @@ public static class CompletionService
 
         Dictionary<string, CompletionItem> items = new(StringComparer.Ordinal);
 
-        // The declared type and everything it inherits, in both modes.
+        // The declared type and everything it inherits, in both modes. An inferred receiver marks
+        // every item: the whole list rides on inference dm.exe does not do.
         foreach (TypeSymbol step in tree.InheritanceChain(receiver))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            AddMembers(items, step, fileText);
+            AddMembers(items, step, fileText, inferred, documentOnly);
         }
 
         // `:` also reaches members declared on subtypes, which is what makes it a wider check
@@ -178,11 +322,11 @@ public static class CompletionService
             foreach (TypeSymbol descendant in Descendants(receiver))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                AddMembers(items, descendant, fileText);
+                AddMembers(items, descendant, fileText, inferred, documentOnly);
             }
         }
 
-        return new CompletionResult(context, Sorted(items));
+        return Capped(context, Sorted(items), limit);
     }
 
     private static IEnumerable<TypeSymbol> Descendants(TypeSymbol type)
@@ -197,7 +341,8 @@ public static class CompletionService
     }
 
     private static void AddMembers(
-        Dictionary<string, CompletionItem> items, TypeSymbol type, Func<string, SourceText?>? fileText)
+        Dictionary<string, CompletionItem> items, TypeSymbol type, Func<string, SourceText?>? fileText,
+        bool inferred = false, string? documentOnly = null, int rank = Rank.Member)
     {
         foreach (VarSymbol variable in type.Vars)
         {
@@ -206,7 +351,11 @@ public static class CompletionService
                 CompletionKind.Variable,
                 type.Path.Text,
                 variable.IsBuiltin,
-                DocumentationFor(variable.Site, variable.IsBuiltin, fileText)));
+                Wanted(documentOnly, variable.Name)
+                    ? DocumentationFor(variable.Site, variable.IsBuiltin, fileText)
+                    : string.Empty,
+                inferred,
+                variable.IsBuiltin ? Rank.Builtin : rank));
         }
 
         foreach (ProcSymbol proc in type.Procs)
@@ -216,11 +365,24 @@ public static class CompletionService
                 proc.IsVerb ? CompletionKind.Verb : CompletionKind.Proc,
                 $"{type.Path.Text}  ({string.Join(", ", proc.Parameters)})",
                 proc.IsBuiltin,
-                proc.Sites.Count > 0
+                proc.Sites.Count > 0 && Wanted(documentOnly, proc.Name)
                     ? DocumentationFor(proc.Sites[0], proc.IsBuiltin, fileText)
-                    : string.Empty));
+                    : string.Empty,
+                inferred,
+                proc.IsBuiltin ? Rank.Builtin : rank));
         }
     }
+
+    /// <summary>
+    /// Whether this item's documentation is being collected: everything, or one named item.
+    /// </summary>
+    /// <remarks>
+    /// A doc lookup walks back over the comment lines above a declaration, in text the workspace
+    /// has already cached — cheap individually, which is why skipping 19,897 of them saves bytes
+    /// rather than milliseconds. Measured; see <c>CompleteAt</c>'s remarks.
+    /// </remarks>
+    private static bool Wanted(string? documentOnly, string name)
+        => documentOnly is null || string.Equals(documentOnly, name, StringComparison.Ordinal);
 
     /// <summary>
     /// The <c>///</c> comment above a declaration site, when the caller can reach the file.
@@ -249,7 +411,19 @@ public static class CompletionService
     /// </remarks>
     internal static TypeSymbol? ResolveReceiver(
         ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset)
+        => ResolveReceiver(tree, document, tokens, index, offset, out _);
+
+    /// <summary>
+    /// As above, also reporting whether the receiver's type was <b>inferred</b> rather than
+    /// written — the one place completion knowingly goes further than <c>dm.exe</c>, which checks
+    /// only a written type. Everything offered through an inferred receiver carries the fact.
+    /// </summary>
+    internal static TypeSymbol? ResolveReceiver(
+        ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset,
+        out bool inferred)
     {
+        inferred = false;
+
         if (index < 0)
             return null;
 
@@ -295,9 +469,12 @@ public static class CompletionService
 
         string name = document.Text.ToString(tokens[index].Span);
 
-        // A local or parameter carries its declared type.
-        if (FindLocalType(document, offset, name) is { } localType)
+        // A local or parameter carries its declared type — or, failing that, an inferred one.
+        if (FindLocalType(document, offset, name, out inferred) is { } localType)
             return tree.Find(localType);
+
+        // No local answered; the flag must not leak onto the written-type branches below.
+        inferred = false;
 
         // A var on the enclosing type, then a bare type name such as `mob`.
         if (EnclosingType(tree, document, offset) is { } enclosing
@@ -320,7 +497,9 @@ public static class CompletionService
         Document document,
         int offset,
         IReadOnlyCollection<string>? macros,
-        Func<string, SourceText?>? fileText)
+        Func<string, SourceText?>? fileText,
+        string? documentOnly = null,
+        int limit = 0)
     {
         Dictionary<string, CompletionItem> items = new(StringComparer.Ordinal);
 
@@ -330,34 +509,36 @@ public static class CompletionService
             foreach (ParameterSyntax parameter in proc.Parameters)
             {
                 items.TryAdd(parameter.Name, new CompletionItem(
-                    parameter.Name, CompletionKind.Parameter, parameter.DeclaredType?.Text ?? string.Empty, false));
+                    parameter.Name, CompletionKind.Parameter, parameter.DeclaredType?.Text ?? string.Empty, false,
+                    rank: Rank.Parameter));
             }
 
             foreach (LocalVarStatementSyntax local in Locals(proc, offset))
             {
                 items[local.Name] = new CompletionItem(
-                    local.Name, CompletionKind.Local, local.DeclaredType?.Text ?? string.Empty, false);
+                    local.Name, CompletionKind.Local, local.DeclaredType?.Text ?? string.Empty, false,
+                    rank: Rank.Local);
             }
         }
 
         if (EnclosingType(tree, document, offset) is { } enclosing)
         {
             foreach (TypeSymbol step in tree.InheritanceChain(enclosing))
-                AddMembers(items, step, fileText);
+                AddMembers(items, step, fileText, inferred: false, documentOnly, Rank.Member);
         }
 
         // Globals last. These are the root's procs and vars, which is where the builtins live.
-        AddMembers(items, tree.Root, fileText);
+        AddMembers(items, tree.Root, fileText, inferred: false, documentOnly, Rank.Global);
 
         // Macros do not live on any type - the preprocessor has removed them long before the parser
         // runs - so they are carried in separately and go last, behind anything really in scope.
         if (macros is not null)
         {
             foreach (string macro in macros)
-                items.TryAdd(macro, new CompletionItem(macro, CompletionKind.Macro, "macro", false));
+                items.TryAdd(macro, new CompletionItem(macro, CompletionKind.Macro, "macro", false, rank: Rank.Macro));
         }
 
-        return new CompletionResult(CompletionContext.Identifier, Sorted(items));
+        return Capped(CompletionContext.Identifier, Sorted(items), limit);
     }
 
     /// <summary>Locals declared before the cursor. One declared later is not in scope yet.</summary>
@@ -381,7 +562,11 @@ public static class CompletionService
         }
     }
 
-    private static IEnumerable<StatementSyntax> Flatten(StatementSyntax statement)
+    /// <remarks>
+    /// Internal so <see cref="InlayHintService"/> walks bodies with the same coverage the scope
+    /// chain uses — a second walker that missed a statement kind would silently hint nothing there.
+    /// </remarks>
+    internal static IEnumerable<StatementSyntax> Flatten(StatementSyntax statement)
     {
         yield return statement;
 
@@ -451,8 +636,14 @@ public static class CompletionService
     /// only fills the gap where the declaration left the slot empty, and it goes further than the
     /// compiler does — see <see cref="TypeInference"/> for what that costs.
     /// </remarks>
-    private static TypePath? FindLocalType(Document document, int offset, string name)
+    /// <remarks>
+    /// Internal because <see cref="InlayHintService"/> shows the same inference this feeds
+    /// completion with — a second copy of the local-type rules would drift.
+    /// </remarks>
+    internal static TypePath? FindLocalType(Document document, int offset, string name, out bool inferred)
     {
+        inferred = false;
+
         if (FindEnclosingProc(document, offset) is not { } proc)
             return null;
 
@@ -463,6 +654,10 @@ public static class CompletionService
 
             if (local.DeclaredType is { } type)
                 return TypePath.FromSegments(type.Segments);
+
+            // Everything past this line is inference the compiler does not do: dm.exe checks only
+            // a written type, so an answer from here is offered knowing the build would refuse it.
+            inferred = true;
 
             // An untyped local. The most recent assignment before the cursor describes what the
             // name holds *here*, so it beats the initialiser rather than the other way round.
@@ -480,7 +675,9 @@ public static class CompletionService
             if (parameter.DeclaredType is { } type)
                 return TypePath.FromSegments(type.Segments);
 
-            // `f(M as mob)` says what M is without declaring a path.
+            // `f(M as mob)` says what M is without declaring a path — an input filter, not a type
+            // annotation, so this too is beyond what the compiler checks (language notes).
+            inferred = true;
             return TypeInference.FromInputType(parameter.InputType);
         }
 
@@ -499,7 +696,7 @@ public static class CompletionService
         => TypeInference.Infer(expression, referenced
             => string.Equals(referenced, origin, StringComparison.Ordinal)
                 ? null
-                : FindLocalType(document, offset, referenced));
+                : FindLocalType(document, offset, referenced, out _));
 
     /// <summary>
     /// The type last assigned to a name before the cursor, for <c>var/x</c> then <c>x = new /obj</c>.
@@ -646,10 +843,40 @@ public static class CompletionService
         return new CompletionResult(CompletionContext.TypePath, items);
     }
 
+    /// <summary>
+    /// Scope distance, then name.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Alphabetical alone put <c>abs()</c> — a builtin nobody asked for — above a local the user
+    /// declared two lines up. The ranking a query-driven picker uses (exact, then prefix, then
+    /// substring, as <see cref="WorkspaceSymbolService"/> does) cannot help here: a bare identifier
+    /// position has no query string to rank against. Scope distance is the information this
+    /// position does have.
+    /// </para>
+    /// <para>
+    /// Order is the whole contract — nothing crosses the ABI saying why. A client that preserves
+    /// the order we return gets the ranking for free; the LSP shell writes it into
+    /// <c>sortText</c>, which is how a server pins order in VS Code.
+    /// </para>
+    /// </remarks>
     private static List<CompletionItem> Sorted(Dictionary<string, CompletionItem> items)
     {
         List<CompletionItem> sorted = new(items.Values);
-        sorted.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
+
+        sorted.Sort(static (a, b) => a.Rank != b.Rank
+            ? a.Rank.CompareTo(b.Rank)
+            : string.CompareOrdinal(a.Name, b.Name));
+
         return sorted;
+    }
+
+    /// <summary>Applies a caller's cap, reporting rather than implying that it cut the list.</summary>
+    private static CompletionResult Capped(CompletionContext context, List<CompletionItem> items, int limit)
+    {
+        if (limit <= 0 || items.Count <= limit)
+            return new CompletionResult(context, items);
+
+        return new CompletionResult(context, items.GetRange(0, limit), truncated: true);
     }
 }

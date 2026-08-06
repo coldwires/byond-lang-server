@@ -4,7 +4,7 @@
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
 > Status: **M0–M7 complete · M8 passed over · M9 past its target · M10 done · M11 at zero
-> invented · ABI 0.14** · 1,051 tests · Last updated: 2026-08-06
+> invented · ABI 0.18** · 1,084 tests · Last updated: 2026-08-06
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -442,10 +442,10 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.14 and passing 140 checks. Reference
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.18 and passing 184 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,051 today (998 core, 39 native,
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,084 today (1,026 core, 44 native,
   14 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
@@ -1100,10 +1100,31 @@ as a rule they have to follow.
     the binder's semantic set. Shipped at ABI 0.13 with the full pass: header, ten abi-smoke
     checks, `INTEGRATION.txt`, and the diagnostics elements shared byte-for-byte with
     `dm_document_symbols` via one writer.
-  - A distinct completion context for a bare leading `.` (their §4), so no client has to guess
-    that the return-value variable's 332-item identifier list was not what the user wanted.
-  - The per-item `inferred` flag on completion (their §5), replacing every client's guess about
-    which items ride on inference `dm.exe` does not do.
+  - ✅ Hover and definition for macros (their §5) — a macro name resolves to its `#define`,
+    wherever it appears, because the preprocessor replaces the token before the parser sees it.
+    The workspace keeps the walk's final `MacroTable` instead of only its names; project macros
+    only, since the built-in seeds and `-D` defines have no source to open. Their global-var half
+    was already fixed at HEAD — the root fallback plus the first-character `IndexAt` fix — and
+    the builtin-globals remainder closed the same day: `world` is a root var typed `/world` in
+    `builtins.txt`, and every builtin hovers from the symbol table (see the changelog).
+  - ✅ The enclosing type on document symbols (their §6) — every outline entry carries `owner`,
+    the resolved path of what contains it: a member's owning type, a type's parent by path, a
+    parameter's proc in the reference index's `inside` spelling. Computed with the tree builder's
+    own owner rules (`GroupOwner`/`ProcOwner`/`VarOwner`/`BareAssignmentOwner`, now shared with
+    the outline as they already were with the binder), so a one-line `/mob/TEA()` says `/mob` and
+    a `mob/proc` group header carries its path. On the LSP it is a nonstandard field spec-only
+    clients ignore.
+  - ✅ A distinct completion context for a bare leading `.` (their §4) — `ReturnValue`, with an
+    empty list: the return-value variable is untyped, and the identifier dump their doc describes
+    was already gone at HEAD. The context is what lets a client show nothing without guessing
+    from the trigger character. A `.` counts as leading when nothing that can end a value — a
+    name, `)`, `]`, a literal — sits before it.
+  - ✅ The per-item `inferred` flag on completion (their §19) — true exactly when the receiver's
+    type came from `TypeInference` rather than being written down, which per §8 is everything
+    `dm.exe` refuses: untyped locals through `new`/assignment, and `as`-clause parameters. The
+    receiver resolution reports the fact (`ResolveReceiver` out-flag) and every item in the list
+    carries it, on the ABI (`"inferred"`) and the LSP (nonstandard field). `dmc complete` marks
+    them `~`.
   - ✅ **The reference index (their §1) — shipped 2026-08-06 at ABI 0.14.** One shape serving
     references, call hierarchy (group by the per-hit enclosing symbol), document highlight and
     what-overrides-this, with `kind: read|write|call|override`. The hits come from the
@@ -1567,11 +1588,12 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.14, 22 exports: version, last error, free, workspace
-open/close/root, injected defines, buffer set/close, invalidate, classify plus its three
+`abi/dm_core.h` is the source of truth. ABI 0.18, 28 exports: version, last error, free, workspace
+open/close/root, injected defines, buffer set/close, invalidate, the readiness pair
+(`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
-workspace symbols and bulk queries — the last now carrying the reference index (`references`)
-and the ancestor chain (`ancestorsOf`). Everything listed below is implemented, and
+inlay hints, workspace symbols and bulk queries — the last carrying the reference index
+(`references`) and the ancestor chain (`ancestorsOf`). Everything listed below is implemented, and
 `abi/schema/` freezes the bulk request and response shapes.
 
 **Hot path — handles and accessors:**
@@ -1601,7 +1623,16 @@ dm_status   dm_signature_at(dm_workspace, const char* file, int32_t line, int32_
                             dm_position_encoding, char** out_json);           /* M10, 0.12 */
 dm_status   dm_diagnostics(dm_workspace, const char* file,
                            dm_position_encoding, char** out_json);            /* M11, 0.13 */
+dm_status   dm_inlay_hints(dm_workspace, const char* file, int32_t start_line,
+                           int32_t end_line, dm_position_encoding, char** out_json); /* 0.16 */
+dm_status   dm_complete_brief(dm_workspace, const char* file, int32_t line,
+                              int32_t character, dm_position_encoding, char** out_json); /* 0.17 */
+dm_status   dm_complete_resolve(dm_workspace, const char* file, int32_t line, int32_t character,
+                                const char* name, dm_position_encoding, char** out_json); /* 0.17 */
+dm_status   dm_set_completion_limit(dm_workspace, int32_t limit);                         /* 0.18 */
 dm_status   dm_invalidate(dm_workspace);                                      /* 0.14 */
+int32_t     dm_tree_ready(dm_workspace);                                      /* 0.15 */
+dm_status   dm_build_tree(dm_workspace);                                      /* 0.15 */
 dm_status   dm_workspace_symbols(dm_workspace, const char* query, int32_t limit,
                                  dm_position_encoding, char** out_json);       /* M7, 0.8 */
 ```
@@ -2097,6 +2128,62 @@ is invented, and the var that belonged on `/atom` is lost. The largest single mi
 `/datum/controller/global_vars` at 1,067 vars, which is the `GLOBAL_VAR` macro family. It is not the
 only cause: 246 of 776 invented vars are macro-shaped and none of the 494 invented procs are.
 
+### Bench: what a completion list actually costs, measured 2026-08-06
+
+Taken before building lazy resolve (UPSTREAM-REQUESTS §11), because the request's premise was a
+performance claim and the M9 rule is to measure the lever before pulling it. One bare identifier
+inside a proc body on /tg/station (`atoms_movable.dm:281`, `-DCBT`):
+
+| | |
+|---|---|
+| items offered | **19,898** |
+| total content | ~1.0 MB (873 KB items + 127 KB documentation) |
+| items carrying documentation | 1,444 (7.3%) |
+| documentation share of the payload | **12.7%** |
+| full vs brief wall clock | inside noise: **+210 ms, then −132 ms** on ~11 s |
+
+**The first version of this table was wrong, and the harness was the reason — fourth time.** The
+line-counting pattern `^ [\*~ ] ` also matched documentation lines, which begin with eighteen
+spaces, so the item count came back as 21,342 and the doc share as 11.3%. The tell was arithmetic:
+a clean count off `--brief` output (which has no documentation lines to miscount) said 19,898, and
+**19,898 + 1,444 = 21,342 exactly** — the difference being the doc-line count is diagnostic rather
+than coincidental. Same shape as the `<verb>` miscount in the `-o` extractor and the two `-l` diff
+traps: the harness was wrong and its answer looked entirely plausible. The totals and the
+conclusion below were unaffected, which is the other half of the lesson — a wrong instrument can
+leave the headline intact while every number under it is off.
+
+Two findings, and the second is the one that matters.
+
+**Deferring documentation is a payload saving and not a speed one.** A doc lookup walks back over
+comment lines in text the workspace has already cached, so 1,444 of them cost no measurable time.
+The first timing run showed a flattering 2.3 s delta and was cold OS file cache — re-running is
+what caught it, which is the same control-your-benchmark lesson as M9's comment-edit and
+path-spelling bugs, now on its third outing.
+
+**The item count is the cost.** 19,898 items is every global and every macro in a 1.5M-line
+project, offered for a bare identifier. Ranking and capping — what `dm_workspace_symbols` already
+does — is **unsafe here in a way it is not there**: `INTEGRATION.txt` §4 tells clients to filter
+the list by the typed prefix themselves, so a capped list silently omits the item the user is
+typing toward.
+
+**Answered by the patcher client 2026-08-06, and shipped at 0.18.** Their argument, taken:
+report the cut with a boolean (`truncated` on the ABI, `isIncomplete` on the LSP) so a client
+knows per position when local filtering stopped being safe — LSP's own answer, and the convention
+`subtypesOf` and `references` already use rather than something new. And rank by scope distance,
+because the exact/prefix/substring ranking a picker uses needs a query string that a bare
+identifier position does not have.
+
+Their argument against moving the prefix filter server-side was taken too, and it holds up under
+this project's own numbers: it means a call per keystroke, a keystroke drops the tree, and that is
+~909 ms per character on /tg/station against one rebuild per trigger today.
+
+**One change to their proposal, because the same argument applies to `isIncomplete`.** Setting it
+tells VS Code to stop filtering locally and re-ask on every character — the identical
+per-keystroke cost they rejected server-side filtering for. So the cap is **opt-in and off by
+default**: with no cap the list is complete, `isIncomplete` is honestly false, and one call per
+trigger is preserved. A client that wants a small list asks for one and handles the flag. Ranking
+lands unconditionally, since it costs nothing and helps whether or not anything is capped.
+
 ### Bench: mlaas, the one we can be exact on
 
 /tg/station is the stress test; **mlaas is the correctness harness.** 100 files, a `dm.exe -o`
@@ -2284,6 +2371,7 @@ it.
 | 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
 | 10 | Source encoding: some old files are Windows-1252, not UTF-8 | M3 | **Resolved** — `SourceFileReader` detects it. |
 | 11 | What does `#include` do inside a false `#ifdef`? | M3 | **Resolved** — not followed. `IncludeGraph` walks includes only while `ConditionalStack.IsActive`. |
+| 12 | A bare identifier offers 19,898 items on /tg/station. Should the cap default on, and the prefix filter move server-side with it? | completion payload | **Answered 2026-08-06 by the patcher client, and shipped**: cap opt-in via `dm_set_completion_limit` with `truncated` / `isIncomplete` reported, ranked by scope distance, and the prefix filter stays client-side — moving it costs a call per keystroke (~909 ms on /tg/station) to fix a problem confined to one context. See §9. |
 
 ---
 
@@ -2607,3 +2695,103 @@ it.
   contribution record is the foundation diff-patching needs — verified twice at 335,672
   declarations identical, mlaas unmoved at 10 ms. The real lever and its three traps are written
   into the M9 bullet; it is deferred as its own piece of work rather than half-done here.
+- **2026-08-06** — Macros resolve in hover and definition (UPSTREAM-REQUESTS §5). A macro name
+  goes to its `#define` from any position — the preprocessor replaces the token before the parser
+  sees it, so the macro reading wins over the member and path readings, and a test pins that.
+  `Workspace` keeps the walk's final `MacroTable` (it had been keeping only the names) and every
+  hover/definition surface passes it: CLI, ABI, LSP, tier-2 runner. Hover renders the `#define`
+  line with the doc comment above it through the existing definition-first path, unchanged.
+  Project macros only — the `TRUE`/`DM_VERSION` seeds and `-D` injects carry synthetic
+  `<...>` sources and resolve to nothing, the builtins rule again. Diagnosing first shortened
+  this: upstream's report said global vars resolve nowhere, and at HEAD they already do — the
+  claim was their 0.11 pin plus the first-character bug, so the real gap was macros alone.
+  Builtin globals (`world`) stay open; nothing models them as root vars. Two tier-2 marks, five
+  unit tests, two smoke checks (142 reporting 0.14), INTEGRATION §4. No ABI change — behavior
+  behind existing exports.
+- **2026-08-06** — Document symbols carry their owner (UPSTREAM-REQUESTS §6). Every outline entry
+  reports the resolved path of what contains it — a member's owning type, a type's parent by
+  path, a parameter's proc in the reference index's `inside` spelling, `/` at the root — so a
+  hierarchy view or breadcrumb stops string-slicing hover details. The outline now threads the
+  enclosing path through its walk exactly as `TypeTreeBuilder` does, calling the same
+  `GroupOwner`/`ProcOwner`/`VarOwner`/`BareAssignmentOwner` (the last two widened to internal
+  rather than copied — the M4 drift lesson, third application), so `mob/proc` group headers,
+  one-line `/mob/TEA()` declarations and the var/bare-override fork all answer as the tree does.
+  Crosses the ABI as `owner` on every `dm_document_symbols` element and the LSP as a nonstandard
+  field spec-only clients ignore. Five unit tests, two smoke checks (144 reporting 0.14),
+  INTEGRATION §4. 1,061 tests.
+- **2026-08-06** — The bare-`.` completion context and the `inferred` flag (UPSTREAM-REQUESTS §4
+  and §19). A bare leading `.` — nothing that can end a value before it — answers
+  `context: ReturnValue` with an empty list, since it is DM's return-value variable and not
+  member access; the empty `Member` answer it used to share with "receiver unresolvable" made
+  the two indistinguishable. And every completion item now reports whether it rides on inference
+  `dm.exe` does not do: `ResolveReceiver` reports how it got the type, and an inferred receiver
+  — an untyped local through `new`/assignment, an `as`-clause parameter — marks the whole list.
+  Crosses the ABI as `"inferred"` per item and the LSP as a nonstandard field; `dmc complete`
+  marks the items `~`. INTEGRATION's "filter on the detail field" workaround paragraph is
+  replaced by the flag. Three unit tests, seven smoke checks (151 reporting 0.14). 1,064 tests.
+- **2026-08-06** — The readiness signal shipped at ABI 0.15 (UPSTREAM-REQUESTS §16):
+  `dm_tree_ready` answers 1/0/-1 by reading a field, and `dm_build_tree` warms the tree at a
+  moment the client chooses — a splash screen instead of the user's first completion; a warm
+  tree makes it a no-op. Both clients had been inferring "indexing" from a call taking a long
+  time. The LSP's idiom for the same fact is `$/progress` (push rather than poll), which the
+  matrix row records. Three export tests, seven smoke checks (158 reporting 0.15),
+  INTEGRATION §4, `dm_core.h`. 1,067 tests, 24 exports.
+- **2026-08-06** — Builtins hover, closing §5's remainder. Hover asks definition's resolution
+  with `includeBuiltins`: a builtin match comes back as a file-less `DefinitionLocation` carrying
+  a signature rendered from the symbol table — `Move(NewLoc, Dir=0, step_x=0, step_y=0)`,
+  `var/loc` — so hover says what a symbol IS while go-to-definition still returns nothing for it,
+  one resolution serving both presentations. The global `world` is now in `builtins.txt` as a
+  root var with declared type `/world` (the `V` line's new optional fourth column), verified by
+  compiling `var/world/w = world` then `w.maxx` with a failing control — so `world` appears in
+  bare-identifier completion and hovers as `/world`. `usr`/`src`/`args` stay unmodelled: they are
+  proc-scope, not globals. Zero invented re-verified on all three projects after the table
+  change. Three hover tests, three smoke checks. 1,070 tests.
+- **2026-08-06** — Inlay hints shipped at ABI 0.16 (UPSTREAM-REQUESTS §12, the type half).
+  `InlayHintService` renders the inferred type of every untyped local after its name —
+  `var/x = new /obj/item` gains `: /obj/item` — through the same `FindLocalType` completion
+  rides on (widened to internal beside `Flatten`, the drift rule again), so the hint and the
+  completion list cannot disagree about what a name holds. A written type gets no hint, and an
+  inference naming a type the tree does not hold is dropped — a typo rendered as a hint would
+  read as knowledge. Surfaces: `dm_inlay_hints` (line-ranged, like classify), LSP
+  `textDocument/inlayHint` + capability, `dmc hints` as the arbiter. Parameter-name hints at
+  call sites are the deferred other half — they need argument spans walked out of invocations.
+  Seven unit tests, two export tests, seven smoke checks (168 reporting 0.16). 1,079 tests,
+  25 exports. One smoke-placement lesson: the first version parked the hint checks between the
+  reference queries and the readiness checks, and its `dm_close_buffer` dropped the tree the
+  readiness check asserts — the suite caught it on the next run.
+- **2026-08-06** — Lazy completion documentation at ABI 0.17 (UPSTREAM-REQUESTS §11), and the
+  measurement is the more useful half. `dm_complete_brief` returns the list with every
+  `documentation` empty; `dm_complete_resolve` fills in one item by (position, name) — stateless,
+  since DM has no overloads, so nothing is retained between the calls and no handle can go stale.
+  The LSP now declares `resolveProvider`, sends items with a `data` payload and answers
+  `completionItem/resolve`; `dmc complete --brief` and `--resolve <name>` arbitrate.
+  **What it actually buys was measured first, and it is not what the request assumed.** One bare
+  identifier on /tg/station offers **19,898 items totalling ~1.0 MB**, of which documentation is
+  **12.7%** — so this is a payload cut and nothing else. Timing full against brief came back
+  inside run-to-run noise (+210 ms, then **−132 ms** on ~11 s), because the doc lookups walk text
+  the workspace has already cached; the first run's flattering 2.3 s delta was cold OS file
+  cache, caught by re-running rather than believed. **The item count is the real cost** and
+  neither call addresses it — §9 records that as the open question, since capping a completion
+  list is unsafe while clients filter by prefix locally. Two service tests, eight smoke checks
+  (176 reporting 0.17). 1,081 tests, 27 exports.
+- **2026-08-06** — Open question 12 answered by the patcher client and shipped at ABI 0.18:
+  completion is **ranked by scope distance** (locals, parameters, the enclosing type's members,
+  globals, macros, builtins last) and reports **`truncated`**, with `dm_set_completion_limit`
+  as the opt-in cap and LSP `isIncomplete` + `sortText` as the same facts in that protocol's
+  spelling. Their two arguments were right and are taken: report the cut rather than filter
+  server-side, since a per-keystroke call costs ~909 ms on /tg/station against one rebuild per
+  trigger; and rank by scope distance, since the exact/prefix/substring ranking a picker uses
+  needs a query string a bare identifier has not got. **One change to their proposal**, because
+  the same argument applies to `isIncomplete`: setting it tells VS Code to re-ask per character,
+  which is the cost they rejected — so the cap is off by default, `isIncomplete` is honestly
+  false when nothing is capped, and one call per trigger survives. Measured after: `abs` fell
+  from roughly fifth alphabetically to **19,618th of 19,898**. Three service tests, eight smoke
+  checks (184 reporting 0.18), and the LSP protocol test caught the array→CompletionList shape
+  change on the first run. 1,084 tests, 28 exports.
+- **2026-08-06** — **Correction: the completion bench's numbers were wrong when first written.**
+  The line-counting pattern matched documentation lines as well as items, so 19,898 items was
+  published as 21,342 and the doc share as 11.3% instead of 12.7%, in six files and a commit
+  message. Caught because a clean count off `--brief` output disagreed and the difference was
+  *exactly* the 1,444 documented items. Totals and conclusions were unaffected — which is the
+  part worth keeping: a wrong instrument left the headline standing while every figure beneath
+  it was off. Fourth time a harness here has been confidently wrong; §9 has it beside the table.

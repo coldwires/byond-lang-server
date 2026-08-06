@@ -110,6 +110,26 @@ dm_status dm_close_buffer(dm_workspace workspace, const char *file);
  */
 dm_status dm_invalidate(dm_workspace workspace);
 
+/*
+ * Whether the object tree exists right now. Added in ABI 0.15.
+ *
+ * Returns 1 when a tree is built, 0 when the next tree-backed query will pay
+ * for a build, -1 when the handle is invalid. Costs nothing to ask, so poll it
+ * freely - it is how a client shows "indexing" instead of a frozen UI, and it
+ * turns to 0 whenever a buffer, define or invalidation drops the tree.
+ */
+int32_t dm_tree_ready(dm_workspace workspace);
+
+/*
+ * Builds the object tree now, blocking until it exists. Added in ABI 0.15.
+ *
+ * The warm-at-open call: pay the cold cost at a moment of your choosing - a
+ * splash screen, a background thread at startup - instead of on the user's
+ * first completion. A warm tree makes this a no-op, so calling it defensively
+ * is free. Threading contract unchanged: one workspace, one thread at a time.
+ */
+dm_status dm_build_tree(dm_workspace workspace);
+
 /* -- build configuration ------------------------------------------------- */
 
 /*
@@ -410,6 +430,87 @@ dm_status dm_hover_at(dm_workspace workspace, const char *file,
  */
 dm_status dm_diagnostics(dm_workspace workspace, const char *file,
                          dm_position_encoding encoding, char **out_json);
+
+/*
+ * Caps every completion list for this workspace, or 0 for no cap. Added in 0.18.
+ *
+ * OFF BY DEFAULT, and that is deliberate. A bare identifier offers 19,898
+ * items on /tg/station, so capping looks like the obvious fix - but section 4
+ * tells you to filter the list by the typed prefix yourself, and over a capped
+ * list that silently misses the item your user is typing toward. Switch this on
+ * only if you handle "truncated" on the response, which tells you per position
+ * when local filtering stopped being safe. In LSP terms it is isIncomplete:
+ * re-ask as the user types instead of filtering what you have.
+ *
+ * Filtering server-side instead would be sound and costs a call per keystroke -
+ * a keystroke drops the tree, so that is ~909 ms per character on /tg/station
+ * against one rebuild per trigger today. That is why we did not do it for you.
+ */
+dm_status dm_set_completion_limit(dm_workspace workspace, int32_t limit);
+
+/*
+ * The completion list with NO documentation attached. Added in ABI 0.17.
+ * YOU FREE the result with dm_free.
+ *
+ * Same list, same shapes as dm_complete_at - every item's "documentation" is
+ * an empty string. A bare identifier on /tg/station offers 19,898 items and
+ * the user reads one.
+ *
+ * WHAT THIS ACTUALLY BUYS, measured rather than assumed: documentation is
+ * 12.7% of that 1.0 MB payload, so this cuts the bytes you marshal. It is NOT
+ * a latency win - the lookups run over text we have already cached, and
+ * full-versus-brief timing came back inside run-to-run noise. If your client
+ * pays for JSON volume, use it; if you were hoping for speed, the item COUNT
+ * is where the cost is and neither call here changes that.
+ *
+ * Pair it with dm_complete_resolve when the user highlights an item.
+ */
+dm_status dm_complete_brief(dm_workspace workspace, const char* file,
+                            int32_t line, int32_t character,
+                            dm_position_encoding encoding, char** out_json);
+
+/*
+ * The documentation for ONE item of the list a position offers. Added in 0.17.
+ * YOU FREE the result with dm_free.
+ *
+ *   { "documentation": "How much damage it can take." }
+ *
+ * Pass the same file and position you completed at, plus the item's "name".
+ * Stateless by design: nothing is retained between the two calls, so there is
+ * no handle to go stale and no ordering to get wrong. DM has no overloads, so
+ * a name at a position is unambiguous.
+ *
+ * An empty string is a normal answer - most symbols carry no doc comment.
+ */
+dm_status dm_complete_resolve(dm_workspace workspace, const char* file,
+                              int32_t line, int32_t character, const char* name,
+                              dm_position_encoding encoding, char** out_json);
+
+/* -- inlay hints ---------------------------------------------------------- */
+
+/*
+ * Inferred-type annotations for untyped locals, as UTF-8 JSON. Added in ABI 0.16.
+ * YOU FREE the result with dm_free.
+ *
+ * DM code is full of `var/x = new /obj/item` and the type is exactly what a
+ * reader does not have - the compiler never checks it, so nothing forces the
+ * author to write it. Each hint carries the same inference completion rides on:
+ *
+ *   { "hints": [ { "line": 3, "char": 6,          zero-based, in the requested
+ *                                                 encoding, AFTER the name
+ *                  "label": ": /obj/item",        render as written
+ *                  "kind": "type" } ] }           treat unknown kinds as opaque
+ *
+ * Line range is zero-based and inclusive, same as dm_classify_range; ask for
+ * what is visible. A local with a WRITTEN type gets no hint, and every hint is
+ * inference dm.exe does not do - that is the point of showing it.
+ *
+ * COST: the first call after an edit builds the object tree, same as
+ * dm_complete_at. Debounce it, and re-ask on scroll rather than per keystroke.
+ */
+dm_status dm_inlay_hints(dm_workspace workspace, const char* file,
+                         int32_t start_line, int32_t end_line,
+                         dm_position_encoding encoding, char** out_json);
 
 /* -- signature help ------------------------------------------------------- */
 

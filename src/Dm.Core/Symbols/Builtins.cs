@@ -94,7 +94,7 @@ public static class Builtins
                 continue;
             }
 
-            // `T <path>` | `V <owner> <name>` | `P <owner> <name> [params]` | `X <type> <parent>`
+            // `T <path>` | `V <owner> <name> [type]` | `P <owner> <name> [params]` | `X <type> <parent>`
             string[] parts = line.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
 
             if (parts.Length < 2)
@@ -113,7 +113,12 @@ public static class Builtins
                 case "V" when parts.Length >= 3:
                 {
                     TypeSymbol owner = MarkBuiltin(tree.GetOrAdd(TypePath.Parse(parts[1])));
-                    owner.AddVar(new VarSymbol(parts[2], null, Array.Empty<string>(), default) { IsBuiltin = true });
+
+                    // The optional fourth column is the var's declared type — `V / world /world` —
+                    // which is what lets `world.` resolve through the var and hover say what it is.
+                    TypePath? varType = parts.Length >= 4 ? TypePath.Parse(parts[3]) : null;
+
+                    owner.AddVar(new VarSymbol(parts[2], varType, Array.Empty<string>(), default) { IsBuiltin = true });
                     break;
                 }
 

@@ -21,6 +21,10 @@ work list.
 | Reference index (uses, kinds, enclosing symbol) | `ReferenceService` over the binder's walk | `dm_query_json` `references` (0.14) | `references`, `documentHighlight`, `dm/references` |
 | Ancestor chain in one call | `ObjectTree.InheritanceChain` | `dm_query_json` `ancestorsOf` (0.14) | `dm/ancestorsOf` |
 | Disk-change invalidation | `Workspace.Invalidate` | `dm_invalidate` (0.14) | `didChangeWatchedFiles` — ⬜ not yet wired; clients can send didChange |
+| Readiness + warm-at-open | `Workspace.IsTreeBuilt`, `GetObjectTree` | `dm_tree_ready`, `dm_build_tree` (0.15) | `$/progress` announces the build (push, the LSP idiom for the same fact) |
+| Inlay hints (inferred local types) | `InlayHintService` | `dm_inlay_hints` (0.16) | `textDocument/inlayHint` |
+| Lazy completion documentation | `CompleteBriefAt` + `ResolveDocumentation` | `dm_complete_brief`, `dm_complete_resolve` (0.17) | `resolveProvider` + `completionItem/resolve` |
+| Completion ranking + opt-in cap | `CompletionResult.Truncated`, scope-distance order | `dm_set_completion_limit` (0.18), `truncated` | `isIncomplete` + `sortText` |
 | `.dmi` icon states | ⬜ M8, unscheduled | ⬜ | ⬜ |
 
 Positions: the ABI and CLI speak both encodings by parameter; LSP negotiates and uses UTF-16.

@@ -35,3 +35,10 @@
 // declaration itself is not a use. And heal's uses are its one call site.
 //? references 7:4 => types.dm:12 write, code.dm:7 write
 //? references 13:4 => code.dm:13 call
+
+// A macro resolves at its use site to the #define that produced it — the
+// preprocessor replaces the token before the parser sees it, so the macro
+// reading wins over every other. 16:18 is the AMMO_MAX in gun_count's
+// initializer; the definition is types.dm line 5.
+//? definition 16:18 => types.dm:5
+//? hover 16:18 => #define AMMO_MAX

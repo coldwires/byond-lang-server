@@ -271,8 +271,10 @@ public static class TypeTreeBuilder
     /// Everything before the <c>var</c> segment. With no such segment the declaration came from a
     /// bare <c>var</c> block, so it belongs to the enclosing type and the leading segments are its
     /// declared type — which the parser has already split out.
+    /// Internal for the same reason as <see cref="GroupOwner"/>: the outline reports each symbol's
+    /// owner and must agree with the tree about it.
     /// </remarks>
-    private static TypePath VarOwner(TypePath enclosing, PathSyntax path)
+    internal static TypePath VarOwner(TypePath enclosing, PathSyntax path)
     {
         IReadOnlyList<string> segments = path.Segments;
         int take = 0;
@@ -322,7 +324,7 @@ public static class TypeTreeBuilder
     }
 
     /// <summary>The type a bare assignment overrides a var on: everything before the name.</summary>
-    private static TypePath BareAssignmentOwner(TypePath enclosing, PathSyntax path)
+    internal static TypePath BareAssignmentOwner(TypePath enclosing, PathSyntax path)
         => Owner(enclosing, path, Math.Max(path.Segments.Count - 1, 0));
 
     /// <summary>Takes the first <paramref name="count"/> segments, honouring the path's anchor.</summary>
@@ -340,7 +342,7 @@ public static class TypeTreeBuilder
     }
 
     /// <summary>Combines an enclosing path with a declaration's own, honouring its anchor.</summary>
-    private static TypePath Combine(TypePath enclosing, PathSyntax path)
+    internal static TypePath Combine(TypePath enclosing, PathSyntax path)
         => path.Anchor == PathAnchor.Absolute
             ? TypePath.FromSegments(path.Segments)
             : enclosing.Append(path.Segments);

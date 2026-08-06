@@ -105,13 +105,20 @@ public sealed class ServerTests : IDisposable
         List<JsonDocument> frames = Frames();
         JsonElement result = frames[^1].RootElement.GetProperty("result");
 
+        // A CompletionList, not a bare array: isIncomplete is what tells the client whether it may
+        // filter locally, and it is false because nothing capped this list.
+        Assert.False(result.GetProperty("isIncomplete").GetBoolean());
+
         List<string> labels = new();
 
-        foreach (JsonElement item in result.EnumerateArray())
+        foreach (JsonElement item in result.GetProperty("items").EnumerateArray())
             labels.Add(item.GetProperty("label").GetString() ?? "");
 
         Assert.Contains("hp", labels);
         Assert.Contains("loc", labels); // inherited from the builtin /atom chain
+
+        // The project's own member outranks BYOND's, and sortText is what pins that in VS Code.
+        Assert.True(labels.IndexOf("hp") < labels.IndexOf("loc"), "a declared member ranks above a builtin");
     }
 
     [Fact]

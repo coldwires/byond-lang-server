@@ -139,7 +139,8 @@ public class ServiceFixtureTests
             case "definition":
             {
                 IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-                    workspace.GetObjectTree(), document, line - 1, column - 1);
+                    workspace.GetObjectTree(), document, line - 1, column - 1,
+                    macros: workspace.GetMacroTable());
 
                 if (found.Count == 0)
                     return "nothing resolved";
@@ -155,7 +156,8 @@ public class ServiceFixtureTests
             case "hover":
             {
                 HoverResult? hover = HoverService.HoverAt(
-                    workspace.GetObjectTree(), document, line - 1, column - 1);
+                    workspace.GetObjectTree(), document, line - 1, column - 1,
+                    macros: workspace.GetMacroTable());
 
                 if (hover is null)
                     return "nothing to show";

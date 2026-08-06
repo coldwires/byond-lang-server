@@ -46,6 +46,7 @@ internal static class Program
                 "definition" => Definition(args),
                 "hover" => Hover(args),
                 "signature" => Signature(args),
+                "hints" => Hints(args),
                 "references" => References(args),
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
@@ -97,6 +98,9 @@ internal static class Program
         Console.Error.WriteLine("  hover <dme> <file> <line> <col>      the declaration, as a tooltip");
         Console.Error.WriteLine("  signature <dme> <file> <line> <col>  the call enclosing the position,");
         Console.Error.WriteLine("                           its parameters, and which one the position is in");
+        Console.Error.WriteLine("      --brief              omit documentation, as dm_complete_brief does");
+        Console.Error.WriteLine("      --resolve <name>     one item's documentation, as dm_complete_resolve");
+        Console.Error.WriteLine("  hints <dme> <file> [start end]       inferred-type inlay hints, 1-based lines");
         Console.Error.WriteLine("  references <dme> <file> <line> <col> every use of the symbol there");
         Console.Error.WriteLine("      --path <target>      query by canonical path instead: /mob/hp,");
         Console.Error.WriteLine("                           /mob/heal(), /heal() for a global, a type path");
@@ -720,7 +724,8 @@ internal static class Program
         Document document = workspace.GetDocument(args[2]);
 
         HoverResult? hover = HoverService.HoverAt(
-            workspace.GetObjectTree(), document, line - 1, column - 1);
+            workspace.GetObjectTree(), document, line - 1, column - 1,
+            macros: workspace.GetMacroTable());
 
         if (hover is null)
         {
@@ -859,7 +864,8 @@ internal static class Program
         Document document = workspace.GetDocument(args[2]);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-            workspace.GetObjectTree(), document, line - 1, column - 1);
+            workspace.GetObjectTree(), document, line - 1, column - 1,
+            macros: workspace.GetMacroTable());
 
         if (found.Count == 0)
         {
@@ -877,6 +883,42 @@ internal static class Program
 
         Console.Out.WriteLine();
         Console.Out.WriteLine($"{found.Count} declaration(s)");
+        return 0;
+    }
+
+    /// <summary>
+    /// The inlay hints the ABI and the LSP serve, rendered per line — the CLI arbiter for the one
+    /// call whose output is otherwise only visible inside an editor.
+    /// </summary>
+    private static int Hints(string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("error: hints needs <dme> <file> [start-line end-line]");
+            return 1;
+        }
+
+        int start = 1;
+        int end = int.MaxValue;
+
+        if (args.Length >= 5 && int.TryParse(args[3], out int fromLine) && int.TryParse(args[4], out int toLine))
+        {
+            start = fromLine;
+            end = toLine;
+        }
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        Document document = workspace.GetDocument(args[2]);
+
+        // CLI positions are 1-based; the service is 0-based like the ABI.
+        IReadOnlyList<InlayHint> hints = InlayHintService.HintsFor(
+            workspace.GetObjectTree(), document, start - 1, end == int.MaxValue ? int.MaxValue : end - 1);
+
+        foreach (InlayHint hint in hints)
+            Console.Out.WriteLine($"{hint.Position.Line + 1}:{hint.Position.Character + 1}  {hint.Label}");
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{hints.Count} hint(s)");
         return 0;
     }
 
@@ -899,19 +941,38 @@ internal static class Program
         using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
         Document document = workspace.GetDocument(args[2]);
 
-        CompletionResult result = CompletionService.CompleteAt(
-            workspace.GetObjectTree(),
-            document,
-            line - 1,
-            column - 1,
-            workspace.GetMacroNames(),
-            workspace.GetFileText);
+        // `--resolve <name>` is dm_complete_resolve: one item's documentation, nothing else.
+        int resolveAt = Array.IndexOf(args, "--resolve");
+        if (resolveAt >= 0 && resolveAt + 1 < args.Length)
+        {
+            string documentation = CompletionService.ResolveDocumentation(
+                workspace.GetObjectTree(), document, line - 1, column - 1, args[resolveAt + 1],
+                workspace.GetMacroNames(), workspace.GetFileText);
+
+            Console.Out.WriteLine(documentation.Length > 0 ? documentation : "(no documentation)");
+            return 0;
+        }
+
+        // `--brief` is dm_complete_brief: the same list with no documentation collected, which is
+        // what the lazy-resolve path costs.
+        bool brief = Array.IndexOf(args, "--brief") >= 0;
+
+        CompletionResult result = brief
+            ? CompletionService.CompleteBriefAt(
+                workspace.GetObjectTree(), document, line - 1, column - 1, workspace.GetMacroNames())
+            : CompletionService.CompleteAt(
+                workspace.GetObjectTree(),
+                document,
+                line - 1,
+                column - 1,
+                workspace.GetMacroNames(),
+                workspace.GetFileText);
 
         Console.Out.WriteLine($"context: {result.Context}");
 
         foreach (CompletionItem item in result.Items)
         {
-            string mark = item.IsBuiltin ? "*" : " ";
+            string mark = item.IsBuiltin ? "*" : item.Inferred ? "~" : " ";
             string detail = string.IsNullOrEmpty(item.Detail) ? string.Empty : $"   {item.Detail}";
             Console.Out.WriteLine($" {mark} {item.Kind.ToString().ToLowerInvariant(),-9} {item.Name}{detail}");
 
@@ -924,7 +985,7 @@ internal static class Program
         }
 
         Console.Out.WriteLine();
-        Console.Out.WriteLine($"{result.Items.Count} item(s)   (* = BYOND builtin)");
+        Console.Out.WriteLine($"{result.Items.Count} item(s)   (* = BYOND builtin, ~ = inferred beyond dm.exe)");
         return 0;
     }
 

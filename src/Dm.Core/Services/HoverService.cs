@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
+using Dm.Core.Preprocessing;
 using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
@@ -52,18 +53,28 @@ public static class HoverService
         int line,
         int character,
         PositionEncoding encoding = PositionEncoding.Utf16,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        MacroTable? macros = null)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(document);
 
+        // Builtins included: hover is a glance at what a symbol IS, and a builtin is still
+        // something, even though go-to-definition rightly has nowhere to send the caret.
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-            tree, document, line, character, encoding, cancellationToken);
+            tree, document, line, character, encoding, cancellationToken, macros,
+            includeBuiltins: true);
 
         if (found.Count == 0)
             return null;
 
         DefinitionLocation target = found[0];
+        int offset = document.Text.GetOffset(new LinePosition(line, character), encoding);
+
+        // A builtin match has no file to read a declaration from; its signature was rendered from
+        // the symbol table instead, and nothing declares it so there is no doc comment.
+        if (target.File.Length == 0)
+            return new HoverResult(target.Detail, target.Signature, string.Empty, TokenSpanAt(document, offset));
 
         // The declaration lives in whatever file declared it, which is usually not this one.
         SourceText source = string.Equals(target.File, document.Path, StringComparison.OrdinalIgnoreCase)
@@ -79,8 +90,6 @@ public static class HoverService
             signature = source.GetLineText(declarationLine).Trim();
             documentation = DocComments.Above(source, declarationLine);
         }
-
-        int offset = document.Text.GetOffset(new LinePosition(line, character), encoding);
 
         return new HoverResult(target.Detail, signature, documentation, TokenSpanAt(document, offset));
     }

@@ -109,6 +109,8 @@ internal static class SymbolJson
             AppendString(json, symbol.Name);
             json.Append(",\"detail\":");
             AppendString(json, symbol.Detail);
+            json.Append(",\"owner\":");
+            AppendString(json, symbol.Owner);
             json.Append(",\"kind\":").Append((int)symbol.Kind);
             json.Append(",\"startLine\":").Append(symbol.Start.Line);
             json.Append(",\"startChar\":").Append(symbol.Start.Character);
