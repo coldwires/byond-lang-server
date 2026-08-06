@@ -162,4 +162,63 @@ public class DocumentSymbolServiceTests
     {
         Assert.Empty(Symbols(string.Empty));
     }
+
+    /// <summary>
+    /// Every symbol reports the resolved path of what contains it, so no client string-slices the
+    /// owner off a hover detail. A one-line <c>/mob/TEA()</c> is the shape dm-patch reported: the
+    /// outline entry said nothing about <c>/mob</c>.
+    /// </summary>
+    [Fact]
+    public void A_one_line_proc_reports_its_owner()
+    {
+        DocumentSymbol proc = Assert.Single(Symbols("/mob/proc/TEA()\n\treturn\n"));
+
+        Assert.Equal("/mob", proc.Owner);
+    }
+
+    /// <summary>Only the trailing keyword is the group marker; `mob/proc` owns children on /mob.</summary>
+    [Fact]
+    public void A_group_header_with_a_path_owns_its_children()
+    {
+        IReadOnlyList<DocumentSymbol> symbols = Symbols("mob/proc\n\tattack()\n\t\treturn\n");
+
+        Assert.Equal("/mob", Assert.Single(symbols).Owner);
+    }
+
+    [Fact]
+    public void Nested_members_report_the_enclosing_type()
+    {
+        DocumentSymbol type = Assert.Single(Symbols("/obj/item\n\tvar/hp = 1\n\tproc/use()\n\t\treturn\n"));
+
+        Assert.Equal("/obj", type.Owner);
+        Assert.All(type.Children, c => Assert.Equal("/obj/item", c.Owner));
+    }
+
+    /// <summary>
+    /// The var fork, same as the tree builder's: under a <c>var</c> the leading segments are the
+    /// declared type and the owner is the enclosing type; a bare override's leading segments ARE
+    /// the owner.
+    /// </summary>
+    [Fact]
+    public void A_typed_var_belongs_to_the_enclosing_type_and_a_bare_override_to_its_path()
+    {
+        DocumentSymbol mob = Assert.Single(Symbols("mob\n\tvar\n\t\tatom/movable/locker\n"));
+        Assert.Equal("/mob", Assert.Single(mob.Children).Owner);
+
+        DocumentSymbol overridden = Assert.Single(Symbols("/obj/item/hp = 3\n"));
+        Assert.Equal(SymbolKind.Variable, overridden.Kind);
+        Assert.Equal("/obj/item", overridden.Owner);
+    }
+
+    /// <summary>Root-level symbols are owned by <c>/</c>, and a global proc's parameters by it.</summary>
+    [Fact]
+    public void Root_level_symbols_report_the_root_and_parameters_their_proc()
+    {
+        IReadOnlyList<DocumentSymbol> symbols = Symbols(
+            "var/gx = 5\n/proc/bump(amount)\n\treturn\n", includeParameters: true);
+
+        Assert.Equal("/", symbols[0].Owner);
+        Assert.Equal("/", symbols[1].Owner);
+        Assert.Equal("/bump()", Assert.Single(symbols[1].Children).Owner);
+    }
 }

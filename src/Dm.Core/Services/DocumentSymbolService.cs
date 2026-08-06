@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
+using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -43,12 +44,15 @@ public static class DocumentSymbolService
     {
         ArgumentNullException.ThrowIfNull(parse);
 
-        return Build(parse.Root.Declarations, parse.Text, includeParameters, encoding, cancellationToken);
+        return Build(
+            parse.Root.Declarations, parse.Text, TypePath.Root, includeParameters, encoding,
+            cancellationToken);
     }
 
     private static List<DocumentSymbol> Build(
         IReadOnlyList<DeclarationSyntax> declarations,
         SourceText text,
+        TypePath enclosing,
         bool includeParameters,
         PositionEncoding encoding,
         CancellationToken cancellationToken)
@@ -62,52 +66,54 @@ public static class DocumentSymbolService
             switch (declaration)
             {
                 // A bare `var`/`proc` header is not a symbol; its children belong to the enclosing
-                // declaration, which is where a reader expects to find them.
+                // declaration, which is where a reader expects to find them. It can still carry a
+                // type path in front of the keyword — `mob/proc` heads a block on /mob — so the
+                // owner comes from the tree builder's rule, not from passing `enclosing` through.
                 case TypeDeclarationSyntax { IsGroupHeader: true } group:
-                    symbols.AddRange(Build(group.Members, text, includeParameters, encoding, cancellationToken));
+                    symbols.AddRange(Build(
+                        group.Members, text, TypeTreeBuilder.GroupOwner(enclosing, group.Path),
+                        includeParameters, encoding, cancellationToken));
                     break;
 
                 case TypeDeclarationSyntax type:
+                {
+                    TypePath path = TypeTreeBuilder.Combine(enclosing, type.Path);
+
                     symbols.Add(Create(
                         type,
                         SymbolKind.Type,
                         Describe(type),
                         text,
                         encoding,
-                        Build(type.Members, text, includeParameters, encoding, cancellationToken)));
+                        Build(type.Members, text, path, includeParameters, encoding, cancellationToken),
+                        path.Parent.Text));
                     break;
+                }
 
                 case ProcDeclarationSyntax proc:
+                {
+                    TypePath owner = TypeTreeBuilder.ProcOwner(enclosing, proc.Path);
+
                     symbols.Add(Create(
                         proc,
                         proc.IsVerb ? SymbolKind.Verb : SymbolKind.Proc,
                         Describe(proc),
                         text,
                         encoding,
-                        includeParameters ? Parameters(proc, text, encoding) : Array.Empty<DocumentSymbol>()));
+                        includeParameters
+                            ? Parameters(proc, owner, text, encoding)
+                            : Array.Empty<DocumentSymbol>(),
+                        owner.Text));
                     break;
+                }
 
                 case VarDeclarationSyntax variable:
-                    symbols.Add(Create(
-                        variable,
-                        SymbolKind.Variable,
-                        Describe(variable),
-                        text,
-                        encoding,
-                        Array.Empty<DocumentSymbol>()));
+                    symbols.Add(CreateVar(variable, text, enclosing, encoding));
 
                     // Names sharing one `var/` are siblings in the tree but peers in an outline —
                     // `var/a = 1, b = 2` should list two variables, not one with a child.
                     foreach (VarDeclarationSyntax sibling in variable.Siblings)
-                    {
-                        symbols.Add(Create(
-                            sibling,
-                            SymbolKind.Variable,
-                            Describe(sibling),
-                            text,
-                            encoding,
-                            Array.Empty<DocumentSymbol>()));
-                    }
+                        symbols.Add(CreateVar(sibling, text, enclosing, encoding));
 
                     break;
             }
@@ -116,13 +122,34 @@ public static class DocumentSymbolService
         return symbols;
     }
 
+    private static DocumentSymbol CreateVar(
+        VarDeclarationSyntax variable, SourceText text, TypePath enclosing, PositionEncoding encoding)
+    {
+        // Same fork as the tree builder: under a `var` the leading segments are the declared type
+        // and the variable belongs to the enclosing type; a bare assignment's leading segments ARE
+        // the type being overridden.
+        TypePath owner = variable.InVarContext
+            ? TypeTreeBuilder.VarOwner(enclosing, variable.Path)
+            : TypeTreeBuilder.BareAssignmentOwner(enclosing, variable.Path);
+
+        return Create(
+            variable,
+            SymbolKind.Variable,
+            Describe(variable),
+            text,
+            encoding,
+            Array.Empty<DocumentSymbol>(),
+            owner.Text);
+    }
+
     private static DocumentSymbol Create(
         DeclarationSyntax declaration,
         SymbolKind kind,
         string detail,
         SourceText text,
         PositionEncoding encoding,
-        IReadOnlyList<DocumentSymbol> children)
+        IReadOnlyList<DocumentSymbol> children,
+        string owner)
         => new(
             declaration.Name,
             detail,
@@ -131,11 +158,16 @@ public static class DocumentSymbolService
             text.GetLinePosition(declaration.Span.End, encoding),
             text.GetLinePosition(declaration.NameSpan.Start, encoding),
             text.GetLinePosition(declaration.NameSpan.End, encoding),
-            children);
+            children,
+            owner);
 
     private static List<DocumentSymbol> Parameters(
-        ProcDeclarationSyntax proc, SourceText text, PositionEncoding encoding)
+        ProcDeclarationSyntax proc, TypePath procOwner, SourceText text, PositionEncoding encoding)
     {
+        // A parameter's owner is the proc itself, spelled the way the reference index spells
+        // `inside` — `/mob/heal()` — so the two facts join without string surgery.
+        string owner = procOwner.IsRoot ? $"/{proc.Name}()" : $"{procOwner.Text}/{proc.Name}()";
+
         List<DocumentSymbol> parameters = new(proc.Parameters.Count);
 
         foreach (ParameterSyntax parameter in proc.Parameters)
@@ -151,7 +183,8 @@ public static class DocumentSymbolService
                 end,
                 start,
                 end,
-                Array.Empty<DocumentSymbol>()));
+                Array.Empty<DocumentSymbol>(),
+                owner));
         }
 
         return parameters;

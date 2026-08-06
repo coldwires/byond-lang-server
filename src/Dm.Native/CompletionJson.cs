@@ -14,7 +14,12 @@ internal static class CompletionJson
     {
         StringBuilder json = new();
 
-        json.Append("{\"context\":\"").Append(result.Context.ToString()).Append("\",\"items\":[");
+        json.Append("{\"context\":\"").Append(result.Context.ToString()).Append('"');
+
+        // Reported rather than inferred, as subtypesOf and references do — and here it also says
+        // whether filtering the list locally is still safe.
+        json.Append(",\"truncated\":").Append(result.Truncated ? "true" : "false");
+        json.Append(",\"items\":[");
 
         for (int i = 0; i < result.Items.Count; i++)
         {
@@ -29,12 +34,27 @@ internal static class CompletionJson
             SymbolJson.AppendString(json, item.Detail);
             json.Append(",\"kind\":").Append((int)item.Kind);
             json.Append(",\"builtin\":").Append(item.IsBuiltin ? "true" : "false");
+            json.Append(",\"inferred\":").Append(item.Inferred ? "true" : "false");
             json.Append(",\"documentation\":");
             SymbolJson.AppendString(json, item.Documentation);
             json.Append('}');
         }
 
         json.Append("]}");
+        return json.ToString();
+    }
+
+    /// <summary>One resolved item's documentation, as its own document.</summary>
+    /// <remarks>
+    /// An object rather than a bare string so the shape can gain fields — the same reason every
+    /// other response here is one. Empty documentation is a normal answer, not a failure.
+    /// </remarks>
+    public static string WriteDocumentation(string documentation)
+    {
+        StringBuilder json = new();
+        json.Append("{\"documentation\":");
+        SymbolJson.AppendString(json, documentation);
+        json.Append('}');
         return json.ToString();
     }
 }

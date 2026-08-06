@@ -202,6 +202,103 @@ internal static unsafe class Exports
         }
     }
 
+    /// <summary>
+    /// Inferred-type annotations for untyped locals in a line range. Added in ABI 0.16.
+    /// </summary>
+    /// <remarks>
+    /// DM code is full of <c>var/x = new /obj/item</c> and the type is exactly what a reader does
+    /// not have — the compiler never checks it, so nothing forces the author to write it. Each
+    /// hint carries the same inference completion rides on, rendered after the name.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_inlay_hints")]
+    public static int InlayHints(
+        IntPtr workspace,
+        byte* filePath,
+        int startLine,
+        int endLine,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            System.Collections.Generic.IReadOnlyList<InlayHint> hints = InlayHintService.HintsFor(
+                ws.GetObjectTree(), document, startLine, endLine, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(InlayHintJson.Write(hints));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Whether the object tree exists right now. Added in ABI 0.15.
+    /// </summary>
+    /// <remarks>
+    /// The readiness signal both IDE integrations were inferring from a call taking a long time:
+    /// the first tree-backed query after an edit rebuilds, and a client that knows a build is
+    /// coming can say "indexing" instead of freezing. Costs nothing to ask — it reads a field.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_tree_ready")]
+    public static int TreeReady(IntPtr workspace)
+    {
+        try
+        {
+            return HandleTable.TryGet(workspace, out Workspace ws)
+                ? ws.IsTreeBuilt ? 1 : 0
+                : -1;
+        }
+        catch (Exception ex)
+        {
+            Fail(DmStatus.Internal, ex.Message);
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Builds the object tree now, blocking until it exists. Added in ABI 0.15.
+    /// </summary>
+    /// <remarks>
+    /// The warm-at-open call: an IDE can pay the cold cost at a moment of its choosing — a splash
+    /// screen, a background thread at startup — instead of on the user's first completion. A warm
+    /// tree makes this a no-op, so calling it defensively is free.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_build_tree")]
+    public static int BuildTree(IntPtr workspace)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            ws.GetObjectTree();
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_close_buffer")]
     public static int CloseBuffer(IntPtr workspace, byte* filePath)
     {
@@ -424,7 +521,8 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding,
+                macros: ws.GetMacroTable());
 
             *outJson = NativeStrings.Allocate(DefinitionJson.Write(ws, found, (PositionEncoding)encoding));
             return Ok();
@@ -471,7 +569,8 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             HoverResult? hover = HoverService.HoverAt(
-                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding,
+                macros: ws.GetMacroTable());
 
             *outJson = NativeStrings.Allocate(
                 HoverJson.Write(hover, document.Text, (PositionEncoding)encoding));
@@ -661,9 +760,141 @@ internal static unsafe class Exports
                 character,
                 ws.GetMacroNames(),
                 ws.GetFileText,
-                (PositionEncoding)encoding);
+                (PositionEncoding)encoding,
+                default,
+                ws.CompletionLimit);
 
             *outJson = NativeStrings.Allocate(CompletionJson.Write(result));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Caps every completion list for this workspace, or 0 for no cap. Added in ABI 0.18.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, because a capped list is unsafe for a client that filters by the typed
+    /// prefix locally — it would silently miss the item being typed toward. Switch it on and read
+    /// <c>truncated</c> on the response to know when that happened.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_set_completion_limit")]
+    public static int SetCompletionLimit(IntPtr workspace, int limit)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (limit < 0)
+                return Fail(DmStatus.InvalidArgument, "limit must be zero or positive");
+
+            ws.CompletionLimit = limit;
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The completion list with no documentation attached. Added in ABI 0.17.
+    /// </summary>
+    /// <remarks>
+    /// A bare identifier on /tg/station offers 19,898 items and the user reads one. Measured, this
+    /// cuts 12.7% of the payload and no measurable time — the lookups run over cached text. Pair
+    /// with <see cref="CompleteResolve"/> on the highlighted item.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_complete_brief")]
+    public static int CompleteBrief(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            CompletionResult result = CompletionService.CompleteBriefAt(
+                ws.GetObjectTree(), document, line, character, ws.GetMacroNames(),
+                (PositionEncoding)encoding, default, ws.CompletionLimit);
+
+            *outJson = NativeStrings.Allocate(CompletionJson.Write(result));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The documentation for one item of the list a position offers. Added in ABI 0.17.
+    /// </summary>
+    /// <remarks>
+    /// Stateless: the position and the item's name identify it, so nothing is retained between the
+    /// list call and this one. DM has no overloads, so a name at a position is unambiguous.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_complete_resolve")]
+    public static int CompleteResolve(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        byte* itemName,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            string? name = NativeStrings.Read(itemName);
+            if (string.IsNullOrWhiteSpace(name))
+                return Fail(DmStatus.InvalidArgument, "name is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            string documentation = CompletionService.ResolveDocumentation(
+                ws.GetObjectTree(), document, line, character, name, ws.GetMacroNames(),
+                ws.GetFileText, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(CompletionJson.WriteDocumentation(documentation));
             return Ok();
         }
         catch (Exception ex)

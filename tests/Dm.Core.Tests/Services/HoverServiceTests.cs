@@ -114,4 +114,105 @@ public class HoverServiceTests
     {
         Assert.Null(Hover("/proc/f()\n\tnothing_at_a|ll = 1\n"));
     }
+
+    /// <summary>
+    /// A builtin member hovers even though nothing declares it: the signature is rendered from the
+    /// symbol table, since there is no source line to read. Go-to-definition still returns nothing
+    /// for it — there is no file to open — and that split is deliberate.
+    /// </summary>
+    [Fact]
+    public void A_builtin_member_hovers_from_the_symbol_table()
+    {
+        const string SourceWithCaret = "/proc/f()\n\tvar/mob/m = new\n\tm.lo|c = null\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = Builtins.CreateTree();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        HoverResult? hover = HoverService.HoverAt(tree, document, position.Line, position.Character);
+
+        Assert.NotNull(hover);
+        Assert.Equal("/atom/loc", hover!.Detail);
+        Assert.Equal("var/loc", hover.Signature);
+
+        Assert.Empty(DefinitionService.DefinitionAt(
+            tree, document, position.Line, position.Character));
+    }
+
+    /// <summary>A builtin proc renders the parameter list the reference documented.</summary>
+    [Fact]
+    public void A_builtin_proc_hovers_with_its_parameters()
+    {
+        const string SourceWithCaret = "/proc/f()\n\tvar/mob/m = new\n\tm.Mo|ve(null)\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = Builtins.CreateTree();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        HoverResult? hover = HoverService.HoverAt(tree, document, position.Line, position.Character);
+
+        Assert.NotNull(hover);
+        Assert.Equal("/atom/movable/Move()", hover!.Detail);
+        Assert.Equal("Move(NewLoc, Dir=0, step_x=0, step_y=0)", hover.Signature);
+    }
+
+    /// <summary>
+    /// The builtin global <c>world</c> — one of the most-typed names in DM — hovers with its type,
+    /// which the builtins table carries as the var's declared type.
+    /// </summary>
+    [Fact]
+    public void The_builtin_global_world_hovers_with_its_type()
+    {
+        const string SourceWithCaret = "/proc/f()\n\twor|ld.log << \"hi\"\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = Builtins.CreateTree();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        HoverResult? hover = HoverService.HoverAt(tree, document, position.Line, position.Character);
+
+        Assert.NotNull(hover);
+        Assert.Equal("/world", hover!.Detail);
+        Assert.Equal("var/world/world", hover.Signature);
+    }
+
+    /// <summary>
+    /// A macro hovers as its <c>#define</c> line, with the doc comment above it — the same render
+    /// path every other declaration uses, since definition hands hover the site.
+    /// </summary>
+    [Fact]
+    public void A_macro_renders_its_define_line_and_doc_comment()
+    {
+        const string SourceWithCaret =
+            "/// One clip.\n#define AMMO_MAX 30\n/proc/f()\n\tvar/x = AMMO|_MAX\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        HoverResult? hover = HoverService.HoverAt(
+            tree, document, position.Line, position.Character,
+            macros: DefinitionServiceTests.Macros(source, "test.dm"));
+
+        Assert.NotNull(hover);
+        Assert.Equal("#define AMMO_MAX", hover!.Detail);
+        Assert.Equal("#define AMMO_MAX 30", hover.Signature);
+        Assert.Equal("One clip.", hover.Documentation);
+    }
 }

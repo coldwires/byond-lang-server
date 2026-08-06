@@ -13,6 +13,11 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 18: completion is ranked by scope distance and reports "truncated"; added
+    ///     dm_set_completion_limit.
+    /// 17: added dm_complete_brief and dm_complete_resolve — lazy completion documentation.
+    /// 16: added dm_inlay_hints — inferred-type annotations for untyped locals.
+    /// 15: added dm_tree_ready and dm_build_tree, the readiness signal and the warm-at-open call.
     /// 14: dm_query_json gains "references" and "ancestorsOf"; added dm_invalidate.
     /// 13: added dm_diagnostics.
     /// 12: added dm_signature_at.
@@ -28,7 +33,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 14;
+    public const int Minor = 18;
 
     public static int Packed => (Major << 16) | Minor;
 }

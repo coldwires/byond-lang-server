@@ -28,7 +28,7 @@ public sealed class Workspace : IDisposable
     private readonly FileEffectCache _effects = new();
     private ObjectTree? _tree;
     private IReadOnlyList<(string File, ParseResult Parse)>? _parses;
-    private IReadOnlyCollection<string>? _macroNames;
+    private MacroTable? _macros;
 
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParseResult, TreeContribution>
         _contributions = new();
@@ -65,8 +65,27 @@ public sealed class Workspace : IDisposable
         Defines = defines;
         _tree = null;
         _parses = null;
-        _macroNames = null;
+        _macros = null;
     }
+
+    /// <summary>
+    /// Caps every completion list, or 0 for no cap. Default 0.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off by default on purpose. A bare identifier offers 19,898 items on /tg/station and capping
+    /// looks like the obvious fix, but a client that filters the list by the typed prefix — which
+    /// <c>INTEGRATION.txt</c> §4 tells them to do — would then silently miss the item being typed
+    /// toward. So the cap is the caller's to switch on, and
+    /// <see cref="Services.CompletionResult.Truncated"/> tells them when local filtering stopped
+    /// being safe.
+    /// </para>
+    /// <para>
+    /// Filtering server-side instead would be sound but costs a call per keystroke, and a keystroke
+    /// drops the tree — ~909 ms per character on /tg/station against one rebuild per trigger today.
+    /// </para>
+    /// </remarks>
+    public int CompletionLimit { get; set; }
 
     /// <summary>Absolute path to the <c>.dme</c> this workspace was opened from.</summary>
     public string DmePath { get; }
@@ -127,7 +146,7 @@ public sealed class Workspace : IDisposable
         // The tree was built from the previous text, so it no longer describes the project.
         _tree = null;
         _parses = null;
-        _macroNames = null;
+        _macros = null;
 
         return document;
     }
@@ -137,7 +156,7 @@ public sealed class Workspace : IDisposable
     {
         _tree = null;
         _parses = null;
-        _macroNames = null;
+        _macros = null;
         return _documents.Remove(NormalisePath(path));
     }
 
@@ -193,7 +212,7 @@ public sealed class Workspace : IDisposable
         };
 
         PreprocessResult preprocessed = Preprocessor.Run(DmePath, options);
-        _macroNames = preprocessed.Macros.Names;
+        _macros = preprocessed.Macros;
 
         // Reuses the token source and the parse of every file whose run came out identical, which
         // after an edit is nearly all of them.
@@ -257,7 +276,7 @@ public sealed class Workspace : IDisposable
     {
         _tree = null;
         _parses = null;
-        _macroNames = null;
+        _macros = null;
     }
 
     /// <summary>
@@ -269,7 +288,7 @@ public sealed class Workspace : IDisposable
     /// names therefore stay lexical until something else â€” a completion, a symbol query â€” has built
     /// a tree, and light up from then on.
     /// </remarks>
-    public Services.SemanticContext GetSemanticContext() => new(_tree, _macroNames);
+    public Services.SemanticContext GetSemanticContext() => new(_tree, _macros?.Names);
 
     /// <summary>
     /// Reads a file through the document store, for services that need text from another file.
@@ -289,11 +308,22 @@ public sealed class Workspace : IDisposable
     /// the walk's end state rather than what any one line saw â€” see <see cref="IncludeGraph.Macros"/>.
     /// </remarks>
     public IReadOnlyCollection<string> GetMacroNames(CancellationToken cancellationToken = default)
+        => GetMacroTable(cancellationToken)?.Names ?? System.Array.Empty<string>();
+
+    /// <summary>
+    /// The walk's final macro table, for definition and hover on a macro name.
+    /// </summary>
+    /// <remarks>
+    /// Builds the tree if it has not been built, since both come from the same walk. Like
+    /// <see cref="GetMacroNames"/> this is the end state rather than what any one line saw, so a
+    /// macro that was <c>#undef</c>ed is absent and a redefined one shows its last definition.
+    /// </remarks>
+    public MacroTable? GetMacroTable(CancellationToken cancellationToken = default)
     {
-        if (_macroNames is null)
+        if (_macros is null)
             GetObjectTree(cancellationToken);
 
-        return _macroNames ?? System.Array.Empty<string>();
+        return _macros;
     }
 
     /// <summary>

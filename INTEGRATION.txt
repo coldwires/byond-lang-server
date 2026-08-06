@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.14  (22 exports, cdecl, six RIDs)
+ ABI version at last update: 0.18  (28 exports, cdecl, six RIDs)
  Last updated: 2026-08-06
 ================================================================================
 
@@ -44,19 +44,24 @@ WHAT YOU GET TODAY
       src, a typed local, a typed parameter, a literal path - and otherwise
       by inference from new / as / assignment. See the note in section 4.
     - Go to definition via dm_definition_at. Type paths, members through
-      their receiver, and bare names. Returns EVERY declaration - see
-      section 4, this is the part most likely to surprise you.
+      their receiver, bare names, and macros to their #define. Returns
+      EVERY declaration - see section 4, this is the part most likely to
+      surprise you.
     - Workspace symbol search via dm_workspace_symbols. Ranked and capped,
       so a two-character query stays usable.
     - Hover via dm_hover_at. The resolved path, the declaration as written,
       and any doc comment above it - both /// runs and /** */ blocks.
+      Macros hover as their #define line, doc comment included; builtins
+      hover with a signature rendered from the symbol table, `world`
+      included.
     - Signature help via dm_signature_at. Which proc an open argument list
       belongs to and which parameter the caret is in, exact mid-keystroke.
     - Semantic highlighting. Colour IDs 12-15 distinguish a type name, a
       proc name, a var name and a macro name. See COLOURS below.
     - Document outline / symbols, with syntax diagnostics, via
       dm_document_symbols. Types, vars, procs and verbs, nested, each with a
-      range for the whole declaration and a second range for the name alone.
+      range for the whole declaration, a second range for the name alone,
+      and the resolved path of what owns it.
     - Object tree browsing via dm_query_json. A node and its children to a
       depth, every subtype of a path, one type's members with inheritance
       resolved, or the whole ancestor chain in one call (ancestorsOf). This
@@ -70,6 +75,14 @@ WHAT YOU GET TODAY
     - dm_invalidate, for files changing OUTSIDE the editor - a git checkout,
       a branch switch. Drops derived answers; the rebuild revalidates
       per-file, so only what actually changed is reprocessed.
+    - THE READINESS SIGNAL: dm_tree_ready says whether the object tree
+      exists right now, and dm_build_tree warms it at a moment you choose
+      - so "indexing..." is a fact you read, not a guess from latency.
+    - INLAY HINTS via dm_inlay_hints: the inferred type of every untyped
+      local, rendered after its name - var/x = new /obj/item gains
+      ": /obj/item". The type is exactly what a reader does not have,
+      because dm.exe never checks it and nothing forces the author to
+      write it.
 
     - Semantic error squiggles via dm_diagnostics: undefined vars and procs
       through a typed receiver, duplicate definitions, and the DM03xx
@@ -124,12 +137,12 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.14 and
-  passing 140 checks. It covers version negotiation, string ownership, handle
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.18 and
+  passing 184 checks. It covers version negotiation, string ownership, handle
   lifetime including use-after-close, classification in both encodings,
   document symbols, completion, injected defines, go-to-definition, hover,
-  signature help, diagnostics, the reference index, invalidation and
-  workspace symbols. The include and link lines in its CMakeLists.txt are meant
+  signature help, diagnostics, the reference index, invalidation, the
+  readiness signal and workspace symbols. The include and link lines in its CMakeLists.txt are meant
   to be copied verbatim. If you are stuck on build setup, build that first and
   confirm it runs - it is 30 seconds and it separates "my build is wrong" from
   "my code is wrong".
@@ -269,6 +282,22 @@ WHAT YOU GET TODAY
       call this when the watcher fires; if not, calling it on window focus
       is the pragmatic version.
 
+  dm_tree_ready(ws)                                             NEW in 0.15
+      Whether the object tree exists RIGHT NOW: 1 built, 0 not, -1 invalid
+      handle. Costs nothing - it reads a field - so poll it freely. This
+      is how you show "indexing..." instead of a frozen UI: 0 means the
+      next tree-backed call pays for a build, and the signal drops back to
+      0 whenever a buffer, a define change or dm_invalidate drops the
+      tree. Stops you inferring readiness from a call taking a long time.
+
+  dm_build_tree(ws)                                             NEW in 0.15
+      Builds the object tree now, blocking until it exists. The
+      warm-at-open call: pay the cold cost at a moment of your choosing -
+      a splash screen, a background thread at startup - instead of on the
+      user's first completion. A warm tree makes it a no-op, so calling it
+      defensively is free. The threading contract is unchanged: one
+      workspace, one thread at a time, so warm on your analysis thread.
+
   dm_classify_range(ws, file, start_line, end_line, encoding, &out)
       Line numbers are ZERO-BASED and INCLUSIVE. Out of range values clamp,
       they do not error.
@@ -294,6 +323,15 @@ WHAT YOU GET TODAY
 
       kind is 0 type, 1 variable, 2 proc, 3 verb, 4 parameter. Treat an
       unknown kind as a neutral icon so a library update cannot break you.
+
+      "owner" is the resolved path of whatever CONTAINS the symbol: a
+      member's owning type ("/mob"), a type's parent by path, a
+      parameter's proc spelled as the reference index spells "inside"
+      ("/mob/heal()"). "/" for anything at the root. This is the field a
+      hierarchy view or breadcrumb wants - resolved with the same owner
+      rules the object tree uses, so a one-line /mob/TEA() puts TEA on
+      /mob and a mob/proc group header carries its path. Do not
+      reconstruct it by slicing other fields.
 
       Diagnostics in the same document are the syntax errors for that file -
       enough for squiggles. The SEMANTIC set arrives through dm_diagnostics,
@@ -333,6 +371,45 @@ WHAT YOU GET TODAY
       ** COST ** The semantic half needs the object tree, so the first call
       after an edit rebuilds it - same as dm_complete_at. Debounce it.
 
+  dm_complete_brief(ws, file, line, character, encoding, &json)    NEW in 0.17
+  dm_complete_resolve(ws, file, line, character, name, encoding, &json)
+      The same completion list with every "documentation" left empty, and a
+      second call that fills in ONE item's when the user highlights it.
+      YOU FREE both with dm_free.
+
+      Resolve takes the file and position you completed at plus the item's
+      "name", and answers { "documentation": "..." }. Stateless: nothing is
+      retained between the two calls, so there is no handle to go stale and
+      no ordering to get wrong. DM has no overloads, so a name at a position
+      is unambiguous. An empty string is normal - most symbols have no doc
+      comment.
+
+      ** WHAT THIS BUYS, AND WHAT IT DOES NOT **
+      Measured on /tg/station, where one bare identifier offers 19,898
+      items totalling ~1.0 MB: documentation is 12.7% of that. So brief
+      cuts the bytes you marshal, and that is the whole of it. It is NOT
+      faster - we time full against brief inside run-to-run noise, because
+      the doc lookups run over text already cached.
+
+      If you were hoping for speed, the honest answer is that the ITEM
+      COUNT is the cost and neither of these changes it. We would rather
+      say so than let you adopt a call that does not solve your problem.
+
+  dm_inlay_hints(ws, file, start_line, end_line, encoding, &json)  NEW in 0.16
+      The inferred type of every untyped local in a line range, as UTF-8
+      JSON. YOU FREE IT with dm_free. Lines are ZERO-BASED and INCLUSIVE,
+      same as dm_classify_range; ask for what is visible.
+
+      Each hint: line, char (after the name, in your encoding), label
+      (": /obj/item", render as written), kind ("type" - treat unknown
+      kinds as opaque, more arrive later). A local with a WRITTEN type
+      gets no hint; every hint is inference dm.exe does not do, shown
+      through the same machinery completion rides on, so the hint and
+      the completion list cannot disagree about what a name holds.
+
+      ** COST ** The first call after an edit builds the object tree.
+      Re-ask on scroll and after edits, not per keystroke.
+
   dm_complete_at(ws, file, line, character, encoding, &json)
       What can be typed at a position, as UTF-8 JSON. YOU FREE IT with
       dm_free. Line and character are ZERO-BASED.
@@ -346,7 +423,28 @@ WHAT YOU GET TODAY
         Member          after `.` - the declared type and what it inherits
         SubtypeMember   after `:` - the above PLUS members from subtypes
         TypePath        after `/`
+        ReturnValue     a bare leading `.` - DM's return-value variable,
+                        not member access. The list is empty; show nothing.
+                        This is the context that saves you guessing what a
+                        user who just typed `.` on a fresh line wanted.
         None            nothing useful here
+
+      ** THE LIST IS RANKED, SO KEEP OUR ORDER **                NEW in 0.18
+      Ordered by scope distance, nearest first: locals, parameters, the
+      enclosing type's members, globals, macros, and BYOND's builtins
+      last. Alphabetical order put abs() above a local declared two lines
+      up. The ranking a search box uses - exact, then prefix, then
+      substring - cannot help at a bare identifier, because there is no
+      query string to rank against; scope distance is what the position
+      does know. Nothing in the response repeats this as a number: the
+      order IS the ranking, so preserve it. (The LSP writes it into
+      sortText, which is how a server pins order in VS Code.)
+
+      "truncated" says a cap cut the list, and is false unless you asked
+      for one - see dm_set_completion_limit. It is also the flag that
+      says whether filtering our list by the typed prefix is still safe:
+      over a truncated list it is not, because the item your user is
+      typing toward may have been cut.
 
       ** DO NOT MERGE `.` AND `:` **
       They are different lists because the compiler checks them differently.
@@ -376,11 +474,11 @@ WHAT YOU GET TODAY
       the members we list are the ones they are reaching for.
 
       THE CONSEQUENCE FOR YOU: a user can accept one of our completions and
-      get code that does not build. If that is not a trade you want to make
-      in your editor, filter on it - the type we used is in each item's
-      "detail" field, and you can drop Member-context items when the
-      receiver is an untyped local. Tell us if you would rather have this
-      behind a flag and we will add one.
+      get code that does not build. Every such item says so: "inferred":
+      true means the receiver's type was worked out rather than written
+      down, so badge those items, rank them lower, or drop them - the
+      decision is yours and the flag is the fact it needs. No guessing
+      from the context or the detail field.
 
       Everything else in the list agrees with the compiler. This is the one
       exception, and it is confined to completion.
@@ -449,6 +547,19 @@ WHAT YOU GET TODAY
       Where a symbol has several declarations this renders the NEAREST.
       Hover is a glance; dm_definition_at is what returns the whole chain.
 
+      A MACRO NAME hovers as its #define line, doc comment included -
+      detail "#define AMMO_MAX", signature "#define AMMO_MAX 30". Same
+      rule as definition: project macros only, not the built-in seeds or
+      injected -D defines.
+
+      A BUILTIN hovers too, even though nothing declares it: the
+      signature is rendered from the symbol table - "Move(NewLoc, Dir=0,
+      step_x=0, step_y=0)" for a proc, "var/loc" for a var, and the
+      global `world` answers "/world" with "var/world/world". Its
+      documentation is empty and dm_definition_at still returns nothing
+      for it - there is no file to open, and hover saying what a symbol
+      IS does not change that.
+
   dm_signature_at(ws, file, line, character, encoding, &json)    NEW in 0.12
       Which call encloses the position, whose proc it is, and which
       parameter the caret sits in, as UTF-8 JSON. YOU FREE IT with dm_free.
@@ -488,8 +599,18 @@ WHAT YOU GET TODAY
       reaches - so if your editor insists on a single destination, take the
       first and offer the rest rather than dropping them.
 
+      A MACRO NAME resolves to its #define. The preprocessor replaces the
+      token before the parser ever sees it, so the macro reading wins over
+      every other, wherever the name appears - a member slot, a path
+      segment, a directive's argument. Only a #define written in a real
+      file is navigable: the built-in TRUE/FALSE/DM_VERSION seeds and
+      injected -D defines have no source to open, so they resolve to
+      nothing, the same rule that keeps builtins out of every other
+      definition answer. The table is the walk's end state - a redefined
+      macro shows its last definition, an #undef'd one none.
+
       An empty array means nothing resolved. That is normal and not an
-      error: locals, parameters and macros are not in the object tree.
+      error: locals and parameters are not in the object tree.
 
       Each entry has the same two ranges as dm_document_symbols. Navigate
       with the sel* range so the caret lands on the name.

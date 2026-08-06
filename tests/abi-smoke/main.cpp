@@ -293,6 +293,13 @@ static void test_document_symbols(const fs::path &dme)
         check(doc.find("\"selStartChar\":") != std::string::npos, "symbols: selection range present");
         check(doc.find("\"children\":[{") != std::string::npos, "symbols: members nest as children");
 
+        // Every symbol names what contains it, so a hierarchy view never string-slices
+        // an owner off a hover detail. The members sit on /obj/item; the type on /obj.
+        check(doc.find("\"owner\":\"/obj/item\"") != std::string::npos,
+              "symbols: members carry their owning type");
+        check(doc.find("\"owner\":\"/obj\"") != std::string::npos,
+              "symbols: a type carries its path parent");
+
         // We hand it back, the caller frees it. Anything else leaks across the boundary.
         dm_free(json);
     }
@@ -359,6 +366,8 @@ static void test_completion(const fs::path &dir)
         out << "/mob/test/special\n\tvar/subtype_var = 2\n";
         out << "/datum/unrelated\n\tvar/elsewhere = 3\n";
         out << "/proc/f()\n\tvar/mob/test/t = new\n\tt.\n";
+        out << "/proc/g()\n\tvar/u = new /mob/test\n\tu.\n";
+        out << "/proc/h()\n\t.\n";
     }
 
     dm_workspace ws = nullptr;
@@ -378,10 +387,120 @@ static void test_completion(const fs::path &dir)
         check(doc.find("subtype_var") == std::string::npos, "complete: `.` excludes subtype members");
         check(doc.find("elsewhere") == std::string::npos, "complete: `.` excludes unrelated types");
         check(doc.find("\"builtin\":") != std::string::npos, "complete: builtin flag present");
+        check(doc.find("\"inferred\":true") == std::string::npos,
+              "complete: a declared receiver marks nothing inferred");
         dm_free(json);
     }
 
+    // Line 11 (0-based) is `\tu.` — an UNTYPED local initialised with `new /mob/test`. The list
+    // rides on inference dm.exe does not do, and every item says so.
+    json = nullptr;
+    check(dm_complete_at(ws, "complete.dm", 11, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "complete: inferred-receiver call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"name\":\"base_var\"") != std::string::npos,
+              "complete: inference offers the members");
+        check(doc.find("\"inferred\":true") != std::string::npos,
+              "complete: inferred items carry the flag");
+        dm_free(json);
+    }
+
+    // Line 13 (0-based) is `\t.` — a bare leading dot is DM's return-value variable, not member
+    // access, and the distinct context is what lets a client show nothing without guessing.
+    json = nullptr;
+    check(dm_complete_at(ws, "complete.dm", 13, 2, DM_ENCODING_UTF16, &json) == DM_OK,
+          "complete: bare-dot call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"context\":\"ReturnValue\"") != std::string::npos,
+              "complete: a bare leading dot is the return-value context");
+        check(doc.find("\"items\":[]") != std::string::npos, "complete: and its list is empty");
+        dm_free(json);
+    }
+
+    // Ranking and the opt-in cap. The list is ordered by scope distance, so the type's
+    // own var comes before the builtins it inherits; and a cap is off until asked for,
+    // because a client filtering locally over a truncated list misses what is being typed.
+    json = nullptr;
+    check(dm_complete_at(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "limit: uncapped call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"truncated\":false") != std::string::npos,
+              "limit: an uncapped list says it was not cut");
+
+        // base_var is declared on /mob/test; loc is a builtin off /atom. Ranking puts ours first.
+        const std::size_t ours = doc.find("\"name\":\"base_var\"");
+        const std::size_t theirs = doc.find("\"name\":\"loc\"");
+        check(ours != std::string::npos && theirs != std::string::npos && ours < theirs,
+              "limit: a declared member ranks above a builtin");
+        dm_free(json);
+    }
+
+    check(dm_set_completion_limit(ws, 3) == DM_OK, "limit: accepted");
+
+    json = nullptr;
+    check(dm_complete_at(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "limit: capped call succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"truncated\":true") != std::string::npos,
+              "limit: a capped list reports that it was cut");
+        dm_free(json);
+    }
+
+    check(dm_set_completion_limit(ws, -1) == DM_ERR_INVALID_ARG, "limit: a negative cap is rejected");
+    check(dm_set_completion_limit(ws, 0) == DM_OK, "limit: zero restores no cap");
+
+    // Lazy resolve: the brief list is the same items with documentation left off, and
+    // resolve fills in the one the user highlighted. A bare identifier on a real project
+    // offers tens of thousands of items and the user reads one.
+    json = nullptr;
+    check(dm_complete_brief(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "resolve: brief list succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"name\":\"base_var\"") != std::string::npos,
+              "resolve: the brief list has the same items");
+        check(doc.find("\"documentation\":\"\"") != std::string::npos,
+              "resolve: and carries no documentation");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_complete_resolve(ws, "complete.dm", 8, 3, "base_var", DM_ENCODING_UTF16, &json) == DM_OK,
+          "resolve: resolving one item succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"documentation\":") != std::string::npos,
+              "resolve: the response carries a documentation field");
+        dm_free(json);
+    }
+
+    // A name the position does not offer is an empty answer, not an error.
+    json = nullptr;
+    check(dm_complete_resolve(ws, "complete.dm", 8, 3, "no_such_item", DM_ENCODING_UTF16, &json) == DM_OK,
+          "resolve: an unknown item still succeeds");
+    dm_free(json);
+
     char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_complete_resolve(ws, "complete.dm", 8, 3, nullptr, DM_ENCODING_UTF16, &rejected)
+              == DM_ERR_INVALID_ARG,
+          "resolve: a null name is rejected");
+    check(rejected == nullptr, "resolve: out-param cleared on failure");
+
+    rejected = reinterpret_cast<char *>(0x1);
     check(dm_complete_at(ws, "complete.dm", 8, 3, 99, &rejected) == DM_ERR_INVALID_ARG,
           "complete: unknown encoding rejected");
     check(rejected == nullptr, "complete: out-param cleared on failure");
@@ -517,6 +636,8 @@ static void test_hover(const fs::path &dir)
         std::ofstream out(dir / "hover.dm");
         out << "/mob/guy\n\t/// How much damage it can take.\n\tvar/health = 1\n";
         out << "/proc/f()\n\tvar/mob/guy/g = new\n\tg.health = 2\n";
+        out << "#define CLIP_SIZE 30\n/proc/g2()\n\treturn CLIP_SIZE\n";
+        out << "/proc/g3()\n\tvar/mob/guy/m = new\n\treturn m.loc\n";
     }
 
     std::printf("hover\n");
@@ -535,6 +656,35 @@ static void test_hover(const fs::path &dir)
         check(doc.find("/mob/guy/health") != std::string::npos, "hover: resolved the member");
         check(doc.find("var/health = 1") != std::string::npos, "hover: rendered the declaration");
         check(doc.find("How much damage") != std::string::npos, "hover: carried the doc comment");
+        dm_free(json);
+    }
+
+    // A macro resolves to its #define — the preprocessor replaces the token before
+    // the parser sees it, so the macro reading wins wherever the name appears.
+    // Line 8 (0-based) is `\treturn CLIP_SIZE`; character 8 is inside CLIP_SIZE.
+    json = nullptr;
+    check(dm_hover_at(ws, "hover.dm", 8, 8, DM_ENCODING_UTF16, &json) == DM_OK,
+          "hover: macro call succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("#define CLIP_SIZE") != std::string::npos,
+              "hover: a macro resolves to its #define");
+        dm_free(json);
+    }
+
+    // A builtin member hovers from the symbol table - nothing declares `loc`, so the
+    // signature is rendered rather than read from a file. Line 11 (0-based) is
+    // `\treturn m.loc`; character 10 is inside `loc`.
+    json = nullptr;
+    check(dm_hover_at(ws, "hover.dm", 11, 10, DM_ENCODING_UTF16, &json) == DM_OK,
+          "hover: builtin call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("/atom/loc") != std::string::npos, "hover: a builtin member resolves");
+        check(doc.find("var/loc") != std::string::npos, "hover: its signature is rendered");
         dm_free(json);
     }
 
@@ -601,14 +751,63 @@ static void test_references(const fs::path &dir)
         dm_free(json);
     }
 
+    // The readiness signal. A tree exists here - the queries above built it - and
+    // invalidation is exactly what drops it, so the boolean tracks both edges.
+    check(dm_tree_ready(ws) == 1, "ready: a queried workspace reports a tree");
+
     check(dm_invalidate(ws) == DM_OK, "references: dm_invalidate succeeds");
+
+    check(dm_tree_ready(ws) == 0, "ready: invalidation drops it to 0");
+    check(dm_build_tree(ws) == DM_OK, "ready: dm_build_tree warms it back");
+    check(dm_tree_ready(ws) == 1, "ready: and the tree reports built");
+    check(dm_build_tree(ws) == DM_OK, "ready: warming a warm tree is a no-op");
 
     json = nullptr;
     check(dm_query_json(ws, "{\"query\":\"references\",\"path\":\"/mob/guy/hp\"}", &json) == DM_OK,
           "references: the workspace rebuilds after invalidation");
     dm_free(json);
 
+    // Inlay hints. refs.dm declares `var/mob/guy/g` with a WRITTEN type, so the
+    // whole file hints nothing - a hint beside a written type would be noise.
+    json = nullptr;
+    check(dm_inlay_hints(ws, "refs.dm", 0, 100, DM_ENCODING_UTF16, &json) == DM_OK,
+          "hints: call succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"hints\":[]") != std::string::npos,
+              "hints: written types produce no hints");
+        dm_free(json);
+    }
+
+    // An untyped local pushed as a buffer: the inferred type is rendered after it.
+    const char *hinted =
+        "/mob/guy\n\tvar/hp = 1\n\tproc/hurt()\n\t\thp = 2\n"
+        "/proc/f()\n\tvar/g = new /mob/guy\n\treturn g.hp\n";
+    check(dm_set_buffer(ws, "refs.dm", hinted, (int32_t)std::strlen(hinted)) == DM_OK,
+          "hints: buffer pushed");
+
+    json = nullptr;
+    check(dm_inlay_hints(ws, "refs.dm", 0, 100, DM_ENCODING_UTF16, &json) == DM_OK,
+          "hints: untyped-local call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\": /mob/guy\"") != std::string::npos,
+              "hints: the inferred type is rendered");
+        check(doc.find("\"kind\":\"type\"") != std::string::npos, "hints: kind is a word");
+        dm_free(json);
+    }
+
+    check(dm_close_buffer(ws, "refs.dm") == DM_OK, "hints: buffer closed");
+
     dm_workspace_close(ws);
+
+    // Stale-handle answers, in each call's own convention: the boolean is -1, the
+    // status call is the usual invalid-handle error.
+    check(dm_tree_ready(ws) == -1, "ready: a closed handle reports -1");
+    check(dm_build_tree(ws) == DM_ERR_INVALID_HANDLE, "ready: build on a closed handle errors");
 }
 
 // ---------------------------------------------------------------------------

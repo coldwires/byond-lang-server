@@ -47,7 +47,8 @@ public sealed class DocumentSymbol
         LinePosition end,
         LinePosition selectionStart,
         LinePosition selectionEnd,
-        IReadOnlyList<DocumentSymbol> children)
+        IReadOnlyList<DocumentSymbol> children,
+        string owner = "")
     {
         Name = name;
         Detail = detail;
@@ -57,6 +58,7 @@ public sealed class DocumentSymbol
         SelectionStart = selectionStart;
         SelectionEnd = selectionEnd;
         Children = children;
+        Owner = owner;
     }
 
     public string Name { get; }
@@ -66,6 +68,19 @@ public sealed class DocumentSymbol
     /// Empty when there is nothing useful to add.
     /// </summary>
     public string Detail { get; }
+
+    /// <summary>
+    /// The resolved path of whatever contains this symbol: a member's owning type, a type's parent
+    /// by path, a parameter's proc as <c>/mob/heal()</c>. <c>/</c> for anything at the root.
+    /// </summary>
+    /// <remarks>
+    /// Resolved with the tree builder's own owner rules — a one-line <c>/mob/TEA()</c> puts
+    /// <c>TEA</c> on <c>/mob</c>, a <c>mob/proc</c> group header carries its path, a typed var in a
+    /// <c>var</c> block belongs to the enclosing type while a bare override's leading segments are
+    /// the owner. Clients had been reconstructing this by string-slicing hover details, which is
+    /// exactly the kind of fact that should exist in one place.
+    /// </remarks>
+    public string Owner { get; }
 
     public SymbolKind Kind { get; }
 

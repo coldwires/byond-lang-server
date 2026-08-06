@@ -1,3 +1,5 @@
+using Dm.Core.Diagnostics;
+using Dm.Core.Preprocessing;
 using Dm.Core.Services;
 using Dm.Core.Symbols;
 using Dm.Core.Syntax;
@@ -10,7 +12,8 @@ public class DefinitionServiceTests
     /// <summary>
     /// Resolves at the caret marked <c>|</c>, which is removed before parsing.
     /// </summary>
-    private static IReadOnlyList<DefinitionLocation> Definition(string sourceWithCaret)
+    private static IReadOnlyList<DefinitionLocation> Definition(
+        string sourceWithCaret, MacroTable? macros = null)
     {
         int caret = sourceWithCaret.IndexOf('|');
         Assert.True(caret >= 0, "the source must mark the caret with |");
@@ -23,7 +26,26 @@ public class DefinitionServiceTests
         TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
 
         LinePosition position = document.Text.GetLinePosition(caret);
-        return DefinitionService.DefinitionAt(tree, document, position.Line, position.Character);
+        return DefinitionService.DefinitionAt(
+            tree, document, position.Line, position.Character, macros: macros);
+    }
+
+    /// <summary>A macro table holding every <c>#define</c> in <paramref name="source"/>.</summary>
+    internal static MacroTable Macros(string source, string path)
+    {
+        LexResult lex = Lexer.Lex(SourceText.From(source, path));
+        MacroTable table = new();
+
+        foreach (Directive directive in DirectiveScanner.Scan(lex))
+        {
+            if (directive.Kind == DirectiveKind.Define
+                && MacroDefinition.Parse(lex, directive, new List<Diagnostic>()) is { } macro)
+            {
+                table.Define(macro);
+            }
+        }
+
+        return table;
     }
 
     private static string TextAt(string source, DefinitionLocation location)
@@ -123,5 +145,62 @@ public class DefinitionServiceTests
     public void A_position_on_no_token_resolves_to_nothing()
     {
         Assert.Empty(Definition("/obj/item\n|\n"));
+    }
+
+    /// <summary>A macro use goes to its <c>#define</c>.</summary>
+    [Fact]
+    public void A_macro_use_resolves_to_its_define()
+    {
+        MacroTable macros = Macros("#define AMMO_MAX 30\n", "defs.dm");
+
+        DefinitionLocation location = Assert.Single(Definition(
+            "/proc/f()\n\tvar/x = AMMO|_MAX\n", macros));
+
+        Assert.Equal("defs.dm", location.File);
+        Assert.Equal("#define AMMO_MAX", location.Detail);
+        Assert.Equal("#define ".Length, location.NameSpan.Start);
+    }
+
+    /// <summary>A function-like macro renders its parameter list in the detail.</summary>
+    [Fact]
+    public void A_function_like_macro_shows_its_parameters()
+    {
+        MacroTable macros = Macros("#define DOUBLE(x) ((x) * 2)\n", "defs.dm");
+
+        DefinitionLocation location = Assert.Single(Definition(
+            "/proc/f()\n\treturn DOU|BLE(4)\n", macros));
+
+        Assert.Equal("#define DOUBLE(x)", location.Detail);
+    }
+
+    /// <summary>
+    /// The macro reading wins over the member reading, because the preprocessor replaces the token
+    /// before the parser ever sees it — whatever position it sits in.
+    /// </summary>
+    [Fact]
+    public void A_macro_wins_over_a_member_of_the_same_name()
+    {
+        MacroTable macros = Macros("#define health 5\n", "defs.dm");
+
+        DefinitionLocation location = Assert.Single(Definition(
+            "/mob/guy\n\tvar/health = 1\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.heal|th = 2\n",
+            macros));
+
+        Assert.Equal("#define health", location.Detail);
+    }
+
+    /// <summary>
+    /// The built-in seeds and injected <c>-D</c> defines have no source to open — nothing declares
+    /// them, the same rule that keeps builtins out of every other definition answer.
+    /// </summary>
+    [Fact]
+    public void A_predefined_or_injected_macro_resolves_to_nothing()
+    {
+        MacroTable macros = new();
+        macros.SeedPredefined();
+        macros.Define(CommandLineDefine.Parse("CBT")!);
+
+        Assert.Empty(Definition("/proc/f()\n\tvar/x = TR|UE\n", macros));
+        Assert.Empty(Definition("/proc/f()\n\tvar/x = CB|T\n", macros));
     }
 }

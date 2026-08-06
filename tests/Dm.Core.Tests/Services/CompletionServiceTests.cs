@@ -473,4 +473,210 @@ public class CompletionServiceTests
 
         Assert.Empty(result.Items);
     }
+
+    /// <summary>
+    /// A bare leading <c>.</c> is the return-value variable, not member access. The distinct
+    /// context lets a client show nothing without guessing from the trigger character.
+    /// </summary>
+    [Fact]
+    public void A_bare_leading_dot_is_the_return_value_context()
+    {
+        CompletionResult atLineStart = Complete("/mob/guy\n\tvar/health = 1\n\tproc/f()\n\t\t.|\n");
+        Assert.Equal(CompletionContext.ReturnValue, atLineStart.Context);
+        Assert.Empty(atLineStart.Items);
+
+        CompletionResult afterReturn = Complete("/mob/guy\n\tproc/f()\n\t\treturn .|\n");
+        Assert.Equal(CompletionContext.ReturnValue, afterReturn.Context);
+
+        // A dot after a value is member access, exactly as before.
+        CompletionResult member = Complete(
+            "/mob/guy\n\tvar/health = 1\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n");
+        Assert.Equal(CompletionContext.Member, member.Context);
+    }
+
+    /// <summary>
+    /// Items offered through an inferred receiver say so — the flag replaces every client's guess
+    /// about which items ride on inference <c>dm.exe</c> does not do.
+    /// </summary>
+    [Fact]
+    public void An_inferred_receiver_marks_every_item_and_a_declared_one_marks_none()
+    {
+        CompletionResult inferred = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = new /obj/item\n\tx.|\n");
+        Assert.NotEmpty(inferred.Items);
+        Assert.All(inferred.Items, i => Assert.True(i.Inferred));
+
+        CompletionResult declared = Complete(
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/obj/item/x = new\n\tx.|\n");
+        Assert.NotEmpty(declared.Items);
+        Assert.All(declared.Items, i => Assert.False(i.Inferred));
+    }
+
+    /// <summary>
+    /// The lazy-resolve pair: the brief list carries no documentation, and resolving one item
+    /// returns exactly that item's. The list is otherwise identical, so a client can switch to
+    /// lazy resolve without losing anything else.
+    /// </summary>
+    [Fact]
+    public void The_brief_list_carries_no_documentation_and_resolve_supplies_it()
+    {
+        const string SourceWithCaret =
+            "/mob/guy\n\t/// How much damage it can take.\n\tvar/health = 1\n"
+            + "\t/// Not this one.\n\tvar/other = 2\n"
+            + "/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        SourceText? Reader(string _) => document.Text;
+
+        // The full list documents everything it can.
+        CompletionResult full = CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character, null, Reader);
+
+        Assert.Equal(
+            "How much damage it can take.",
+            full.Items.Single(i => i.Name == "health").Documentation);
+
+        // The brief list is the same items with the documentation left off.
+        CompletionResult brief = CompletionService.CompleteBriefAt(
+            tree, document, position.Line, position.Character);
+
+        Assert.Equal(Names(full), Names(brief));
+        Assert.All(brief.Items, i => Assert.Empty(i.Documentation));
+
+        // Resolve answers for the one item asked about.
+        Assert.Equal(
+            "How much damage it can take.",
+            CompletionService.ResolveDocumentation(
+                tree, document, position.Line, position.Character, "health", null, Reader));
+
+        Assert.Equal(
+            "Not this one.",
+            CompletionService.ResolveDocumentation(
+                tree, document, position.Line, position.Character, "other", null, Reader));
+    }
+
+    /// <summary>A name the position does not offer resolves to nothing, not an error.</summary>
+    [Fact]
+    public void Resolving_an_unknown_item_is_empty()
+    {
+        const string SourceWithCaret =
+            "/mob/guy\n\t/// Doc.\n\tvar/health = 1\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+
+        Assert.Empty(CompletionService.ResolveDocumentation(
+            tree, document, position.Line, position.Character, "no_such_member",
+            null, _ => document.Text));
+    }
+
+    /// <summary>
+    /// Ranked by scope distance, nearest first — a local the user declared two lines up outranks a
+    /// builtin nobody asked for. The query-driven ranking a picker uses cannot help here: a bare
+    /// identifier position has no query string.
+    /// </summary>
+    [Fact]
+    public void A_bare_identifier_is_ranked_by_scope_distance()
+    {
+        CompletionResult result = Complete(
+            "/mob/guy\n\tvar/member_var = 1\n\tproc/f(param_var)\n\t\tvar/local_var = 1\n\t\t|\n",
+            withBuiltins: true);
+
+        string[] names = Names(result);
+
+        int local = Array.IndexOf(names, "local_var");
+        int param = Array.IndexOf(names, "param_var");
+        int member = Array.IndexOf(names, "member_var");
+        int builtin = Array.IndexOf(names, "loc");
+
+        Assert.True(local >= 0 && param >= 0 && member >= 0 && builtin >= 0, "all four must be offered");
+
+        Assert.True(local < param, "a local outranks a parameter");
+        Assert.True(param < member, "a parameter outranks a member");
+        Assert.True(member < builtin, "a declared member outranks a builtin");
+    }
+
+    /// <summary>
+    /// A cap is off unless a caller asks for one, and it says so when it bites — a client that
+    /// filters locally over a silently truncated list would miss what the user is typing toward.
+    /// </summary>
+    [Fact]
+    public void A_limit_caps_the_list_and_reports_that_it_did()
+    {
+        const string SourceWithCaret =
+            "/mob/guy\n\tvar/a = 1\n\tvar/b = 2\n\tvar/c = 3\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+
+        CompletionResult uncapped = CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character, null, null);
+
+        Assert.False(uncapped.Truncated);
+        Assert.Equal(3, uncapped.Items.Count);
+
+        CompletionResult capped = CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character, null, null,
+            PositionEncoding.Utf16, default, limit: 2);
+
+        Assert.True(capped.Truncated);
+        Assert.Equal(2, capped.Items.Count);
+
+        // The cap keeps the ranking's head, so what survives is the nearest, not an arbitrary slice.
+        Assert.Equal(new[] { "a", "b" }, capped.Items.Select(i => i.Name).ToArray());
+    }
+
+    /// <summary>A limit the list does not reach is not a truncation.</summary>
+    [Fact]
+    public void A_limit_larger_than_the_list_reports_nothing_cut()
+    {
+        const string SourceWithCaret =
+            "/mob/guy\n\tvar/a = 1\n/proc/f()\n\tvar/mob/guy/g = new\n\tg.|\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+
+        CompletionResult result = CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character, null, null,
+            PositionEncoding.Utf16, default, limit: 500);
+
+        Assert.False(result.Truncated);
+        Assert.Single(result.Items);
+    }
+
+    /// <summary>An <c>as</c> clause is an input filter, not a type — dm.exe checks nothing off it.</summary>
+    [Fact]
+    public void An_as_clause_receiver_is_inferred()
+    {
+        CompletionResult result = Complete(
+            "/mob\n\tvar/hp = 1\n/proc/f(M as mob)\n\tM.|\n", withBuiltins: true);
+
+        Assert.NotEmpty(result.Items);
+        Assert.All(result.Items, i => Assert.True(i.Inferred));
+    }
 }

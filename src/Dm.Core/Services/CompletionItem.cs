@@ -50,20 +50,43 @@ public enum CompletionContext
 
     /// <summary>Mid-path after <c>/</c> — child type paths.</summary>
     TypePath = 4,
+
+    /// <summary>
+    /// A bare leading <c>.</c> — DM's return-value variable, not member access.
+    /// </summary>
+    /// <remarks>
+    /// The list is empty: the variable is untyped and offering the whole identifier list after a
+    /// typed <c>.</c> is noise every client would have to suppress by guessing. A distinct value
+    /// moves the decision to where the knowledge is (dm-patch's §4).
+    /// </remarks>
+    ReturnValue = 5,
 }
 
 /// <summary>One entry in a completion list.</summary>
 public sealed class CompletionItem
 {
     public CompletionItem(
-        string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "")
+        string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "",
+        bool inferred = false, int rank = 0)
     {
         Name = name;
         Kind = kind;
         Detail = detail;
         IsBuiltin = isBuiltin;
         Documentation = documentation;
+        Inferred = inferred;
+        Rank = rank;
     }
+
+    /// <summary>
+    /// Scope distance, lowest first: how near this name was declared to the position asking.
+    /// </summary>
+    /// <remarks>
+    /// The list is returned in this order, so the order IS the ranking and a client needs nothing
+    /// else. Not exposed across the ABI for that reason — a number invites a client to re-sort by
+    /// it and disagree with us.
+    /// </remarks>
+    internal int Rank { get; }
 
     public string Name { get; }
 
@@ -84,19 +107,49 @@ public sealed class CompletionItem
     /// </remarks>
     public string Documentation { get; }
 
+    /// <summary>
+    /// True when this item rides on type inference <c>dm.exe</c> does not do — the receiver's type
+    /// was worked out from a <c>new</c>, an <c>as</c> clause or an assignment rather than written
+    /// down, so accepting the item can produce code that does not compile.
+    /// </summary>
+    /// <remarks>
+    /// The compiler checks only a written type (PLAN.md §6, the one deliberate divergence).
+    /// Clients had been guessing this from the trigger context; the flag replaces the guess.
+    /// </remarks>
+    public bool Inferred { get; }
+
     public override string ToString() => $"{Kind} {Name}";
 }
 
 /// <summary>A completion list plus the context that produced it.</summary>
 public sealed class CompletionResult
 {
-    public CompletionResult(CompletionContext context, System.Collections.Generic.IReadOnlyList<CompletionItem> items)
+    public CompletionResult(
+        CompletionContext context,
+        System.Collections.Generic.IReadOnlyList<CompletionItem> items,
+        bool truncated = false)
     {
         Context = context;
         Items = items;
+        Truncated = truncated;
     }
 
     public CompletionContext Context { get; }
 
+    /// <summary>
+    /// Ordered by scope distance, nearest first: locals, parameters, members of the enclosing
+    /// type, globals, macros, and BYOND's builtins last.
+    /// </summary>
     public System.Collections.Generic.IReadOnlyList<CompletionItem> Items { get; }
+
+    /// <summary>
+    /// True when a caller-supplied limit cut the list.
+    /// </summary>
+    /// <remarks>
+    /// Reported rather than inferred, the same as <c>subtypesOf</c> and <c>references</c>: a list
+    /// exactly as long as the limit is indistinguishable from one that was cut. It also decides
+    /// whether a client may filter locally — over a truncated list, local filtering silently omits
+    /// the item the user is typing toward.
+    /// </remarks>
+    public bool Truncated { get; }
 }

@@ -150,6 +150,14 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteDocumentSymbols(json, params_, cancel));
                     break;
 
+                case "textDocument/inlayHint":
+                    RespondCancellable(id, (json, cancel) => WriteInlayHints(json, params_, cancel));
+                    break;
+
+                case "completionItem/resolve":
+                    RespondCancellable(id, (json, cancel) => WriteCompletionResolve(json, params_, cancel));
+                    break;
+
                 case "textDocument/semanticTokens/full":
                     RespondCancellable(id, (json, _) => WriteSemanticTokens(json, params_));
                     break;
@@ -376,6 +384,11 @@ internal sealed class LspServer
         json.WriteStringValue(":");
         json.WriteStringValue("/");
         json.WriteEndArray();
+
+        // Documentation is filled in on resolve. A bare identifier on a large project offers tens
+        // of thousands of items and the user reads one, so sending every doc comment up front is
+        // work for text nobody looks at.
+        json.WriteBoolean("resolveProvider", true);
         json.WriteEndObject();
         json.WriteBoolean("hoverProvider", true);
         json.WriteStartObject("signatureHelpProvider");
@@ -389,6 +402,7 @@ internal sealed class LspServer
         json.WriteBoolean("documentHighlightProvider", true);
         json.WriteBoolean("documentSymbolProvider", true);
         json.WriteBoolean("workspaceSymbolProvider", true);
+        json.WriteBoolean("inlayHintProvider", true);
         json.WriteStartObject("semanticTokensProvider");
         json.WriteStartObject("legend");
         json.WriteStartArray("tokenTypes");
@@ -530,22 +544,37 @@ internal sealed class LspServer
 
         Document document = ws.GetDocument(path);
 
-        CompletionResult result = CompletionService.CompleteAt(
+        // Brief: documentation is filled in by completionItem/resolve, so the keystroke path does
+        // not read a file per item for text the user will not look at.
+        CompletionResult result = CompletionService.CompleteBriefAt(
             TreeAnnouncingBuild(ws, cancel),
             document,
             line,
             character,
             ws.GetMacroNames(cancel),
-            ws.GetFileText,
             PositionEncoding.Utf16,
-            cancellationToken: cancel);
+            cancel,
+            ws.CompletionLimit);
 
-        json.WriteStartArray();
+        // A CompletionList rather than a bare array, so isIncomplete can be stated. It is false
+        // unless a limit cut the list: with no cap the list is complete and VS Code filters it
+        // locally, which keeps the cost at one rebuild per trigger instead of one per keystroke.
+        json.WriteStartObject();
+        json.WriteBoolean("isIncomplete", result.Truncated);
+        json.WriteStartArray("items");
+
+        int order = 0;
 
         foreach (CompletionItem item in result.Items)
         {
             json.WriteStartObject();
             json.WriteString("label", item.Name);
+
+            // Our order is the ranking - scope distance, nearest first - and sortText is how a
+            // server pins it in VS Code, which otherwise sorts by its own score.
+            json.WriteString("sortText", order.ToString("D6", System.Globalization.CultureInfo.InvariantCulture));
+            order++;
+
             json.WriteNumber("kind", item.Kind switch
             {
                 CompletionKind.Type => 7,       // Class
@@ -561,18 +590,25 @@ internal sealed class LspServer
             if (item.Detail.Length > 0)
                 json.WriteString("detail", item.Detail);
 
-            if (item.Documentation.Length > 0)
-            {
-                json.WriteStartObject("documentation");
-                json.WriteString("kind", "plaintext");
-                json.WriteString("value", item.Documentation);
-                json.WriteEndObject();
-            }
+            // What resolve needs to answer about this item, handed back to us verbatim. Stateless:
+            // the position and the name identify the symbol, so nothing is retained server-side.
+            json.WriteStartObject("data");
+            json.WriteString("uri", UriOf(document.Path));
+            json.WriteNumber("line", line);
+            json.WriteNumber("character", character);
+            json.WriteString("name", item.Name);
+            json.WriteEndObject();
+
+            // Not an LSP field. True when the item rides on inference dm.exe does not do, so a
+            // client can badge or filter what the build would refuse; spec-only clients ignore it.
+            if (item.Inferred)
+                json.WriteBoolean("inferred", true);
 
             json.WriteEndObject();
         }
 
         json.WriteEndArray();
+        json.WriteEndObject();
     }
 
     private void WriteHover(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
@@ -586,7 +622,8 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         HoverResult? hover = HoverService.HoverAt(
-            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16,
+            cancel, ws.GetMacroTable(cancel));
 
         if (hover is null)
         {
@@ -663,7 +700,8 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16,
+            cancel, ws.GetMacroTable(cancel));
 
         json.WriteStartArray();
 
@@ -703,6 +741,95 @@ internal sealed class LspServer
         json.WriteEndArray();
     }
 
+    /// <summary>
+    /// Fills in the documentation for the item the user highlighted.
+    /// </summary>
+    /// <remarks>
+    /// The response must be the WHOLE item, not just the new field: the client replaces the item
+    /// it sent with what comes back. Everything but documentation is echoed unchanged.
+    /// </remarks>
+    private void WriteCompletionResolve(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        json.WriteStartObject();
+
+        // Echo every field the client sent, so nothing is lost by resolving.
+        foreach (JsonProperty property in params_.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "documentation", StringComparison.Ordinal))
+                property.WriteTo(json);
+        }
+
+        if (_workspace is Workspace ws
+            && params_.TryGetProperty("data", out JsonElement data)
+            && data.TryGetProperty("uri", out JsonElement uri)
+            && data.TryGetProperty("name", out JsonElement name)
+            && data.TryGetProperty("line", out JsonElement line)
+            && data.TryGetProperty("character", out JsonElement character))
+        {
+            string path = UriToPath(uri.GetString() ?? string.Empty);
+
+            if (ws.TryGetDocument(path, out Document document))
+            {
+                string documentation = CompletionService.ResolveDocumentation(
+                    TreeAnnouncingBuild(ws, cancel),
+                    document,
+                    line.GetInt32(),
+                    character.GetInt32(),
+                    name.GetString() ?? string.Empty,
+                    ws.GetMacroNames(cancel),
+                    ws.GetFileText,
+                    PositionEncoding.Utf16,
+                    cancel);
+
+                if (documentation.Length > 0)
+                {
+                    json.WriteStartObject("documentation");
+                    json.WriteString("kind", "plaintext");
+                    json.WriteString("value", documentation);
+                    json.WriteEndObject();
+                }
+            }
+        }
+
+        json.WriteEndObject();
+    }
+
+    private void WriteInlayHints(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+
+        JsonElement range = params_.GetProperty("range");
+        int startLine = range.GetProperty("start").GetProperty("line").GetInt32();
+        int endLine = range.GetProperty("end").GetProperty("line").GetInt32();
+
+        IReadOnlyList<InlayHint> hints = InlayHintService.HintsFor(
+            TreeAnnouncingBuild(ws, cancel), document, startLine, endLine,
+            PositionEncoding.Utf16, cancel);
+
+        json.WriteStartArray();
+
+        foreach (InlayHint hint in hints)
+        {
+            json.WriteStartObject();
+            json.WriteStartObject("position");
+            json.WriteNumber("line", hint.Position.Line);
+            json.WriteNumber("character", hint.Position.Character);
+            json.WriteEndObject();
+            json.WriteString("label", hint.Label);
+            json.WriteNumber("kind", 1); // LSP InlayHintKind.Type
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
     private static void WriteDocumentSymbol(Utf8JsonWriter json, DocumentSymbol symbol)
     {
         json.WriteStartObject();
@@ -710,6 +837,11 @@ internal sealed class LspServer
 
         if (symbol.Detail.Length > 0)
             json.WriteString("detail", symbol.Detail);
+
+        // Not an LSP field; clients that know it (dm-patch's ask) read the enclosing type without
+        // string-slicing hover details, and spec-only clients ignore it.
+        if (symbol.Owner.Length > 0)
+            json.WriteString("owner", symbol.Owner);
 
         json.WriteNumber("kind", LspSymbolKind(symbol.Kind));
 

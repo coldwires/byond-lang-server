@@ -16,13 +16,13 @@ WHERE WE ARE
   M0-M7 complete - that is TEAM V1, everything an IDE needs to draw its panels.
   M8 passed over. M9 past its target. M10 DONE. M11 started.
 
-    dm_core.dll     2.03 MB, ABI 0.14, 22 exports, cdecl on every platform
+    dm_core.dll     2.04 MB, ABI 0.18, 28 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,051 green (998 core, 39 native, 14 lsp)
+    tests           1,084 green (1,026 core, 44 native, 14 lsp)
     BYOND 516.1686  goldens, probes and the 52-check world all hold on the
                     latest build (standalone zip, DM_BYOND_BIN) - only the
                     version tripwire fires, by design
-    abi-smoke       140 checks from C++, on x64 AND x86, run in CI not just built
+    abi-smoke       184 checks from C++, on x64 AND x86, run in CI not just built
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
@@ -107,22 +107,47 @@ WHAT'S NEXT
           tree stays silent), plus the dispatcher now ignores client
           RESPONSES instead of erroring at them. M10 is COMPLETE modulo
           incremental sync, which waits for a profile to ask.
+       DONE from that list: hover/definition for MACROS (their 5) — a
+       macro name resolves to its #define from any position; project
+       macros only, the seeds and -D injects have no source to open.
+       Their global-var half was already fixed at HEAD, and the
+       builtin remainder is closed too: every builtin hovers from the
+       symbol table, and `world` is a root var typed /world.
+       DONE: the enclosing-type owner on symbols (their 6) — every
+       outline entry carries "owner", resolved with the tree builder's
+       own rules, on the ABI and (nonstandard field) the LSP.
+       DONE: the bare-. completion context (their 4) — a bare leading
+       dot answers ReturnValue with an empty list — and the per-item
+       "inferred" flag (their 19), true exactly when the receiver's
+       type was worked out rather than written.
+       DONE: the readiness signal (their 16) at ABI 0.15 — dm_tree_ready
+       reads a field, dm_build_tree warms the tree at open.
+       DONE: inlay hints (their 12, the type half) at ABI 0.16 —
+       inferred types on untyped locals, the same inference completion
+       rides on. Parameter-name hints are the deferred other half.
+       DONE: lazy completion documentation (their 11) at ABI 0.17 -
+       dm_complete_brief + dm_complete_resolve, LSP resolveProvider.
+       MEASURED FIRST, and the measurement matters more than the
+       feature: one bare identifier on tgstation offers 19,898 items /
+       ~1.0 MB, documentation is 12.7% of it, and full-vs-brief timing
+       is inside noise. So it is a payload cut, NOT a speed win, and
+       the ITEM COUNT is the real cost.
+       DONE: open question 12, answered by the patcher client and
+       shipped at ABI 0.18 - completion is RANKED by scope distance
+       (locals, params, members, globals, macros, builtins last) and
+       reports "truncated"; dm_set_completion_limit is the opt-in cap;
+       LSP says isIncomplete and pins order with sortText. The prefix
+       filter stays client-side: moving it costs a call per keystroke,
+       ~909 ms each on tgstation, against one rebuild per trigger. The
+       cap defaults OFF because isIncomplete would cause that same
+       per-keystroke re-query. abs fell from ~5th to 19,618th of 19,898.
        From the re-cut UPSTREAM-REQUESTS, still open, near the front:
-       hover/definition for macros and global vars (their 5), the
-       enclosing-type owner on symbols (6), bare-. completion context (4),
-       the inferred completion flag, lazy completion resolve (11), inlay
-       hints (12), code actions (14, unblocked by dm_diagnostics),
-       readiness signal (16), formatting/folding/links (18).
+       parameter-name hints (12's other half), code actions (14,
+       unblocked by dm_diagnostics), formatting/folding/links (18).
        THEN the rest: the probe ratchet's remaining classes (PLAN 8a),
        var duplicate definitions (VarSymbol keeps one site), unused_var
        (backed out, PLAN 9), "." on an untyped local, ":" against the
        subtype tree, M8 .dmi, incremental sync if a profile asks.
-       Cheap adoptees from dm-patch/docs/UPSTREAM-REQUESTS.md along the
-       way: dm_diagnostics (diagnostics without the outline), a bare-`.`
-       completion context, the per-item `inferred` flag.
-       AFTER M10: the reference index (UPSTREAM-REQUESTS 1) - one shape
-       for references/call-hierarchy/highlight/rename with read-vs-write
-       kinds and the enclosing symbol per hit. Subsumes M11 find-refs.
        CANDY, unscheduled: M8 .dmi, .dmm maps, the rung-1 debugger.
        Contract (their do-not-change list): UTF-16 default honest,
        whole-document dm_set_buffer stays, additive ABI bumps minor.

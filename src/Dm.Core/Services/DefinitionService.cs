@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using Dm.Core.Preprocessing;
 using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
@@ -10,14 +11,17 @@ namespace Dm.Core.Services;
 /// <summary>One place a symbol is declared.</summary>
 public sealed class DefinitionLocation
 {
-    public DefinitionLocation(string file, TextSpan span, TextSpan nameSpan, string detail)
+    public DefinitionLocation(string file, TextSpan span, TextSpan nameSpan, string detail,
+        string signature = "")
     {
         File = file;
         Span = span;
         NameSpan = nameSpan;
         Detail = detail;
+        Signature = signature;
     }
 
+    /// <summary>Empty for a builtin: nothing declares it, so there is no file to open.</summary>
     public string File { get; }
 
     /// <summary>The whole declaration.</summary>
@@ -28,6 +32,12 @@ public sealed class DefinitionLocation
 
     /// <summary>What was found, for a client that shows a picker: <c>/mob/proc/attack</c>.</summary>
     public string Detail { get; }
+
+    /// <summary>
+    /// A rendered declaration for a symbol with no source to read one from — a builtin's
+    /// <c>Move(NewLoc,Dir=0)</c>. Empty for anything source-backed, where the file is the render.
+    /// </summary>
+    public string Signature { get; }
 
     public override string ToString() => $"{Detail} at {File}{NameSpan}";
 }
@@ -57,7 +67,30 @@ public static class DefinitionService
         int line,
         int character,
         PositionEncoding encoding = PositionEncoding.Utf16,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        MacroTable? macros = null)
+        => DefinitionAt(tree, document, line, character, encoding, cancellationToken, macros,
+            includeBuiltins: false);
+
+    /// <summary>
+    /// As above, optionally including builtin symbols as file-less locations.
+    /// </summary>
+    /// <remarks>
+    /// A builtin has no source to open, so go-to-definition rightly excludes it — but hover wants
+    /// the same resolution to still say what the symbol <i>is</i>, so builtin matches come back
+    /// with an empty <see cref="DefinitionLocation.File"/> and a rendered
+    /// <see cref="DefinitionLocation.Signature"/>. One resolution, two presentations; a second
+    /// copy of the lookup in <see cref="HoverService"/> would drift.
+    /// </remarks>
+    internal static IReadOnlyList<DefinitionLocation> DefinitionAt(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        PositionEncoding encoding,
+        CancellationToken cancellationToken,
+        MacroTable? macros,
+        bool includeBuiltins)
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(document);
@@ -77,10 +110,17 @@ public static class DefinitionService
 
         string name = document.Text.ToString(token.Span);
 
+        // A macro name wins over every other reading, because it does in the compiler: the
+        // preprocessor replaces the token before the parser ever sees it, whatever position it sits
+        // in — a member slot, a path segment, a directive's argument. The table is the walk's end
+        // state, same as completion's macro list.
+        if (FromMacro(macros, name) is { } definition)
+            return new[] { definition };
+
         // A path segment first: `/obj/item` under the caret goes to the type, and that reading wins
         // over treating `item` as a member name.
         if (TypeAt(tree, document, tokens, index) is { } type)
-            return FromType(type);
+            return FromType(type, includeBuiltins);
 
         TokenKind previous = index > 0 ? PreviousMeaningful(tokens, index) : TokenKind.EndOfFile;
 
@@ -93,18 +133,18 @@ public static class DefinitionService
 
             return receiver is null
                 ? Array.Empty<DefinitionLocation>()
-                : FromMember(tree, receiver, name);
+                : FromMember(tree, receiver, name, includeBuiltins);
         }
 
         // A bare name: the enclosing type and what it inherits, then globals on the root.
         if (CompletionService.EnclosingType(tree, document, offset) is { } enclosing)
         {
-            IReadOnlyList<DefinitionLocation> found = FromMember(tree, enclosing, name);
+            IReadOnlyList<DefinitionLocation> found = FromMember(tree, enclosing, name, includeBuiltins);
             if (found.Count > 0)
                 return found;
         }
 
-        return FromMember(tree, tree.Root, name);
+        return FromMember(tree, tree.Root, name, includeBuiltins);
     }
 
     /// <summary>The token containing the offset, rather than the one before it.</summary>
@@ -205,13 +245,42 @@ public static class DefinitionService
         return RelativePath.Resolve(tree, anchor, segments) is { } found ? tree.Find(found) : null;
     }
 
-    private static IReadOnlyList<DefinitionLocation> FromType(TypeSymbol type)
+    /// <summary>The macro's <c>#define</c> site, or null when the name is not a project macro.</summary>
+    /// <remarks>
+    /// Only a macro written in a real file is navigable. The built-in seeds (<c>TRUE</c>,
+    /// <c>DM_VERSION</c>) and injected <c>-D</c> defines carry synthetic
+    /// <c>&lt;predefined:…&gt;</c> / <c>&lt;define:…&gt;</c> sources — nothing declares them, the
+    /// same rule that keeps builtins out of every other definition answer.
+    /// </remarks>
+    private static DefinitionLocation? FromMacro(MacroTable? macros, string name)
+    {
+        if (macros is null || !macros.TryGet(name, out MacroDefinition macro))
+            return null;
+
+        string? file = macro.Source.Path;
+        if (file is null || file.StartsWith('<'))
+            return null;
+
+        // The declaration runs from the name to the end of the replacement text; the `#define`
+        // itself is recoverable from the line, which is what hover renders.
+        TextSpan span = TextSpan.FromBounds(
+            macro.NameSpan.Start,
+            macro.Body.Count > 0 ? macro.Body[^1].Span.End : macro.NameSpan.End);
+
+        return new DefinitionLocation(file, span, macro.NameSpan, $"#define {macro}");
+    }
+
+    private static IReadOnlyList<DefinitionLocation> FromType(TypeSymbol type, bool includeBuiltins)
     {
         List<DefinitionLocation> locations = new();
 
         // A type is legitimately declared in several files; every one of them is a definition.
         foreach (DeclarationSite site in type.Sites)
             locations.Add(new DefinitionLocation(site.File, site.Span, site.NameSpan, type.Path.Text));
+
+        // A builtin type has no site at all; hover still wants to say what the path is.
+        if (locations.Count == 0 && includeBuiltins && type.IsBuiltin)
+            locations.Add(new DefinitionLocation(string.Empty, default, default, type.Path.Text, type.Path.Text));
 
         return locations;
     }
@@ -224,7 +293,7 @@ public static class DefinitionService
     /// wants, since the nearest is what a call actually reaches.
     /// </remarks>
     private static IReadOnlyList<DefinitionLocation> FromMember(
-        ObjectTree tree, TypeSymbol start, string name)
+        ObjectTree tree, TypeSymbol start, string name, bool includeBuiltins = false)
     {
         List<DefinitionLocation> locations = new();
 
@@ -234,12 +303,35 @@ public static class DefinitionService
             {
                 foreach (DeclarationSite site in proc.Sites)
                     locations.Add(new DefinitionLocation(site.File, site.Span, site.NameSpan, Describe(step, name) + "()"));
+
+                // A builtin proc declares nothing anywhere, so its "declaration" is rendered from
+                // the symbol: the name and the parameter list the reference documented.
+                if (includeBuiltins && proc.IsBuiltin && proc.Sites.Count == 0)
+                {
+                    locations.Add(new DefinitionLocation(
+                        string.Empty, default, default, Describe(step, name) + "()",
+                        $"{name}({string.Join(", ", proc.Parameters)})"));
+                }
             }
 
-            if (step.FindVar(name) is { } variable && !variable.IsBuiltin)
+            if (step.FindVar(name) is { } variable)
             {
-                DeclarationSite site = variable.Site;
-                locations.Add(new DefinitionLocation(site.File, site.Span, site.NameSpan, Describe(step, name)));
+                if (!variable.IsBuiltin)
+                {
+                    DeclarationSite site = variable.Site;
+                    locations.Add(new DefinitionLocation(site.File, site.Span, site.NameSpan, Describe(step, name)));
+                }
+                else if (includeBuiltins)
+                {
+                    // Rendered the way source would declare it: `var/world/world` when the table
+                    // carries a declared type, `var/loc` when it does not.
+                    string rendered = variable.DeclaredType is { } declared
+                        ? $"var{declared.Text}/{name}"
+                        : $"var/{name}";
+
+                    locations.Add(new DefinitionLocation(
+                        string.Empty, default, default, Describe(step, name), rendered));
+                }
             }
         }
 
