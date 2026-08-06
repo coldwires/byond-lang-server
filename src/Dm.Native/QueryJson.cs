@@ -5,6 +5,7 @@ using System.Text.Json;
 using Dm.Core;
 using Dm.Core.Services;
 using Dm.Core.Symbols;
+using Dm.Core.Text;
 
 namespace Dm.Native;
 
@@ -40,7 +41,13 @@ internal static class QueryJson
 {
     /// <summary>A request, as far as any of the queries need it.</summary>
     private readonly record struct Request(
-        string Query, string Path, int Depth, int Limit, bool Inherited, bool IncludeBuiltins);
+        string Query,
+        string Path,
+        int Depth,
+        int Limit,
+        bool Inherited,
+        bool IncludeBuiltins,
+        PositionEncoding Encoding);
 
     public static string? Answer(Workspace workspace, string requestJson, out QueryError error)
     {
@@ -96,6 +103,95 @@ internal static class QueryJson
                 return json.ToString();
             }
 
+            case "ancestorsOf":
+            {
+                TypeSymbol? type = tree.Find(request.Path);
+
+                if (type is null)
+                    break;
+
+                StringBuilder json = new();
+                json.Append("{\"query\":\"ancestorsOf\",\"path\":");
+                SymbolJson.AppendString(json, type.Path.Text);
+                json.Append(",\"ancestors\":[");
+
+                // The chain the tree already holds, nearest first, self excluded — one call
+                // instead of one objectTree round trip per level.
+                bool first = true;
+
+                foreach (TypeSymbol step in tree.InheritanceChain(type))
+                {
+                    if (ReferenceEquals(step, type))
+                        continue;
+
+                    if (!first)
+                        json.Append(',');
+
+                    first = false;
+
+                    TreeNode? node = TreeQueryService.Browse(tree, step.Path.Text, depth: 0);
+
+                    if (node is not null)
+                        WriteNode(json, node);
+                }
+
+                json.Append("]}");
+                return json.ToString();
+            }
+
+            case "references":
+            {
+                ReferenceListing listing = ReferenceService.Find(
+                    tree,
+                    workspace.GetProjectParses(),
+                    request.Path,
+                    request.Limit > 0 ? request.Limit : ReferenceService.DefaultLimit);
+
+                StringBuilder json = new();
+                json.Append("{\"query\":\"references\",\"path\":");
+                SymbolJson.AppendString(json, request.Path);
+                json.Append(",\"truncated\":").Append(listing.Truncated ? "true" : "false");
+                json.Append(",\"references\":[");
+
+                for (int i = 0; i < listing.References.Count; i++)
+                {
+                    if (i > 0)
+                        json.Append(',');
+
+                    Reference reference = listing.References[i];
+                    SourceText? text = workspace.GetFileText(reference.File);
+
+                    json.Append("{\"file\":");
+                    SymbolJson.AppendString(json, reference.File);
+                    json.Append(",\"kind\":");
+                    SymbolJson.AppendString(json, reference.Kind switch
+                    {
+                        ReferenceKind.Write => "write",
+                        ReferenceKind.Call => "call",
+                        ReferenceKind.Override => "override",
+                        _ => "read",
+                    });
+                    json.Append(",\"inside\":");
+                    SymbolJson.AppendString(json, reference.Inside);
+
+                    if (text is not null)
+                    {
+                        LinePosition start = text.GetLinePosition(reference.Span.Start, request.Encoding);
+                        LinePosition end = text.GetLinePosition(reference.Span.End, request.Encoding);
+
+                        json.Append(",\"startLine\":").Append(start.Line);
+                        json.Append(",\"startChar\":").Append(start.Character);
+                        json.Append(",\"endLine\":").Append(end.Line);
+                        json.Append(",\"endChar\":").Append(end.Character);
+                    }
+
+                    json.Append('}');
+                }
+
+                json.Append("]}");
+                return json.ToString();
+            }
+
             case "members":
             {
                 TypeMembers? members = TreeQueryService.Members(
@@ -144,6 +240,7 @@ internal static class QueryJson
         int limit = TreeQueryService.DefaultSubtypeLimit;
         bool inherited = true;
         bool includeBuiltins = true;
+        PositionEncoding encoding = PositionEncoding.Utf16;
 
         try
         {
@@ -188,6 +285,14 @@ internal static class QueryJson
                         includeBuiltins = reader.TokenType == JsonTokenType.True;
                         break;
 
+                    // References carry positions, and this call has no encoding parameter of its
+                    // own, so the request says. UTF-16 when it does not, like LSP.
+                    case "encoding":
+                        encoding = reader.GetString() == "utf8"
+                            ? PositionEncoding.Utf8
+                            : PositionEncoding.Utf16;
+                        break;
+
                     default:
                         reader.Skip();
                         break;
@@ -211,7 +316,7 @@ internal static class QueryJson
         if (depth < 0)
             depth = 0;
 
-        request = new Request(query, path, depth, limit, inherited, includeBuiltins);
+        request = new Request(query, path, depth, limit, inherited, includeBuiltins, encoding);
         return true;
     }
 

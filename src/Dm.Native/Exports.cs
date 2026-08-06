@@ -5,6 +5,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Dm.Core;
+using Dm.Core.Binding;
+using Dm.Core.Diagnostics;
 using Dm.Core.Services;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
@@ -173,6 +175,33 @@ internal static unsafe class Exports
         }
     }
 
+    /// <summary>
+    /// Drops every derived answer, so the next question rebuilds against current disk. Added in
+    /// ABI 0.14.
+    /// </summary>
+    /// <remarks>
+    /// The answer to files changing OUTSIDE the editor — a git checkout, a branch switch, another
+    /// program saving. Cheap by construction: the per-file caches revalidate against write time
+    /// and length during the rebuild, so only files that actually changed are reprocessed. Pushed
+    /// buffers stay authoritative.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_invalidate")]
+    public static int Invalidate(IntPtr workspace)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            ws.Invalidate();
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_close_buffer")]
     public static int CloseBuffer(IntPtr workspace, byte* filePath)
     {
@@ -286,6 +315,60 @@ internal static unsafe class Exports
             *outJson = NativeStrings.Allocate(
                 SymbolJson.Write(symbols, parse.Diagnostics, document.Text, (PositionEncoding)encoding));
 
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Every diagnostic for one file — syntax and semantic — as a UTF-8 JSON document. Added in
+    /// ABI 0.13.
+    /// </summary>
+    /// <remarks>
+    /// Diagnostics without the outline, and the only export carrying the binder's semantic set:
+    /// `dm_document_symbols` ships syntax diagnostics beside the symbols, but a client drawing
+    /// squiggles for a file no panel shows should not pay for the outline, and the semantic
+    /// checks belong here rather than being bolted onto a call whose shape is frozen.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_diagnostics")]
+    public static int Diagnostics(
+        IntPtr workspace,
+        byte* filePath,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+            ParseResult parse = document.Parse;
+
+            List<Diagnostic> all = new(parse.Diagnostics);
+            all.AddRange(Binder.Bind(ws.GetObjectTree(), parse.Root, document.Path));
+
+            StringBuilder json = new();
+            json.Append("{\"diagnostics\":");
+            SymbolJson.WriteDiagnostics(json, all, document.Text, (PositionEncoding)encoding);
+            json.Append('}');
+
+            *outJson = NativeStrings.Allocate(json.ToString());
             return Ok();
         }
         catch (Exception ex)

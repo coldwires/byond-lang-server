@@ -55,14 +55,38 @@ public static class TypeTreeBuilder
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tree);
+
+        Contribute(file, parse, cancellationToken).Apply(tree, cancellationToken);
+    }
+
+    /// <summary>
+    /// One file's tree mutations, precomputed from its parse so a rebuild can replay them.
+    /// </summary>
+    /// <remarks>
+    /// The tree merge was the last phase still walking every file's AST per rebuild — 385 ms of a
+    /// 793 ms keystroke on /tg/station with one file re-parsed. A contribution is a pure function
+    /// of (file, parse), so the workspace caches it by the parse's identity and replays: the AST
+    /// walk, the owner-path computation and the parameter rendering are paid once per parse, and a
+    /// rebuild does only the dictionary inserts. There is ONE walk implementation — this one — so
+    /// the recorded ops cannot drift from what a direct build would have done.
+    /// </remarks>
+    public static TreeContribution Contribute(
+        string file,
+        ParseResult parse,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(parse);
 
+        TreeContribution contribution = new();
+
         foreach (DeclarationSyntax declaration in parse.Root.Declarations)
-            Walk(tree, file, parse.Text, declaration, TypePath.Root, cancellationToken);
+            Walk(contribution, file, parse.Text, declaration, TypePath.Root, cancellationToken);
+
+        return contribution;
     }
 
     private static void Walk(
-        ObjectTree tree,
+        TreeContribution contribution,
         string file,
         SourceText text,
         DeclarationSyntax declaration,
@@ -84,7 +108,7 @@ public static class TypeTreeBuilder
                 TypePath owner = GroupOwner(enclosing, group.Path);
 
                 foreach (DeclarationSyntax member in group.Members)
-                    Walk(tree, file, text, member, owner, cancellationToken);
+                    Walk(contribution, file, text, member, owner, cancellationToken);
 
                 break;
             }
@@ -92,30 +116,30 @@ public static class TypeTreeBuilder
             case TypeDeclarationSyntax type:
             {
                 TypePath path = Combine(enclosing, type.Path);
-                TypeSymbol symbol = tree.GetOrAdd(path);
-                symbol.AddSite(new DeclarationSite(file, type.Span, type.NameSpan));
+                contribution.RecordTypeSite(path, new DeclarationSite(file, type.Span, type.NameSpan));
 
                 foreach (DeclarationSyntax member in type.Members)
-                    Walk(tree, file, text, member, path, cancellationToken);
+                    Walk(contribution, file, text, member, path, cancellationToken);
 
                 break;
             }
 
             case VarDeclarationSyntax variable:
-                AddVar(tree, file, variable, enclosing);
+                AddVar(contribution, file, variable, enclosing);
 
                 foreach (VarDeclarationSyntax sibling in variable.Siblings)
-                    AddVar(tree, file, sibling, enclosing);
+                    AddVar(contribution, file, sibling, enclosing);
 
                 break;
 
             case ProcDeclarationSyntax proc:
-                AddProc(tree, file, text, proc, enclosing);
+                AddProc(contribution, file, text, proc, enclosing);
                 break;
         }
     }
 
-    private static void AddVar(ObjectTree tree, string file, VarDeclarationSyntax variable, TypePath enclosing)
+    private static void AddVar(
+        TreeContribution contribution, string file, VarDeclarationSyntax variable, TypePath enclosing)
     {
         // What the leading segments mean depends on how the variable was introduced. Under a `var`
         // they are its declared type and it belongs to the enclosing type; without one this is a
@@ -124,32 +148,34 @@ public static class TypeTreeBuilder
             ? VarOwner(enclosing, variable.Path)
             : BareAssignmentOwner(enclosing, variable.Path);
 
-        // `parent_type = /obj/thing` re-points inheritance, so it is a link rather than a variable.
-        if (string.Equals(variable.Name, "parent_type", StringComparison.Ordinal))
-        {
-            if (variable.Initializer is PathExpressionSyntax path)
-            {
-                // It is a real var as well as an inheritance link, and `dm.exe -o` lists it as one.
-                TypeSymbol target = tree.GetOrAdd(owner);
+        TypePath? parentType = null;
+        IReadOnlyList<string>? relativeParentType = null;
 
-                // A leading `.` is a search from this type's own path, not a name, so it has to
-                // wait for the finished tree. dm.exe accepts `parent_type = .sibling`.
-                if (path.Path.Anchor == PathAnchor.UpwardSearch)
-                    target.RelativeParentType = path.Path.Segments;
-                else
-                    target.ParentType = TypePath.FromSegments(path.Path.Segments);
-            }
+        // `parent_type = /obj/thing` re-points inheritance, so it is a link as well as a variable —
+        // `dm.exe -o` lists it as one. A leading `.` is a search from this type's own path, not a
+        // name, so it has to wait for the finished tree; dm.exe accepts `parent_type = .sibling`.
+        if (string.Equals(variable.Name, "parent_type", StringComparison.Ordinal)
+            && variable.Initializer is PathExpressionSyntax path)
+        {
+            if (path.Path.Anchor == PathAnchor.UpwardSearch)
+                relativeParentType = path.Path.Segments;
+            else
+                parentType = TypePath.FromSegments(path.Path.Segments);
         }
 
         TypePath? declaredType = variable.DeclaredType is { } written && written.Segments.Count > 0
             ? TypePath.FromSegments(written.Segments)
             : null;
 
-        tree.GetOrAdd(owner).AddVar(new VarSymbol(
-            variable.Name,
-            declaredType,
-            variable.Modifiers,
-            new DeclarationSite(file, variable.Span, variable.NameSpan)));
+        contribution.RecordVar(
+            owner,
+            new VarSymbol(
+                variable.Name,
+                declaredType,
+                variable.Modifiers,
+                new DeclarationSite(file, variable.Span, variable.NameSpan)),
+            parentType,
+            relativeParentType);
     }
 
     /// <summary>
@@ -192,16 +218,20 @@ public static class TypeTreeBuilder
     }
 
     private static void AddProc(
-        ObjectTree tree, string file, SourceText text, ProcDeclarationSyntax proc, TypePath enclosing)
+        TreeContribution contribution, string file, SourceText text, ProcDeclarationSyntax proc, TypePath enclosing)
     {
         List<string> parameters = new(proc.Parameters.Count);
 
         foreach (ParameterSyntax parameter in proc.Parameters)
             parameters.Add(Render(parameter, text));
 
-        tree.GetOrAdd(ProcOwner(enclosing, proc.Path))
-            .GetOrAddProc(proc.Name, proc.IsVerb)
-            .Add(new DeclarationSite(file, proc.Span, proc.NameSpan), proc.IsNewDeclaration, parameters);
+        contribution.RecordProc(
+            ProcOwner(enclosing, proc.Path),
+            proc.Name,
+            proc.IsVerb,
+            new DeclarationSite(file, proc.Span, proc.NameSpan),
+            proc.IsNewDeclaration,
+            parameters);
     }
 
     /// <summary>
@@ -314,4 +344,122 @@ public static class TypeTreeBuilder
         => path.Anchor == PathAnchor.Absolute
             ? TypePath.FromSegments(path.Segments)
             : enclosing.Append(path.Segments);
+}
+
+/// <summary>One file's tree mutations, in declaration order, replayable into any tree.</summary>
+/// <remarks>
+/// <para>
+/// Order is part of the contract: sites and override chains record the order the compiler sees
+/// declarations, so ops replay exactly as they were walked, within the file and — because the
+/// caller applies files in include order — across it.
+/// </para>
+/// <para>
+/// A recorded <see cref="VarSymbol"/> is REUSED across replays rather than reconstructed: it is
+/// immutable after construction, only one tree built from these contributions is ever live, and
+/// the reuse is what makes a replayed var almost free. Procs cannot be reused the same way —
+/// a <see cref="ProcSymbol"/> accumulates sites from every file — so a proc op carries the raw
+/// ingredients and replays through <see cref="TypeSymbol.GetOrAddProc"/>.
+/// </para>
+/// </remarks>
+public sealed class TreeContribution
+{
+    private readonly List<Op> _ops = new();
+
+    internal void RecordTypeSite(TypePath path, DeclarationSite site)
+        => _ops.Add(new Op(OpKind.TypeSite, path) { Site = site });
+
+    internal void RecordVar(
+        TypePath owner, VarSymbol symbol, TypePath? parentType, IReadOnlyList<string>? relativeParentType)
+        => _ops.Add(new Op(OpKind.Var, owner)
+        {
+            Var = symbol,
+            ParentType = parentType,
+            RelativeParentType = relativeParentType,
+        });
+
+    internal void RecordProc(
+        TypePath owner,
+        string name,
+        bool isVerb,
+        DeclarationSite site,
+        bool declaresNew,
+        IReadOnlyList<string> parameters)
+        => _ops.Add(new Op(OpKind.Proc, owner)
+        {
+            Name = name,
+            IsVerb = isVerb,
+            Site = site,
+            DeclaresNew = declaresNew,
+            Parameters = parameters,
+        });
+
+    /// <summary>Replays every recorded mutation into the tree, in order.</summary>
+    public void Apply(ObjectTree tree, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+
+        foreach (Op op in _ops)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            TypeSymbol owner = tree.GetOrAdd(op.Owner);
+
+            switch (op.Kind)
+            {
+                case OpKind.TypeSite:
+                    owner.AddSite(op.Site);
+                    break;
+
+                case OpKind.Var:
+                    if (op.ParentType is not null)
+                        owner.ParentType = op.ParentType;
+
+                    if (op.RelativeParentType is not null)
+                        owner.RelativeParentType = op.RelativeParentType;
+
+                    owner.AddVar(op.Var!);
+                    break;
+
+                case OpKind.Proc:
+                    owner.GetOrAddProc(op.Name!, op.IsVerb).Add(op.Site, op.DeclaresNew, op.Parameters!);
+                    break;
+            }
+        }
+    }
+
+    private enum OpKind : byte
+    {
+        TypeSite,
+        Var,
+        Proc,
+    }
+
+    private sealed class Op
+    {
+        public Op(OpKind kind, TypePath owner)
+        {
+            Kind = kind;
+            Owner = owner;
+        }
+
+        public OpKind Kind { get; }
+
+        public TypePath Owner { get; }
+
+        public DeclarationSite Site { get; init; }
+
+        public VarSymbol? Var { get; init; }
+
+        public TypePath? ParentType { get; init; }
+
+        public IReadOnlyList<string>? RelativeParentType { get; init; }
+
+        public string? Name { get; init; }
+
+        public bool IsVerb { get; init; }
+
+        public bool DeclaresNew { get; init; }
+
+        public IReadOnlyList<string>? Parameters { get; init; }
+    }
 }

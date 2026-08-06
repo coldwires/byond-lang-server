@@ -33,7 +33,24 @@ internal static class SymbolJson
         json.Append("{\"symbols\":");
         WriteSymbols(json, symbols);
 
-        json.Append(",\"diagnostics\":[");
+        json.Append(",\"diagnostics\":");
+        WriteDiagnostics(json, diagnostics, text, encoding);
+
+        json.Append('}');
+        return json.ToString();
+    }
+
+    /// <summary>
+    /// Writes a diagnostics array. Shared with <c>dm_diagnostics</c>, so the elements a client
+    /// reads there are byte-identical to the ones this document has always carried.
+    /// </summary>
+    internal static void WriteDiagnostics(
+        StringBuilder json,
+        IReadOnlyList<Diagnostic> diagnostics,
+        SourceText text,
+        PositionEncoding encoding)
+    {
+        json.Append('[');
 
         for (int i = 0; i < diagnostics.Count; i++)
         {
@@ -57,8 +74,7 @@ internal static class SymbolJson
             json.Append('}');
         }
 
-        json.Append("]}");
-        return json.ToString();
+        json.Append(']');
     }
 
     /// <summary>

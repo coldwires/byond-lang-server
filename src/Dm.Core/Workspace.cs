@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Text;
@@ -27,7 +27,11 @@ public sealed class Workspace : IDisposable
     private readonly ExpandedRunCache _runs = new(PathComparer);
     private readonly FileEffectCache _effects = new();
     private ObjectTree? _tree;
+    private IReadOnlyList<(string File, ParseResult Parse)>? _parses;
     private IReadOnlyCollection<string>? _macroNames;
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParseResult, TreeContribution>
+        _contributions = new();
     private bool _disposed;
 
     private Workspace(string dmePath, string rootDirectory, IReadOnlyList<string>? defines)
@@ -44,7 +48,7 @@ public sealed class Workspace : IDisposable
     /// <remarks>
     /// Pass whatever the project's build passes. The flags decide which <c>#ifdef</c> branches
     /// exist, so a workspace opened without them describes a different program from the one the
-    /// build produces — /tg/station needs <c>CBT</c>.
+    /// build produces â€” /tg/station needs <c>CBT</c>.
     /// </remarks>
     public IReadOnlyList<string>? Defines { get; private set; }
 
@@ -53,13 +57,14 @@ public sealed class Workspace : IDisposable
     /// </summary>
     /// <remarks>
     /// Separate from <see cref="Open"/> because the tree is built lazily, so a client can set these
-    /// immediately after opening and still have them apply — and can change build flags later
+    /// immediately after opening and still have them apply â€” and can change build flags later
     /// without reopening the project.
     /// </remarks>
     public void SetDefines(IReadOnlyList<string>? defines)
     {
         Defines = defines;
         _tree = null;
+        _parses = null;
         _macroNames = null;
     }
 
@@ -121,6 +126,7 @@ public sealed class Workspace : IDisposable
 
         // The tree was built from the previous text, so it no longer describes the project.
         _tree = null;
+        _parses = null;
         _macroNames = null;
 
         return document;
@@ -130,6 +136,7 @@ public sealed class Workspace : IDisposable
     public bool CloseBuffer(string path)
     {
         _tree = null;
+        _parses = null;
         _macroNames = null;
         return _documents.Remove(NormalisePath(path));
     }
@@ -142,7 +149,7 @@ public sealed class Workspace : IDisposable
     /// <remarks>
     /// <para>
     /// Built from the include graph so files arrive in compile order, which is what decides override
-    /// resolution — a directory walk would silently produce a different program. Pushed buffers win
+    /// resolution â€” a directory walk would silently produce a different program. Pushed buffers win
     /// over disk for the files that have them, so the tree describes what the client is looking at.
     /// </para>
     /// <para>
@@ -167,7 +174,7 @@ public sealed class Workspace : IDisposable
         {
             Defines = Defines,
 
-            // Pushed buffers are authoritative (PLAN.md §4). Without this the walk reads the file as
+            // Pushed buffers are authoritative (PLAN.md Â§4). Without this the walk reads the file as
             // last saved, and every unsaved keystroke would be analysed against stale text.
             SourceProvider = path => _documents.TryGetValue(path, out Document? open)
                 ? open.Text
@@ -190,15 +197,67 @@ public sealed class Workspace : IDisposable
 
         // Reuses the token source and the parse of every file whose run came out identical, which
         // after an edit is nearly all of them.
+        List<(string File, ParseResult Parse)> parses = new();
+
         foreach ((string file, TokenSource _, ParseResult parse) in
                  PreprocessedSplitter.SplitAndParse(preprocessed, _runs, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            TypeTreeBuilder.AddFile(tree, file, parse, cancellationToken);
+            parses.Add((file, parse));
+
+            // A contribution is a pure function of (file, parse), so an unchanged file — the same
+            // ParseResult instance out of the run cache — replays its recorded mutations instead
+            // of re-walking its AST. The weak table drops entries when a parse is replaced, so an
+            // edited file recomputes and old parses cost nothing to hold.
+            if (!_contributions.TryGetValue(parse, out TreeContribution? contribution))
+            {
+                contribution = TypeTreeBuilder.Contribute(file, parse, cancellationToken);
+                _contributions.Add(parse, contribution);
+            }
+
+            contribution.Apply(tree, cancellationToken);
         }
 
+        _parses = parses;
         _tree = tree;
         return tree;
+    }
+
+    /// <summary>
+    /// Every project file and its parse, in compile order. Builds the tree if it has not been
+    /// built, since both come from the same walk.
+    /// </summary>
+    /// <remarks>
+    /// The parses are already retained by the run cache, so keeping this list costs a list of
+    /// references rather than a second copy of the trees. The reference index walks it: a
+    /// project-wide question needs every file's AST, not the one under the caret.
+    /// </remarks>
+    public IReadOnlyList<(string File, ParseResult Parse)> GetProjectParses(
+        CancellationToken cancellationToken = default)
+    {
+        if (_parses is null)
+            GetObjectTree(cancellationToken);
+
+        return _parses!;
+    }
+
+    /// <summary>Whether a tree exists right now — the readiness signal, costing nothing to ask.</summary>
+    public bool IsTreeBuilt => _tree is not null;
+
+    /// <summary>
+    /// Drops every derived answer, so the next question rebuilds against what is on disk now.
+    /// </summary>
+    /// <remarks>
+    /// The cached tree is invalidated by buffer and define changes but not by the disk moving
+    /// underneath it — a git checkout, a branch switch, another editor. The per-file caches
+    /// revalidate by write time and length during a rebuild, so this is cheap: only files that
+    /// actually changed are re-read, re-walked and re-parsed. Pushed buffers stay authoritative.
+    /// </remarks>
+    public void Invalidate()
+    {
+        _tree = null;
+        _parses = null;
+        _macroNames = null;
     }
 
     /// <summary>
@@ -207,7 +266,7 @@ public sealed class Workspace : IDisposable
     /// <remarks>
     /// Deliberately does <b>not</b> build the tree. Classification runs on every scroll and every
     /// keystroke, and a whole-project walk on the paint path would be a serious regression. Type
-    /// names therefore stay lexical until something else — a completion, a symbol query — has built
+    /// names therefore stay lexical until something else â€” a completion, a symbol query â€” has built
     /// a tree, and light up from then on.
     /// </remarks>
     public Services.SemanticContext GetSemanticContext() => new(_tree, _macroNames);
@@ -227,7 +286,7 @@ public sealed class Workspace : IDisposable
     /// </summary>
     /// <remarks>
     /// Builds the tree if it has not been built, since both come from the same walk. The names are
-    /// the walk's end state rather than what any one line saw — see <see cref="IncludeGraph.Macros"/>.
+    /// the walk's end state rather than what any one line saw â€” see <see cref="IncludeGraph.Macros"/>.
     /// </remarks>
     public IReadOnlyCollection<string> GetMacroNames(CancellationToken cancellationToken = default)
     {

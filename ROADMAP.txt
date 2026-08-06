@@ -14,15 +14,15 @@
 WHERE WE ARE
 --------------------------------------------------------------------------------
   M0-M7 complete - that is TEAM V1, everything an IDE needs to draw its panels.
-  M8 passed over. M9 past its target. M10 and M11 started.
+  M8 passed over. M9 past its target. M10 DONE. M11 started.
 
-    dm_core.dll     2.00 MB, ABI 0.12, 20 exports, cdecl on every platform
+    dm_core.dll     2.03 MB, ABI 0.14, 22 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,023 green (975 core, 36 native, 12 lsp)
+    tests           1,051 green (998 core, 39 native, 14 lsp)
     BYOND 516.1686  goldens, probes and the 52-check world all hold on the
                     latest build (standalone zip, DM_BYOND_BIN) - only the
                     version tripwire fires, by design
-    abi-smoke       120 checks from C++, on x64 AND x86, run in CI not just built
+    abi-smoke       140 checks from C++, on x64 AND x86, run in CI not just built
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
@@ -70,16 +70,53 @@ WHAT'S NEXT
      every one a fixture and a regression test. Zero invented is now the
      state to DEFEND - diagdiff on all three projects after any parser or
      preprocessor change.
-     NEXT - the agreed list, in order (user, 2026-08-05 night; five of
-     its six items have since shipped: signature help on all three
-     surfaces at ABI 0.12 with dmc signature as the arbiter, semantic
-     tokens split per line over the classification service,
-     $/cancelRequest honoured via a reader thread, the dm/objectTree
-     family mirroring abi/schema/, and the `c ? y : 9 in L` miss - which
-     probing dissolved into a better rule: a proc-LOCAL var initializer
-     rejects the relational `in`, with locate/input/`in list(...)`
-     exemptions and DM0301 warning on the last, PLAN 8):
-       1. duplicate-definition check (ProcSymbol.DeclaringCount waits).
+     THE AGREED LIST IS DONE (user, 2026-08-05 night; all six items):
+     signature help on all three surfaces at ABI 0.12 with dmc signature
+     as the arbiter; semantic tokens split per line over the
+     classification service; $/cancelRequest honoured via a reader
+     thread; the dm/objectTree family mirroring abi/schema/; the
+     `c ? y : 9 in L` miss, which probing dissolved into a better rule
+     (a proc-LOCAL var initializer rejects the relational `in`, with
+     locate/input/`in list(...)` exemptions and DM0301 on the last); and
+     the duplicate-definition check, DM0403 - same type, any-depth
+     ancestor, and builtin conflicts, with the var half recorded as the
+     probed remainder. PLAN 8 has all of it.
+     NEXT - the agreed order (user, 2026-08-06): working product first,
+     error-message parity last, and the net goes in before the big
+     change.
+       1. DONE: the tier-2 harness (tests/fixtures/services, //? marks
+          answered end to end - and it caught a shipped first-character
+          off-by-one in definition and hover on its first run) and
+          dm_diagnostics at ABI 0.13 (the matrix has no parity gap left).
+       2. DONE: THE REFERENCE INDEX at ABI 0.14 - uses with kinds
+          (read/write/call/override) and the enclosing symbol per hit,
+          from the binder's own walk with a sink, so the index and the
+          diagnostics share one resolution. ancestorsOf and dm_invalidate
+          rode the same bump (dm-patch's 1, 7 and 15). Surfaces:
+          dm_query_json, LSP references/documentHighlight/dm-methods,
+          dmc references, tier-2 marks, 140 smoke checks.
+       3. M9's tree merge: MEASURED, and the obvious levers are dead
+          ends - contribution replay and TypePath hash caching both moved
+          nothing, because the cost is the ~335k symbol/dict mutations
+          themselves, not the walk. The real lever is diff-patching the
+          previous tree, which needs removal semantics; designed as three
+          traps in PLAN 6 M9, deferred as its own piece of work. The
+          contribution record shipped as its foundation. mlaas stays
+          at 10 ms; tgstation ~790 ms.
+       4. DONE: $/progress for the first build (create/begin/end; a warm
+          tree stays silent), plus the dispatcher now ignores client
+          RESPONSES instead of erroring at them. M10 is COMPLETE modulo
+          incremental sync, which waits for a profile to ask.
+       From the re-cut UPSTREAM-REQUESTS, still open, near the front:
+       hover/definition for macros and global vars (their 5), the
+       enclosing-type owner on symbols (6), bare-. completion context (4),
+       the inferred completion flag, lazy completion resolve (11), inlay
+       hints (12), code actions (14, unblocked by dm_diagnostics),
+       readiness signal (16), formatting/folding/links (18).
+       THEN the rest: the probe ratchet's remaining classes (PLAN 8a),
+       var duplicate definitions (VarSymbol keeps one site), unused_var
+       (backed out, PLAN 9), "." on an untyped local, ":" against the
+       subtype tree, M8 .dmi, incremental sync if a profile asks.
        Cheap adoptees from dm-patch/docs/UPSTREAM-REQUESTS.md along the
        way: dm_diagnostics (diagnostics without the outline), a bare-`.`
        completion context, the per-item `inferred` flag.
@@ -134,7 +171,9 @@ MILESTONES                                    (restructured 2026-08-02)
              five levers, each measured before and after. 1 of 7,161 files is
              re-read, re-walked and re-parsed after a keystroke.
              REMAINING: the tree merge, 411 ms of 909.
-  [~] M10  LSP server + VS Code extension       <- community v1, STARTED
+  [x] M10  LSP server + VS Code extension       <- community v1, DONE
+             (incremental document sync deliberately waits for a profile
+             to ask - full sync costs one string against a ~10 ms rebuild)
              Dm.Lsp serves initialize, sync, publishDiagnostics (parse +
              binder), completion, hover, definition, symbols over stdio -
              hand-rolled JSON-RPC, no dependencies, which resolved open

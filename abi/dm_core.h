@@ -98,6 +98,18 @@ dm_status dm_set_buffer(dm_workspace workspace, const char *file,
 /* Drops a client buffer. Later reads for that path fall back to disk. */
 dm_status dm_close_buffer(dm_workspace workspace, const char *file);
 
+/*
+ * Drops every derived answer, so the next question rebuilds against what is on
+ * disk now. Added in ABI 0.14.
+ *
+ * Call it when files change OUTSIDE the editor - a git checkout, a branch
+ * switch, another program saving. Cheap by construction: the per-file caches
+ * revalidate against write time and length during the rebuild, so only files
+ * that actually changed are re-read, re-walked and re-parsed. Pushed buffers
+ * stay authoritative.
+ */
+dm_status dm_invalidate(dm_workspace workspace);
+
 /* -- build configuration ------------------------------------------------- */
 
 /*
@@ -367,6 +379,38 @@ dm_status dm_hover_at(dm_workspace workspace, const char *file,
                       int32_t line, int32_t character,
                       dm_position_encoding encoding, char **out_json);
 
+/* -- diagnostics ---------------------------------------------------------- */
+
+/*
+ * Every diagnostic for one file - syntax and semantic - as a UTF-8 JSON
+ * document. Added in ABI 0.13.
+ *
+ * You own the buffer. Release it with dm_free.
+ *
+ * This is diagnostics WITHOUT the outline: dm_document_symbols still carries
+ * the syntax errors beside the symbols, but a client drawing squiggles for a
+ * file no panel shows should not pay for the outline - and the semantic set
+ * (undefined var/proc through a typed receiver, duplicate definitions, the
+ * DM03xx compiles-clean-but-lies warnings) arrives ONLY here. It is the same
+ * set the LSP shell publishes and `dmc diagdiff` holds at zero invented
+ * against dm.exe.
+ *
+ * Shape - the elements are byte-identical to dm_document_symbols' diagnostics:
+ *
+ *   { "diagnostics": [
+ *       { "id": "DM0400", "severity": "error",     severity is a WORD
+ *         "message": "I.nowhere: undefined var",
+ *         "startLine": 4, "startChar": 8,          zero-based, your encoding
+ *         "endLine": 4,   "endChar": 15 } ] }
+ *
+ * An empty array with DM_OK is the ordinary answer on a clean file.
+ *
+ * COST: the semantic half needs the object tree, so the first call after an
+ * edit rebuilds it - same as dm_complete_at. Debounce it.
+ */
+dm_status dm_diagnostics(dm_workspace workspace, const char *file,
+                         dm_position_encoding encoding, char **out_json);
+
 /* -- signature help ------------------------------------------------------- */
 
 /*
@@ -468,6 +512,9 @@ dm_status dm_definition_at(dm_workspace workspace, const char *file,
  *   { "query": "objectTree", "path": "/obj", "depth": 1, "includeBuiltins": true }
  *   { "query": "subtypesOf", "path": "/obj", "limit": 500, "includeBuiltins": true }
  *   { "query": "members", "path": "/mob", "inherited": true, "includeBuiltins": true }
+ *   { "query": "ancestorsOf", "path": "/mob" }                          0.14
+ *   { "query": "references", "path": "/mob/hp", "limit": 1000,
+ *     "encoding": "utf16" }                                             0.14
  *
  *   path             defaults to "/", the root
  *   depth            levels of children to include. 1 is one level, which is what
@@ -503,6 +550,37 @@ dm_status dm_definition_at(dm_workspace workspace, const char *file,
  *                                       you asked about
  *              "owner": "/atom",        which ancestor
  *              "file": "code/mob.dm" }
+ *
+ * ancestorsOf (0.14) answers the whole inheritance chain in one call, nearest
+ * first, self excluded, as <node> objects with depth-0 children:
+ *
+ *   { "query": "ancestorsOf", "path": "/mob", "ancestors": [<node>] }
+ *
+ * references (0.14) is the reference index: every USE of a symbol across the
+ * project, found by the same resolution the diagnostics use, so it and the
+ * squiggles cannot disagree. The target is definition's detail spelling -
+ * "/mob/hp" for a var, "/mob/heal()" for a proc, "/heal()" for a global, a
+ * type's path for a type - canonicalised to the FARTHEST declaring type, so
+ * a call through a subtype receiver and an override share one target. Ask
+ * with the detail string a dm_definition_at hit gave you (the LAST hit is
+ * the canonical one). Locals and parameters are not index symbols.
+ *
+ *   { "query": "references", "path": "/mob/hp", "truncated": false,
+ *     "references": [
+ *       { "file": "code/mob.dm",
+ *         "kind": "write",              read | write | call | override
+ *         "inside": "/mob/hurt()",     the enclosing symbol - group by it
+ *                                      and you have a call hierarchy
+ *         "startLine": 3, "startChar": 2,
+ *         "endLine": 3,   "endChar": 4 } ] }
+ *
+ * "override" hits are proc declarations overriding the target - the incoming
+ * half of a type hierarchy. Positions honour the request's "encoding"
+ * ("utf16" default, "utf8"), since this call has no encoding parameter.
+ *
+ * COST: references walks every file's retained parse per query - bounded by
+ * "limit", milliseconds on a normal project, a visible scan on a huge one.
+ * Debounce it like everything else that needs the tree.
  *
  * "truncated" is reported rather than left to be inferred from the count, because
  * a list exactly as long as the limit looks identical to one that was cut. Show

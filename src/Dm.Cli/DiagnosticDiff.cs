@@ -258,7 +258,7 @@ internal static class DiagnosticDiff
             foreach (Diagnostic diagnostic in parse.Diagnostics)
                 Add(file, source, diagnostic);
 
-            foreach (Diagnostic diagnostic in Binder.Bind(tree, parse.Root))
+            foreach (Diagnostic diagnostic in Binder.Bind(tree, parse.Root, file))
                 Add(file, source, diagnostic);
         }
 

@@ -554,6 +554,126 @@ static void test_hover(const fs::path &dir)
 }
 
 // ---------------------------------------------------------------------------
+// The reference index through dm_query_json, the ancestor chain in one call,
+// and dm_invalidate.
+// ---------------------------------------------------------------------------
+static void test_references(const fs::path &dir)
+{
+    const fs::path dme = dir / "refs.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"refs.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "refs.dm");
+        out << "/mob/guy\n\tvar/hp = 1\n\tproc/hurt()\n\t\thp = 2\n";
+        out << "/proc/f()\n\tvar/mob/guy/g = new\n\treturn g.hp\n";
+    }
+
+    std::printf("references\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "references: workspace opens");
+
+    char *json = nullptr;
+    check(dm_query_json(ws, "{\"query\":\"references\",\"path\":\"/mob/guy/hp\"}", &json) == DM_OK,
+          "references: query succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"kind\":\"write\"") != std::string::npos, "references: the write is found");
+        check(doc.find("\"kind\":\"read\"") != std::string::npos, "references: the read is found");
+        check(doc.find("\"inside\":\"/mob/guy/hurt()\"") != std::string::npos,
+              "references: hits carry the enclosing symbol");
+        check(doc.find("\"truncated\":false") != std::string::npos, "references: truncation reported");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_query_json(ws, "{\"query\":\"ancestorsOf\",\"path\":\"/mob/guy\"}", &json) == DM_OK,
+          "references: ancestorsOf answers");
+
+    if (json)
+    {
+        check(std::string(json).find("/atom/movable") != std::string::npos,
+              "references: the chain reaches the builtins in one call");
+        dm_free(json);
+    }
+
+    check(dm_invalidate(ws) == DM_OK, "references: dm_invalidate succeeds");
+
+    json = nullptr;
+    check(dm_query_json(ws, "{\"query\":\"references\",\"path\":\"/mob/guy/hp\"}", &json) == DM_OK,
+          "references: the workspace rebuilds after invalidation");
+    dm_free(json);
+
+    dm_workspace_close(ws);
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics without the outline - and the only call carrying the binder's
+// semantic set across the ABI.
+// ---------------------------------------------------------------------------
+static void test_diagnostics(const fs::path &dir)
+{
+    const fs::path dme = dir / "diag.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"diag.dm\"\n";
+    }
+    {
+        // `g.nowhere` is DM0400: the receiver's type is written down and no type in the
+        // program declares the member.
+        std::ofstream out(dir / "diag.dm");
+        out << "/mob/guy\n\tvar/health = 1\n";
+        out << "/proc/f()\n\tvar/mob/guy/g = new\n\treturn g.nowhere\n";
+    }
+
+    std::printf("diagnostics\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "diagnostics: workspace opens");
+
+    char *json = nullptr;
+    check(dm_diagnostics(ws, "diag.dm", DM_ENCODING_UTF16, &json) == DM_OK,
+          "diagnostics: call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"DM0400\"") != std::string::npos,
+              "diagnostics: the semantic set crosses the ABI");
+        check(doc.find("nowhere") != std::string::npos, "diagnostics: the message names the member");
+        check(doc.find("\"severity\":\"error\"") != std::string::npos,
+              "diagnostics: severity is a word");
+        dm_free(json);
+    }
+
+    // A clean buffer answers an empty array, not an error.
+    const char *clean = "/mob/guy2\n\tvar/mana = 2\n";
+    check(dm_set_buffer(ws, "diag.dm", clean, -1) == DM_OK, "diagnostics: buffer replaces the file");
+
+    json = nullptr;
+    check(dm_diagnostics(ws, "diag.dm", DM_ENCODING_UTF16, &json) == DM_OK,
+          "diagnostics: clean file still succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"diagnostics\":[]") != std::string::npos,
+              "diagnostics: a clean file is an empty array");
+        dm_free(json);
+    }
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_diagnostics(ws, "diag.dm", 99, &rejected) == DM_ERR_INVALID_ARG,
+          "diagnostics: unknown encoding rejected");
+    check(rejected == nullptr, "diagnostics: out-param cleared on failure");
+
+    dm_workspace_close(ws);
+}
+
+// ---------------------------------------------------------------------------
 // Signature help. The popup for an open argument list: which proc, and which
 // parameter the caret sits in. Nothing-to-show is an empty object with DM_OK,
 // as with hover.
@@ -784,6 +904,8 @@ int main()
     test_definition(dir);
     test_hover(dir);
     test_signature(dir);
+    test_diagnostics(dir);
+    test_references(dir);
     test_workspace_symbols(dir);
 
     test_query_json(dir);

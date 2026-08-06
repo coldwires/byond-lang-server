@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using Dm.Core.Diagnostics;
+using Dm.Core.Services;
 using Dm.Core.Symbols;
 using Dm.Core.Syntax;
+using Dm.Core.Text;
 
 namespace Dm.Core.Binding;
 
@@ -30,15 +32,48 @@ namespace Dm.Core.Binding;
 public sealed class Binder
 {
     private readonly ObjectTree _tree;
+    private readonly string? _file;
     private readonly List<Diagnostic> _diagnostics = new();
 
+    // The reference sink. When attached, every name this walk RESOLVES is reported to it — the
+    // same resolution, so the index and the diagnostics cannot disagree about what a name means.
+    // Null on the diagnostics-only path, where every sink branch short-circuits to nothing.
+    private readonly Action<Services.Reference>? _sink;
+    private readonly string? _referenceName;
+    private string _inside = "/";
 
-    private Binder(ObjectTree tree) => _tree = tree;
+    private Binder(ObjectTree tree, string? file, Action<Services.Reference>? sink, string? referenceName)
+    {
+        _tree = tree;
+        _file = file;
+        _sink = sink;
+        _referenceName = referenceName;
+    }
 
     /// <summary>Binds one file's declarations and returns what did not resolve.</summary>
-    public static IReadOnlyList<Diagnostic> Bind(ObjectTree tree, FileSyntax root)
+    /// <param name="tree">The finished object tree.</param>
+    /// <param name="root">The file's parse.</param>
+    /// <param name="file">
+    /// The path the tree's declaration sites record for this file, when the caller knows it. Only
+    /// the duplicate-definition check reads it — a same-file "previous definition" can then be
+    /// anchored where dm.exe anchors it. Null degrades to reporting the duplicate half alone.
+    /// </param>
+    /// <param name="sink">
+    /// Receives a <see cref="Services.Reference"/> for every name the walk resolves, when the
+    /// caller is building the reference index. Emission never changes the diagnostics.
+    /// </param>
+    /// <param name="referenceName">
+    /// A bare-name prefilter for the sink: only occurrences of this name are emitted, which lets a
+    /// single-symbol query skip resolution work on every other name in the project.
+    /// </param>
+    public static IReadOnlyList<Diagnostic> Bind(
+        ObjectTree tree,
+        FileSyntax root,
+        string? file = null,
+        Action<Services.Reference>? sink = null,
+        string? referenceName = null)
     {
-        Binder binder = new(tree);
+        Binder binder = new(tree, file, sink, referenceName);
         binder.BindDeclarations(root.Declarations, TypePath.Root);
 
         return binder._diagnostics;
@@ -64,6 +99,7 @@ public sealed class Binder
 
                 case VarDeclarationSyntax variable:
                     // A type-level initialiser runs with the enclosing type as `src`.
+                    _inside = enclosing.IsRoot ? "/" : enclosing.Text;
                     BindExpression(variable.Initializer, new Scope(enclosing), invoked: false);
                     break;
 
@@ -76,7 +112,16 @@ public sealed class Binder
 
     private void BindProc(ProcDeclarationSyntax proc, TypePath enclosing)
     {
-        Scope scope = new(TypeTreeBuilder.ProcOwner(enclosing, proc.Path));
+        TypePath owner = TypeTreeBuilder.ProcOwner(enclosing, proc.Path);
+
+        if (proc.IsNewDeclaration)
+            CheckDuplicateProc(proc, owner);
+        else
+            EmitOverrideReference(proc, owner);
+
+        _inside = owner.IsRoot ? $"/{proc.Name}()" : $"{owner.Text}/{proc.Name}()";
+
+        Scope scope = new(owner);
 
         foreach (ParameterSyntax parameter in proc.Parameters)
         {
@@ -93,6 +138,101 @@ public sealed class Binder
             return;
 
         BindStatement(proc.Body, scope);
+    }
+
+    /// <summary>
+    /// A <c>proc/</c> name declared twice is dm.exe's duplicate-definition error — on one type, on
+    /// an ancestor at any depth, or against a builtin (§8, probes dup1–dup9). Overrides carry no
+    /// marker and never trip this; a var and a proc may legally share a name.
+    /// </summary>
+    /// <remarks>
+    /// dm.exe reports a pair: <i>"duplicate definition"</i> on the later declaration and
+    /// <i>"previous definition"</i> on the first. Binding is per file, so each site reports its own
+    /// half and a same-file pair matches the compiler line for line. The one deliberate miss: when
+    /// the first declaration lives in another file, its <i>"previous definition"</i> line is not
+    /// reported — finding it from here would mean scanning every descendant type on every bind.
+    /// A builtin has no line at all, and dm.exe accordingly reports a single error there.
+    /// </remarks>
+    private void CheckDuplicateProc(ProcDeclarationSyntax proc, TypePath owner)
+    {
+        if (_tree.Find(owner) is not TypeSymbol type)
+            return;
+
+        if (type.FindProc(proc.Name) is not ProcSymbol symbol)
+            return;
+
+        if (symbol.IsBuiltin)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0403", proc.NameSpan,
+                $"{proc.Name}: duplicate definition (conflicts with built-in proc)"));
+            return;
+        }
+
+        if (symbol.DeclaringSites.Count > 1)
+        {
+            // Which declaring site this syntax node is. A site we cannot find is a model
+            // mismatch, and the conservative answer is silence.
+            int index = -1;
+
+            for (int i = 0; i < symbol.DeclaringSites.Count; i++)
+            {
+                if (symbol.DeclaringSites[i].Span == proc.Span
+                    && symbol.DeclaringSites[i].NameSpan == proc.NameSpan)
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index > 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", proc.NameSpan, $"{proc.Name}: duplicate definition"));
+            }
+            else if (index == 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", proc.NameSpan, $"{proc.Name}: previous definition"));
+            }
+
+            return;
+        }
+
+        // The sole declaration on its own type: a redeclaration of something an ancestor already
+        // declares, at any depth, is still a duplicate. An ancestor that merely overrides is not
+        // a declarer — the walk continues to whoever is.
+        foreach (TypeSymbol ancestor in _tree.InheritanceChain(type))
+        {
+            if (ReferenceEquals(ancestor, type) || ancestor.FindProc(proc.Name) is not ProcSymbol above)
+                continue;
+
+            if (above.IsBuiltin)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", proc.NameSpan,
+                    $"{proc.Name}: duplicate definition (conflicts with built-in proc)"));
+                return;
+            }
+
+            if (above.DeclaringCount > 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", proc.NameSpan, $"{proc.Name}: duplicate definition"));
+
+                // The pair's other half, when the ancestor's declaration sits in this same file.
+                DeclarationSite first = above.DeclaringSites[0];
+
+                if (_file is not null
+                    && string.Equals(first.File, _file, StringComparison.OrdinalIgnoreCase))
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "DM0403", first.NameSpan, $"{proc.Name}: previous definition"));
+                }
+
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -114,13 +254,24 @@ public sealed class Binder
         foreach (string segment in path.Path.Segments)
         {
             if (segment is "proc" or "verb")
+            {
+                // `/type/proc/Name` is a proc REFERENCE — TYPE_PROC_REF's expanded shape — and
+                // worth a hit in the index even though the diagnostics skip it. Only the
+                // unambiguous form: the marker directly before the final segment.
+                EmitProcReference(path);
                 return;
+            }
         }
 
         TypePath resolved = TypePath.FromSegments(path.Path.Segments);
 
-        if (_tree.Find(resolved) is not null)
+        if (_tree.Find(resolved) is { } named)
+        {
+            if (SinkWants(path.Path.Segments[^1]))
+                _sink!(new Reference(_file ?? string.Empty, path.Span, named.Path.Text, ReferenceKind.Read, _inside));
+
             return;
+        }
 
         // `/obj/small/trap/get` names the verb `get` on /obj/small/trap with no `verb` marker
         // segment — mlaas writes `verbs += /obj/small/trap/get` and dm.exe accepts it. Resolved
@@ -261,7 +412,7 @@ public sealed class Binder
         }
     }
 
-    private void BindExpression(ExpressionSyntax? expression, Scope scope, bool invoked)
+    private void BindExpression(ExpressionSyntax? expression, Scope scope, bool invoked, bool written = false)
     {
         switch (expression)
         {
@@ -269,7 +420,13 @@ public sealed class Binder
                 return;
 
             case MemberAccessExpressionSyntax member:
-                BindMemberAccess(member, scope, invoked);
+                BindMemberAccess(member, scope, invoked, written);
+                break;
+
+            // Sink-only: a bare name resolved for the reference index. No diagnostic ever comes
+            // from this case.
+            case IdentifierExpressionSyntax identifier:
+                BindIdentifier(identifier, scope, invoked, written);
                 break;
 
             case PathExpressionSyntax path:
@@ -301,7 +458,9 @@ public sealed class Binder
                 break;
 
             case AssignmentExpressionSyntax assignment:
-                BindExpression(assignment.Target, scope, invoked: false);
+                // The target is a WRITE for the reference index; compound operators both read and
+                // write, and report as writes — "where is hp assigned" is the question they answer.
+                BindExpression(assignment.Target, scope, invoked: false, written: true);
                 BindExpression(assignment.Value, scope, invoked: false);
                 break;
 
@@ -341,7 +500,7 @@ public sealed class Binder
     /// The one check this pass makes: a member reached through a receiver whose type is written
     /// down, and which that type does not have.
     /// </summary>
-    private void BindMemberAccess(MemberAccessExpressionSyntax member, Scope scope, bool invoked)
+    private void BindMemberAccess(MemberAccessExpressionSyntax member, Scope scope, bool invoked, bool written = false)
     {
         BindExpression(member.Target, scope, invoked: false);
 
@@ -363,13 +522,22 @@ public sealed class Binder
         if (_tree.Find(receiver) is not { } type)
             return;
 
-        bool exists = invoked
-            ? _tree.ResolveProc(type, member.Name) is not null
-              || _tree.ResolveVar(type, member.Name) is not null
-            : _tree.ResolveVar(type, member.Name) is not null;
+        bool isProc = invoked && _tree.ResolveProc(type, member.Name) is not null;
+        bool exists = isProc || _tree.ResolveVar(type, member.Name) is not null;
 
         if (exists)
+        {
+            if (SinkWants(member.Name) && DeclaringOwner(type, member.Name, isProc) is { } declaring)
+            {
+                ReferenceKind kind = invoked
+                    ? ReferenceKind.Call
+                    : written ? ReferenceKind.Write : ReferenceKind.Read;
+
+                EmitReference(member.Name, member.NameSpan, kind, declaring, isProc);
+            }
+
             return;
+        }
 
         // Not finding it used to be insufficient on its own, because a miss can mean our tree is
         // short rather than that the author is wrong. Two holes caused exactly that and both are now
@@ -392,6 +560,121 @@ public sealed class Binder
                 "DM0400",
                 member.NameSpan,
                 $"undefined var on {type.Path}: {member.Name}"));
+    }
+
+    // -- the reference sink ---------------------------------------------------
+
+    /// <summary>Whether the sink is on and wants this name — the cheap gate before any walk.</summary>
+    private bool SinkWants(string name)
+        => _sink is not null
+            && (_referenceName is null || string.Equals(name, _referenceName, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The FARTHEST type in the chain declaring the member — the canonical owner, so a call
+    /// through a subtype receiver and an override of the same proc share one target.
+    /// </summary>
+    private TypeSymbol? DeclaringOwner(TypeSymbol start, string name, bool proc)
+    {
+        TypeSymbol? found = null;
+
+        foreach (TypeSymbol step in _tree.InheritanceChain(start))
+        {
+            if (proc ? step.FindProc(name) is not null : step.FindVar(name) is not null)
+                found = step;
+        }
+
+        return found;
+    }
+
+    private void EmitReference(string name, TextSpan span, ReferenceKind kind, TypeSymbol owner, bool isProc)
+    {
+        string prefix = owner.Path.IsRoot ? string.Empty : owner.Path.Text;
+        string target = isProc ? $"{prefix}/{name}()" : $"{prefix}/{name}";
+
+        _sink!(new Reference(_file ?? string.Empty, span, target, kind, _inside));
+    }
+
+    /// <summary>
+    /// A hit for <c>/type/proc/Name</c> and <c>/type/verb/Name</c> literals, the shape
+    /// <c>TYPE_PROC_REF</c> expands to. Only the unambiguous form is read: the marker segment
+    /// directly before a final name segment.
+    /// </summary>
+    private void EmitProcReference(PathExpressionSyntax path)
+    {
+        IReadOnlyList<string> segments = path.Path.Segments;
+
+        if (_sink is null || segments.Count < 2 || segments[^2] is not ("proc" or "verb"))
+            return;
+
+        string name = segments[^1];
+
+        if (!SinkWants(name))
+            return;
+
+        List<string> ownerSegments = new(segments.Count - 2);
+
+        for (int i = 0; i < segments.Count - 2; i++)
+            ownerSegments.Add(segments[i]);
+
+        TypeSymbol? owner = ownerSegments.Count == 0
+            ? _tree.Root
+            : _tree.Find(TypePath.FromSegments(ownerSegments));
+
+        if (owner is null)
+            return;
+
+        if (DeclaringOwner(owner, name, proc: true) is { } declaring)
+            EmitReference(name, path.Span, ReferenceKind.Read, declaring, isProc: true);
+    }
+
+    /// <summary>
+    /// A proc declared WITHOUT the <c>proc/</c> marker overrides whatever an ancestor declared —
+    /// the incoming half of a type hierarchy, reported as a reference to the origin.
+    /// </summary>
+    private void EmitOverrideReference(ProcDeclarationSyntax proc, TypePath owner)
+    {
+        if (!SinkWants(proc.Name) || _tree.Find(owner) is not TypeSymbol type)
+            return;
+
+        if (DeclaringOwner(type, proc.Name, proc: true) is { } origin && !ReferenceEquals(origin, type))
+            EmitReference(proc.Name, proc.NameSpan, ReferenceKind.Override, origin, isProc: true);
+    }
+
+    /// <summary>
+    /// Sink-only bare-name resolution: the enclosing chain first, then the root's globals — the
+    /// same order definition uses. Reports no diagnostic; the undefined-bare-identifier check is
+    /// separate M11 work with its own zero-invented gate.
+    /// </summary>
+    private void BindIdentifier(IdentifierExpressionSyntax identifier, Scope scope, bool invoked, bool written)
+    {
+        if (!SinkWants(identifier.Name)
+            || identifier.Name is "src" or "usr" or "world" or "global" or "args")
+        {
+            return;
+        }
+
+        // Locals and parameters shadow members and are not index symbols.
+        if (scope.Contains(identifier.Name))
+            return;
+
+        TypeSymbol? declaring = _tree.Find(scope.EnclosingType) is { } enclosing
+            ? DeclaringOwner(enclosing, identifier.Name, invoked)
+            : null;
+
+        if (declaring is null)
+        {
+            bool atRoot = invoked
+                ? _tree.Root.FindProc(identifier.Name) is not null
+                : _tree.Root.FindVar(identifier.Name) is not null;
+
+            if (!atRoot)
+                return;
+
+            declaring = _tree.Root;
+        }
+
+        ReferenceKind kind = invoked ? ReferenceKind.Call : written ? ReferenceKind.Write : ReferenceKind.Read;
+        EmitReference(identifier.Name, identifier.Span, kind, declaring, isProc: invoked);
     }
 
     /// <summary>
@@ -448,6 +731,22 @@ public sealed class Binder
         public Scope Nest() => new(this);
 
         public void Declare(string name, TypePath? declaredType) => _names[name] = declaredType;
+
+        /// <summary>
+        /// Whether the name is a local or parameter at all, typed or not — the distinction
+        /// <see cref="Lookup"/> deliberately erases, and the one the reference index needs: a
+        /// local shadows a member whatever its type.
+        /// </summary>
+        public bool Contains(string name)
+        {
+            for (Scope? scope = this; scope is not null; scope = scope._parent)
+            {
+                if (scope._names.ContainsKey(name))
+                    return true;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// The declared type of a name, or null when it is untyped, shadowed by an untyped

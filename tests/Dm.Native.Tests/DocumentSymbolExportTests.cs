@@ -12,6 +12,7 @@ namespace Dm.Native.Tests;
 /// buffers. The C++ smoke test covers the same ground against the published binary; this runs in
 /// <c>dotnet test</c>, so a boundary regression is caught without a NativeAOT publish.
 /// </summary>
+[Collection("handle table")] // shares the static HandleTable with the count-asserting tests
 public unsafe class DocumentSymbolExportTests
 {
     // Taken as function pointers because [UnmanagedCallersOnly] methods cannot be called directly

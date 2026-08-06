@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M7 complete · M8 passed over · M9 past its target · M10 started · M11 at zero
-> invented · ABI 0.12** · 1,023 tests · Last updated: 2026-08-05
+> Status: **M0–M7 complete · M8 passed over · M9 past its target · M10 done · M11 at zero
+> invented · ABI 0.14** · 1,051 tests · Last updated: 2026-08-06
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -442,11 +442,11 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.12 and passing 120 checks. Reference
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.14 and passing 140 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,023 today (975 core, 36 native,
-  12 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,051 today (998 core, 39 native,
+  14 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -955,7 +955,17 @@ that was cut, and a picker that quietly shows the first 500 of 4,000 subtypes is
   replay makes the build redo itself with the caches off. **1 of 7,161 files is re-read, re-walked
   and re-parsed after an edit** on /tg/station.
 - ⬜ Cache the object tree per-file, rebuilding affected subtrees only. **The last phase still
-  rebuilding the whole project**, and at 411 ms of /tg/station's 909 the largest one.
+  rebuilding the whole project** — ~430 ms of /tg/station's ~790 — and two levers pulled on
+  2026-08-06 both measured at **no gain**, which is the finding: per-file `TreeContribution`
+  replay (the AST walk cached by parse identity, so a rebuild does only the mutations) and a
+  ctor-cached `TypePath` hash with a reference-equality fast path left the phase where it was,
+  because the cost IS the mutations — ~45k type symbols, ~65k proc symbols and ~335k dictionary
+  entries constructed fresh per rebuild. Both changes shipped anyway: the contribution record is
+  the foundation the real lever needs. That lever is **diff-patching the previous tree** — one
+  edited file's old and new contributions diff into a patch set — and it needs what a replay does
+  not: removal semantics on `ObjectTree`, include-order-stable site lists, and override chains
+  that survive splicing a file's entries out of the middle. Design it as those three traps, per
+  the StateHash lesson: write the test for each before the code.
 - Target: warm completion under 30ms on the team's game. **Met — mlaas is at 10 ms.** Complete
   before M10, since public users will arrive with larger codebases.
 
@@ -1084,17 +1094,30 @@ as a rule they have to follow.
     `dm_core.h`, ten abi-smoke checks, `INTEGRATION.txt` — plus `dmc signature`, so the CLI can
     still arbitrate every position-shaped call an IDE makes. Proven from C++: 120 checks
     reporting 0.12.
-- ⬜ **The dm-patch upstream requests** (`~/Desktop/dm-patch/docs/UPSTREAM-REQUESTS.md`,
+- **The dm-patch upstream requests** (`~/Desktop/dm-patch/docs/UPSTREAM-REQUESTS.md`,
   2026-08-05) are adopted as follows, cheapest first:
-  - `dm_diagnostics` — diagnostics without buying the outline, and for files not open anywhere.
-    Their §3; also exactly what `publishDiagnostics` wants.
+  - ✅ `dm_diagnostics` — diagnostics without buying the outline, and the only export carrying
+    the binder's semantic set. Shipped at ABI 0.13 with the full pass: header, ten abi-smoke
+    checks, `INTEGRATION.txt`, and the diagnostics elements shared byte-for-byte with
+    `dm_document_symbols` via one writer.
   - A distinct completion context for a bare leading `.` (their §4), so no client has to guess
     that the return-value variable's 332-item identifier list was not what the user wanted.
   - The per-item `inferred` flag on completion (their §5), replacing every client's guess about
     which items ride on inference `dm.exe` does not do.
-  - **The reference index (their §1) is the next big core work after M10** — one shape serving
-    references, call hierarchy, document highlight and rename, with `kind: call|read|write|
-    override` and the enclosing symbol carried per hit. It subsumes M11's find-references bullet.
+  - ✅ **The reference index (their §1) — shipped 2026-08-06 at ABI 0.14.** One shape serving
+    references, call hierarchy (group by the per-hit enclosing symbol), document highlight and
+    what-overrides-this, with `kind: read|write|call|override`. The hits come from the
+    **binder's own walk with a sink attached** — one resolution engine, so the index and the
+    diagnostics cannot disagree about what a name means, and the same written-type conservatism
+    means the list under-reports rather than lies. Canonical targets are definition's detail
+    spelling, canonicalised to the farthest declaring type, so subtype-receiver calls and
+    overrides share one target. Surfaces: `dm_query_json` `references` (+`ancestorsOf`, their
+    §7, and `dm_invalidate`, their §15, in the same bump), LSP `textDocument/references` +
+    `documentHighlight` + `dm/references` + `dm/ancestorsOf`, and `dmc references` as the
+    arbiter. No persistent index yet: each query walks the retained parses, capped and
+    truncation-flagged; incrementality is M9-shaped work for when a profile asks. It subsumes
+    M11's find-references bullet; rename remains open on the `:`/string-dispatch soundness
+    question.
   - Their do-not-change list is contract: UTF-16 default stays honest, whole-document
     `dm_set_buffer` stays, additive ABI changes bump the minor.
 - ✅ semanticTokens backed by the M2/M6 classification service, over the small TextMate base.
@@ -1114,7 +1137,12 @@ as a rule they have to follow.
   answered by the same `TreeQueryService` as `dm_query_json` with responses mirroring
   `abi/schema/` field for field. A missing path is `-32803`, the LSP spelling of
   `DM_ERR_NOT_FOUND`; `dm/iconStates` waits on M8.
-- ⬜ `$/progress` for the first build.
+- ✅ `$/progress` for the first build: a query that finds no tree announces itself —
+  `window/workDoneProgress/create`, begin, the answer, end — so the one call that pays for the
+  whole project reads as "indexing" instead of a frozen UI, and a warm tree stays silent. The
+  server sending its first request exposed a dispatcher bug worth having found: a client's
+  RESPONSE (an id, no method) was answered with "method not supported"; responses are consumed
+  silently now.
 - ⬜ Incremental document sync, when a profile asks for it — full sync costs one string per
   keystroke and M9 priced the rebuild at ~10 ms on a real game.
 - `docs/capability-matrix.md` now exists, per §3's sync rule — there is finally a second shell to
@@ -1136,7 +1164,7 @@ because nothing else in a DM toolchain reports them. The parser has to model the
 |---|---|---|
 | `proc` block indented inside a `var` block (§8) | accepts it, declares nothing; calling it is a runtime error | **shipped as `DM0300`** — the parser declares nothing there and warns instead |
 | A var name colliding with a builtin (`x`/`y` on an atom) | duplicate-definition **error** | already fatal; surface it early |
-| `proc/` declared twice on one type | duplicate-definition error | `ProcSymbol.DeclaringCount > 1` |
+| `proc/` declared twice on one type | duplicate-definition error | **shipped as `DM0403`** — on one type, on an ancestor at any depth, and against a builtin (probes dup1–dup9). dm.exe reports a pair, "duplicate definition" on the later line and "previous definition" on the first; each file reports its own half, so a same-file pair matches line for line and a cross-file first declaration's "previous" line is the one documented miss. Overrides and var/proc name sharing stay clean. The var half (dup4/dup5 probed: also a pair, lines inverted) is not yet modelled — `VarSymbol` keeps one site. |
 | A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
 | `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | *"`x` is untyped, so `.` cannot compile here — write `var/obj/item/x`"*. This is the warning half of the M6 completion trade, and the fix is a quick-edit rather than prose. |
 
@@ -1539,11 +1567,12 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.12, 20 exports: version, last error, free, workspace
-open/close/root, injected defines, buffer set/close, classify plus its three accessors, document
-symbols, completion, definition, hover, signature help, workspace symbols and bulk queries.
-Everything listed below is implemented, and `abi/schema/` freezes the bulk request and response
-shapes.
+`abi/dm_core.h` is the source of truth. ABI 0.14, 22 exports: version, last error, free, workspace
+open/close/root, injected defines, buffer set/close, invalidate, classify plus its three
+accessors, document symbols, completion, definition, hover, signature help, diagnostics,
+workspace symbols and bulk queries — the last now carrying the reference index (`references`)
+and the ancestor chain (`ancestorsOf`). Everything listed below is implemented, and
+`abi/schema/` freezes the bulk request and response shapes.
 
 **Hot path — handles and accessors:**
 ```c
@@ -1570,6 +1599,9 @@ dm_status   dm_hover_at(dm_workspace, const char* file, int32_t line, int32_t ch
                         dm_position_encoding, char** out_json);                /* M7, 0.7 */
 dm_status   dm_signature_at(dm_workspace, const char* file, int32_t line, int32_t character,
                             dm_position_encoding, char** out_json);           /* M10, 0.12 */
+dm_status   dm_diagnostics(dm_workspace, const char* file,
+                           dm_position_encoding, char** out_json);            /* M11, 0.13 */
+dm_status   dm_invalidate(dm_workspace);                                      /* 0.14 */
 dm_status   dm_workspace_symbols(dm_workspace, const char* query, int32_t limit,
                                  dm_position_encoding, char** out_json);       /* M7, 0.8 */
 ```
@@ -2528,3 +2560,50 @@ it.
   `input(...) in choices` initializers, then the `as null|anything` form of the same idiom.
   Fixture `errors/local_in`, six runtime checks in `ok/parsing.dm` (64 total), zero invented held
   on all three projects.
+- **2026-08-05** — The duplicate-definition check shipped as `DM0403`, closing the agreed list's
+  last item. Nine probes pinned the shapes: `proc/` twice on one type, on an ancestor at any
+  depth, on the root, and against a builtin (its own one-line message) are all errors; overrides,
+  var/proc name sharing, and the var-vs-proc cases dm tolerates stay silent. `ProcSymbol` now
+  records its declaring **sites**, not only the count, and `Binder.Bind` takes the file so a
+  same-file pair reports both of dm's lines — the cross-file "previous definition" line is the
+  one documented miss. The probed-but-unmodelled remainder: var duplicates (dup4/dup5, a pair
+  with the lines inverted), which need `VarSymbol` to keep more than one site. Fixtures
+  `errors/dup_proc` and `errors/dup_subtype`, seven binder unit tests, zero invented held on all
+  three projects.
+- **2026-08-06** — The fixture suite's tier 2: `tests/fixtures/services/` holds projects that
+  compile clean under dm.exe AND carry `//?` position marks — `//? complete 7:4 => hp, !reload`
+  — that a runner answers through the real workspace, end to end. The gap it closed was named in
+  the plan ("no end-to-end check that `mob.` returns the right list"), and it caught a shipped
+  bug on its first run: definition and hover returned **nothing on the first character of every
+  name**, because the token-at-offset lookup's inclusive end matched the operator *before* the
+  name first — and the same boundary logic existed twice, in `DefinitionService` and privately in
+  `HoverService`, wrong the same way. One shared `IndexAt` now prefers the token starting at the
+  caret and falls back to the one just left.
+- **2026-08-06** — `dm_diagnostics` shipped at ABI 0.13, closing the matrix's last parity gap:
+  the binder's semantic set now crosses the C ABI, with elements shared byte-for-byte with
+  `dm_document_symbols` via one writer. Full pass — header, ten abi-smoke checks (130 reporting
+  0.13), `INTEGRATION.txt`, managed export tests. The new tests also flushed out a real test
+  race: `HandleTableTests` asserts absolute counts on the static table while export test classes
+  alloc in parallel — 1 failure in 12 runs once three such classes existed — hunted deliberately
+  per the `Builtins.Version` lesson and fixed by putting every table-touching class in one xunit
+  collection. 0 of 15 after.
+- **2026-08-06** — **The reference index shipped at ABI 0.14**, with `ancestorsOf` and
+  `dm_invalidate` in the same bump — dm-patch's §1, §7 and §15 together, after the user re-cut
+  their upstream-requests doc around "expose the server's full power". The design decision that
+  matters: the hits come from the **binder's walk with a sink**, not a second resolver — a
+  reference exists exactly where diagnostics resolution succeeds, the sink is null-gated on the
+  diagnostics path, and the bare-identifier resolution the sink needed (scope chain, then
+  enclosing chain, then root) is the machinery the "undefined var on bare identifiers" ratchet
+  class will reuse. Kinds read/write/call/override; targets canonicalised to the farthest
+  declaring type; `inside` per hit makes a call hierarchy a group-by. Surfaced everywhere at
+  once: query + LSP standard `references`/`documentHighlight` + `dm/references`/`dm/ancestorsOf`
+  + `dmc references` + two tier-2 marks + smoke (140 checks reporting 0.14). Their doc's §8 was
+  corrected in passing: the first-character bug was no post-pin regression — the faulty lookup
+  is byte-identical at `c22438e`; their probes simply never hovered an operator-glued first
+  character.
+- **2026-08-06** — The tree merge measured, and the obvious levers are dead ends: per-file
+  contribution replay and a ctor-cached `TypePath` hash both left the phase at ~430 ms, because
+  the cost is the ~335k mutations, not the walk or the hashing. Both shipped anyway — the
+  contribution record is the foundation diff-patching needs — verified twice at 335,672
+  declarations identical, mlaas unmoved at 10 ms. The real lever and its three traps are written
+  into the M9 bullet; it is deferred as its own piece of work rather than half-done here.

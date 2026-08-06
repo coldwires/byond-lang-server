@@ -86,18 +86,16 @@ public static class HoverService
     }
 
     /// <summary>The span of the token under the cursor, for the client to highlight.</summary>
+    /// <remarks>
+    /// Resolution and highlight use the same lookup, so the span lit up is always the token the
+    /// answer is about — a private copy of the boundary logic here carried the same off-by-one
+    /// the definition side had.
+    /// </remarks>
     private static TextSpan TokenSpanAt(Document document, int offset)
     {
-        foreach (Token token in document.Lex.Tokens)
-        {
-            if (token.Span.Start > offset)
-                break;
+        int index = DefinitionService.IndexAt(document.Lex.Tokens, offset);
 
-            if (!token.Span.IsEmpty && offset >= token.Span.Start && offset <= token.Span.End)
-                return token.Span;
-        }
-
-        return new TextSpan(offset, 0);
+        return index >= 0 ? document.Lex.Tokens[index].Span : new TextSpan(offset, 0);
     }
 
     private static SourceText? ReadOrNull(string file)
