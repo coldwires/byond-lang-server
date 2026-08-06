@@ -145,6 +145,52 @@
 		var/r = c ? locate(/datum/parsing) in L : "none"
 		return istype(r, /datum/parsing) ? "found" : r
 
+	// The relational `in` is rejected as a LOCAL var's initializer (errors/
+	// local_in) - and the same text as an assignment STATEMENT is legal and
+	// means assign-then-test, per `in` binding below `=`: r takes the BRANCH
+	// value and the membership result is discarded. Runtime-verified against
+	// 516.1666: c=0 gives 9, which neither reading of the `in` could produce.
+	proc/ternary_then_in_statement(c)
+		var/list/L = list(1,2,3)
+		var/y = 5
+		var/r
+		r = c ? y : 9 in L
+		return r
+
+	// Parenthesise the whole test and the initializer is legal - the parens
+	// hold the `in` at bracket depth 1, which is exactly the distinction the
+	// error case turns on.
+	proc/paren_in_initializer()
+		var/list/L = list(1,2,3)
+		var/r = (2 in L)
+		return r
+
+	// `locate(X) in L` is welcome where the relational `in` is not - more
+	// evidence it is its own grammatical unit rather than the operator.
+	proc/locate_in_initializer()
+		var/list/L = list(src)
+		var/datum/parsing/found = locate(/datum/parsing) in L
+		return istype(found, /datum/parsing) ? 1 : 0
+
+	// `= x in list(...)` on a local is dm's value-restriction clause, not the
+	// membership operator: r takes the LEFT value whether or not it is in the
+	// list. The one RHS the initializer grammar accepts, and the reason we
+	// warn (DM0301) rather than error - a local written this way almost
+	// always meant the test.
+	proc/in_list_restriction()
+		var/r = 2 in list(4,5)
+		return r
+
+	// In an if-condition the `in` binds loosest over the ternary: with c=1
+	// the condition is (5) in list(1,2,3), which is false, so the branch is
+	// NOT taken. dm.exe runtime-verified.
+	proc/ternary_in_condition(c)
+		var/list/L = list(1,2,3)
+		var/y = 5
+		if(c ? y : 9 in L)
+			return "took"
+		return "skipped"
+
 	// The catch must bind AND run: a negative argument indexes a null list, so
 	// the -1 can only come from the caught exception. `e` is read to keep
 	// unused_var quiet.
@@ -195,3 +241,9 @@
 	CHECK("modifier word as a name", P.modifier_word_as_name(5), 17)
 	CHECK("locate-in inside a ternary, hit", P.locate_in_ternary(1), "found")
 	CHECK("locate-in inside a ternary, miss", P.locate_in_ternary(0), "none")
+	CHECK("statement ternary-then-in, true branch", P.ternary_then_in_statement(1), 5)
+	CHECK("statement ternary-then-in, false branch", P.ternary_then_in_statement(0), 9)
+	CHECK("parenthesised in as an initializer", P.paren_in_initializer(), 1)
+	CHECK("locate-in as an initializer", P.locate_in_initializer(), 1)
+	CHECK("in list(...) is a restriction, not a test", P.in_list_restriction(), 2)
+	CHECK("if-condition ternary then in", P.ternary_in_condition(1), "skipped")

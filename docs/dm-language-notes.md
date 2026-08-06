@@ -794,14 +794,13 @@ names outright — and the runtime values are 1 and 0.
 
 ---
 
-## Compile-only: `in` inside a ternary branch, and the `locate` exception
+## `in` inside a ternary branch, the `locate` exception, and where an earlier claim was wrong
 
-The relational `in` does not parse inside a ternary branch, in either position:
+The relational `in` does not parse inside a ternary's **true** branch, in any position:
 
 | Written | Result |
 |---|---|
-| `c ? 9 in L : "no"` | **compile error**, *"expected ':'"* |
-| `c ? "yes" : 9 in L` | **compile error**, *"unexpected 'in' expression"* |
+| `c ? 9 in L : "no"` | **compile error**, *"expected ':'"* — as an initializer and as a statement alike |
 | `c ? locate(/obj) in L : "no"` | compiles, **and runs**: the true branch yields the found object |
 
 So `locate(X) in container` is its own grammatical unit rather than the loosest-binding `in`
@@ -812,6 +811,48 @@ The statement-level consequence is silent: in `x = locate(y) in L`, reading the 
 relational operator gives `(x = locate(y)) in L` — assign first, test afterwards, per `in` binding
 below `=` (§1) — which puts the wrong value in `x` with no diagnostic anywhere. The idiom's value
 is the found object.
+
+An earlier revision of this section also listed `c ? y : 9 in L` — the **false** branch — as a
+compile error. That was measured only in a var initializer, and the ternary had nothing to do with
+the rejection; the context did. The next section has the real rule.
+
+## Compile-only: a local var's initializer rejects the relational `in`
+
+Write a membership test as a proc-local var's initializer and the compiler refuses it, whatever
+sits on the operator's left:
+
+| Written | Result |
+|---|---|
+| `var/r = y in L` | **compile error**, *"unexpected 'in' expression"* |
+| `var/r = (y) in L` | **compile error** — parenthesising the left side changes nothing |
+| `var/r = c ? y : 9 in L` | **compile error** — a ternary left side changes nothing |
+| `var/r = (y in L)` | compiles: parenthesise the **whole** test |
+| `var/r = 2 in g()`, `2 in typesof(/obj)`, `2 in (L)`, `2 in world` | **compile error** — the RHS does not rescue it either |
+| `r = y in L` — plain assignment statement | compiles |
+| `var/gv = 2 in list(1,2)` — a **global** | compiles |
+| `/datum/d` + `var/x = 2 in list(1,2)` — **type-level** | compiles |
+| `for(var/x = start in L)` | the header's own form, untouched |
+
+Only the proc-local declaration refuses it. Three initializer forms are exempt, and each is a
+different grammar rather than the operator:
+
+- **`locate(X) in L`** — the locate unit above. `var/found = locate(/obj/item) in L` compiles.
+- **`input(...) [as null|anything] in choices`** — the input idiom's choice list. mlaas writes it
+  eight times as a local initializer, `as` clause and all, in a project that compiles clean.
+- **`= x in list(...)`** — a literal `list(...)` on the right, and this one is a trap. It is the
+  declaration's **value-restriction clause**, the same grammar as a verb argument's
+  `as num in list(...)` — not the membership operator. Runtime-verified:
+  `var/r = 2 in list(4,5)` compiles clean and leaves `r` holding **2**, the left value, member or
+  not. A local written this way almost always meant the test; tgstation ships exactly one
+  (`var/needs_turf = task_type in list(...)`), and its `needs_turf` holds the task type, not the
+  answer. Write `(x in list(...))` for the test.
+
+In statement position the loosest-binding rule from §1 takes over instead, and the results are
+runtime-verified: `r = c ? y : 9 in L` parses as `(r = c ? y : 9) in L` — assign the branch
+value, then test and discard — so with `c = 0` the var holds 9, which neither reading of the `in`
+as an operator could produce. In an `if` condition there is no assignment in the way, and
+`if(c ? y : 9 in L)` tests `(c ? y : 9) in L`, confirmed by the branch not being taken when the
+selected value is absent from the list.
 
 ---
 

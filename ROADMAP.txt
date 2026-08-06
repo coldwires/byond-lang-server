@@ -14,15 +14,15 @@
 WHERE WE ARE
 --------------------------------------------------------------------------------
   M0-M7 complete - that is TEAM V1, everything an IDE needs to draw its panels.
-  M8 passed over. M9 past its target. M11 started.
+  M8 passed over. M9 past its target. M10 and M11 started.
 
-    dm_core.dll     1.98 MB, ABI 0.11, 19 exports, cdecl on every platform
+    dm_core.dll     2.00 MB, ABI 0.12, 20 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           985 green (952 core, 33 native)
+    tests           1,023 green (975 core, 36 native, 12 lsp)
     BYOND 516.1686  goldens, probes and the 52-check world all hold on the
                     latest build (standalone zip, DM_BYOND_BIN) - only the
                     version tripwire fires, by design
-    abi-smoke       110 checks from C++, on x64 AND x86, run in CI not just built
+    abi-smoke       120 checks from C++, on x64 AND x86, run in CI not just built
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
@@ -35,8 +35,9 @@ WHERE WE ARE
 
   Shipping through the ABI today: syntax highlighting (lexical AND semantic
   colours 12-15), document outline with syntax diagnostics, completion,
-  go-to-definition, hover, workspace symbol search, and bulk object-tree
-  queries. Buffers, injected defines and both position encodings throughout.
+  go-to-definition, hover, signature help, workspace symbol search, and bulk
+  object-tree queries. Buffers, injected defines and both position encodings
+  throughout.
 
   No commit count here on purpose - it is wrong again the moment anything is
   committed, which is how the last one got stale.
@@ -69,22 +70,26 @@ WHAT'S NEXT
      every one a fixture and a regression test. Zero invented is now the
      state to DEFEND - diagdiff on all three projects after any parser or
      preprocessor change.
-     NEXT, in the order they are worth doing:
-       - raise the probe ratchet further: 41/252 after DM0402 (undefined
-         type path) and the empty-switch warning landed. The biggest
-         remaining classes: "undefined var" on BARE identifiers (11),
-         "out of bounds" (5), "duplicate definition" (4), "invalid parent
-         type" (4). Each lands the same way: probe, implement, hold the
-         zero-invented gate on all three projects.
-       - unused_var: written and BACKED OUT (invented 13 on mlaas; one
-         cause still not understood - PLAN 9 has both).
-       - "." on an UNTYPED local, and ":" against the subtype tree.
-       - M9's tree merge - the last phase rebuilding the whole project.
-       - M10, the LSP shell.
-       - the binder's own share is 13 and none of it is the binder:
-         log_message and throw_range resolve nowhere as builtins, so they
-         are declarations lost downstream of those clusters and should
-         evaporate on their own.
+     NEXT - the agreed list, in order (user, 2026-08-05 night; five of
+     its six items have since shipped: signature help on all three
+     surfaces at ABI 0.12 with dmc signature as the arbiter, semantic
+     tokens split per line over the classification service,
+     $/cancelRequest honoured via a reader thread, the dm/objectTree
+     family mirroring abi/schema/, and the `c ? y : 9 in L` miss - which
+     probing dissolved into a better rule: a proc-LOCAL var initializer
+     rejects the relational `in`, with locate/input/`in list(...)`
+     exemptions and DM0301 warning on the last, PLAN 8):
+       1. duplicate-definition check (ProcSymbol.DeclaringCount waits).
+       Cheap adoptees from dm-patch/docs/UPSTREAM-REQUESTS.md along the
+       way: dm_diagnostics (diagnostics without the outline), a bare-`.`
+       completion context, the per-item `inferred` flag.
+       AFTER M10: the reference index (UPSTREAM-REQUESTS 1) - one shape
+       for references/call-hierarchy/highlight/rename with read-vs-write
+       kinds and the enclosing symbol per hit. Subsumes M11 find-refs.
+       CANDY, unscheduled: M8 .dmi, .dmm maps, the rung-1 debugger.
+       Contract (their do-not-change list): UTF-16 default honest,
+       whole-document dm_set_buffer stays, additive ABI bumps minor.
+       Parked M11 checks, for after the list above:
        - unused_var: written and BACKED OUT, it invented 13 on mlaas. Two
          causes, one understood (a var block header is not a variable) and
          one not. PLAN 9 has both.
@@ -129,10 +134,14 @@ MILESTONES                                    (restructured 2026-08-02)
              five levers, each measured before and after. 1 of 7,161 files is
              re-read, re-walked and re-parsed after a keystroke.
              REMAINING: the tree merge, 411 ms of 909.
-  [ ] M10  LSP server + VS Code extension       <- community v1
-             thinner than it looks: the M0 LSP-readiness constraints
-             (position encoding, cancellation, value-shaped results, URI
-             normalisation) were paid up front so this stays an adapter.
+  [~] M10  LSP server + VS Code extension       <- community v1, STARTED
+             Dm.Lsp serves initialize, sync, publishDiagnostics (parse +
+             binder), completion, hover, definition, symbols over stdio -
+             hand-rolled JSON-RPC, no dependencies, which resolved open
+             question 6. editors/vscode has the client: npm install, F5,
+             open your game. Signature help, semantic tokens, cancellation
+             and the dm/* bulk methods all ship. REMAINING: $/progress,
+             incremental sync if a profile asks.
   [~] M11  Semantic diagnostics, find-refs, rename    <- STARTED
              harness first, code second. one check landed early as DM0300,
              because the parser had to model the construct to match dm.exe

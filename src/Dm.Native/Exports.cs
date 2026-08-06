@@ -402,6 +402,56 @@ internal static unsafe class Exports
     }
 
     /// <summary>
+    /// Which call encloses a position, whose proc it is, and which parameter the caret sits in.
+    /// Added in ABI 0.12.
+    /// </summary>
+    /// <remarks>
+    /// An empty JSON object rather than an error when no call encloses the position: a caret
+    /// outside any argument list is the ordinary case, not a failure. The enclosing call comes from
+    /// a scan over the tokens, so the answer stays exact mid-keystroke on the <c>f(a,</c> prefixes
+    /// the parser only sees through recovery.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_signature_at")]
+    public static int SignatureAt(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            SignatureHelpResult? help = SignatureHelpService.SignatureAt(
+                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(SignatureJson.Write(help));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Searches the whole project for symbols by name. Added in ABI 0.8.
     /// </summary>
     /// <remarks>

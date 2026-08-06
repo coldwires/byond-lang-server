@@ -442,6 +442,54 @@ public class StatementParserTests
         Assert.Equal("b", Assert.Single(statement.Siblings).Name);
     }
 
+    // -- the local-initializer `in` rule -------------------------------------
+    // dm.exe 516.1666 rejects a top-level relational `in` after a LOCAL var's initializer with
+    // "unexpected 'in' expression", whatever sits on the operator's left — while accepting the
+    // same text as a statement, a global, or a type-level var, and accepting the parenthesised
+    // whole and the `locate(X) in L` unit here. Fixture: errors/local_in.
+
+    [Theory]
+    [InlineData("\tvar/r = y in L\n")]
+    [InlineData("\tvar/r = (y) in L\n")]
+    [InlineData("\tvar/r = c ? y : 9 in L\n")]
+    [InlineData("\tvar/r = (c ? y : 9) in L\n")]
+    public void A_local_initializer_rejects_a_top_level_in(string statement)
+    {
+        Body("/mob/proc/F()\n" + statement, out IReadOnlyList<Diagnostic> diagnostics);
+
+        Diagnostic reported = Assert.Single(diagnostics);
+        Assert.Contains("unexpected 'in' expression", reported.Message);
+    }
+
+    [Theory]
+    [InlineData("\tvar/r = (y in L)\n")]
+    [InlineData("\tvar/r = locate(/obj) in L\n")]
+    [InlineData("\tvar/r = input(\"t\") in L\n")]
+    [InlineData("\tvar/r = input(\"t\") as null|anything in L\n")]
+    [InlineData("\tr = c ? y : 9 in L\n")]
+    [InlineData("\tfor(var/x = 1 to 3)\n\t\tf()\n")]
+    [InlineData("\tfor(var/obj/O = locate() in L)\n\t\tf()\n")]
+    public void The_legal_neighbours_stay_clean(string statement)
+    {
+        Body("/mob/proc/F()\n" + statement, out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>
+    /// A literal <c>list(...)</c> on the right is the one RHS dm.exe accepts — the value-restriction
+    /// clause, which assigns the LEFT value and tests nothing. We match the compiler and warn.
+    /// </summary>
+    [Fact]
+    public void A_list_rhs_is_the_restriction_clause_and_warns()
+    {
+        Body("/mob/proc/F()\n\tvar/r = 2 in list(4,5)\n", out IReadOnlyList<Diagnostic> diagnostics);
+
+        Diagnostic reported = Assert.Single(diagnostics);
+        Assert.Equal("DM0301", reported.Id);
+        Assert.Equal(DiagnosticSeverity.Warning, reported.Severity);
+    }
+
     // -- recovery -----------------------------------------------------------
 
     [Fact]

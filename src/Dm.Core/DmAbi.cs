@@ -13,6 +13,7 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 12: added dm_signature_at.
     /// 11: added dm_query_json, with the objectTree, subtypesOf and members queries.
     /// 10: dm_document_symbols diagnostics carry "severity"; warnings can now appear there.
     /// 9: completion items carry "documentation".
@@ -25,7 +26,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 11;
+    public const int Minor = 12;
 
     public static int Packed => (Major << 16) | Minor;
 }
