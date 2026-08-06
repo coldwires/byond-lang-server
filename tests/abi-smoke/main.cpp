@@ -554,6 +554,66 @@ static void test_hover(const fs::path &dir)
 }
 
 // ---------------------------------------------------------------------------
+// Signature help. The popup for an open argument list: which proc, and which
+// parameter the caret sits in. Nothing-to-show is an empty object with DM_OK,
+// as with hover.
+// ---------------------------------------------------------------------------
+static void test_signature(const fs::path &dir)
+{
+    const fs::path dme = dir / "signature.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"signature.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "signature.dm");
+        out << "/mob/guy\n\tproc/heal(mob/target, amount as num, silent = 0)\n\t\treturn\n";
+        out << "/proc/f()\n\tvar/mob/guy/g = new\n\tg.heal(g, 5)\n";
+    }
+
+    std::printf("signature help\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "signature: workspace opens");
+
+    // Line 5 (0-based) is `\tg.heal(g, 5)`; character 11 sits in the second argument.
+    char *json = nullptr;
+    check(dm_signature_at(ws, "signature.dm", 5, 11, DM_ENCODING_UTF16, &json) == DM_OK,
+          "signature: call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("/mob/guy/heal") != std::string::npos, "signature: resolved the proc");
+        check(doc.find("amount as num") != std::string::npos,
+              "signature: parameters keep types and as clauses");
+        check(doc.find("silent = 0") != std::string::npos, "signature: defaults render");
+        check(doc.find("\"activeParameter\":1") != std::string::npos,
+              "signature: the comma put the caret in parameter one");
+        dm_free(json);
+    }
+
+    // Outside any argument list there is nothing to show, and that is DM_OK with {}.
+    json = nullptr;
+    check(dm_signature_at(ws, "signature.dm", 4, 0, DM_ENCODING_UTF16, &json) == DM_OK,
+          "signature: a position outside a call still succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("name") == std::string::npos,
+              "signature: nothing to show is an empty object");
+        dm_free(json);
+    }
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_signature_at(ws, "signature.dm", 5, 11, 99, &rejected) == DM_ERR_INVALID_ARG,
+          "signature: unknown encoding rejected");
+    check(rejected == nullptr, "signature: out-param cleared on failure");
+
+    dm_workspace_close(ws);
+}
+
+// ---------------------------------------------------------------------------
 // Workspace symbol search. Ranking is the feature: a short query in a real
 // project matches far too much to show unranked.
 // ---------------------------------------------------------------------------
@@ -723,6 +783,7 @@ int main()
     test_defines(dir);
     test_definition(dir);
     test_hover(dir);
+    test_signature(dir);
     test_workspace_symbols(dir);
 
     test_query_json(dir);

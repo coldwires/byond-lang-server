@@ -5,8 +5,8 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.11  (19 exports, cdecl, six RIDs)
- Last updated: 2026-08-04
+ ABI version at last update: 0.12  (20 exports, cdecl, six RIDs)
+ Last updated: 2026-08-05
 ================================================================================
 
 
@@ -50,6 +50,8 @@ WHAT YOU GET TODAY
       so a two-character query stays usable.
     - Hover via dm_hover_at. The resolved path, the declaration as written,
       and any doc comment above it - both /// runs and /** */ blocks.
+    - Signature help via dm_signature_at. Which proc an open argument list
+      belongs to and which parameter the caret is in, exact mid-keystroke.
     - Semantic highlighting. Colour IDs 12-15 distinguish a type name, a
       proc name, a var name and a macro name. See COLOURS below.
     - Document outline / symbols, with syntax diagnostics, via
@@ -109,11 +111,11 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.11 and
-  passing 110 checks. It covers version negotiation, string ownership, handle
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.12 and
+  passing 120 checks. It covers version negotiation, string ownership, handle
   lifetime including use-after-close, classification in both encodings,
-  document symbols, completion, injected defines, go-to-definition, hover and
-  workspace symbols. The include and link lines in its CMakeLists.txt are meant
+  document symbols, completion, injected defines, go-to-definition, hover,
+  signature help and workspace symbols. The include and link lines in its CMakeLists.txt are meant
   to be copied verbatim. If you are stuck on build setup, build that first and
   confirm it runs - it is 30 seconds and it separates "my build is wrong" from
   "my code is wrong".
@@ -400,6 +402,31 @@ WHAT YOU GET TODAY
 
       Where a symbol has several declarations this renders the NEAREST.
       Hover is a glance; dm_definition_at is what returns the whole chain.
+
+  dm_signature_at(ws, file, line, character, encoding, &json)    NEW in 0.12
+      Which call encloses the position, whose proc it is, and which
+      parameter the caret sits in, as UTF-8 JSON. YOU FREE IT with dm_free.
+      Line and character are ZERO-BASED.
+
+      Ask when the user types `(` or `,`, and re-ask while an argument list
+      stays open. Returns {} - an EMPTY OBJECT - with DM_OK when no call
+      encloses the position, so test for the "name" key rather than the
+      status code.
+
+      Keys: detail (the owning path), name, label (the whole signature as
+      one line), parameters (each rendered as declared - type, `as` clause
+      and default included - and each a substring of label, so you can
+      highlight the active one by search), and activeParameter, zero-based.
+
+      ** IT IS EXACT MID-KEYSTROKE. ** The enclosing call and the parameter
+      count come from a scan over the tokens, not from the AST and not from
+      counting text commas - so `f(a,` answers correctly while the parser
+      only sees it through error recovery, a comma inside a string is not a
+      separator, and a nested call or index never miscounts the parameter.
+      DM has no overloads, so there is exactly one signature per site.
+
+      ** COST ** Same as dm_complete_at: the first call after an edit
+      rebuilds the object tree. The token scan itself is per-file and cheap.
 
   dm_definition_at(ws, file, line, character, encoding, &json)   NEW in 0.6
       Where the symbol at a position is declared, as UTF-8 JSON. YOU FREE IT
@@ -815,9 +842,10 @@ WHAT YOU GET TODAY
     dotnet run --project src/Dm.Cli -- complete <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- definition <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- hover <dme> <file> <line> <col>
+    dotnet run --project src/Dm.Cli -- signature <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- wsymbols <dme> <query>
-        the same answers dm_complete_at, dm_definition_at, dm_hover_at and
-        dm_workspace_symbols give you.
+        the same answers dm_complete_at, dm_definition_at, dm_hover_at,
+        dm_signature_at and dm_workspace_symbols give you.
         ** LINES AND COLUMNS ARE 1-BASED IN THE CLI AND 0-BASED IN THE ABI **
         so add one when reproducing what your editor asked for.
 
@@ -851,7 +879,14 @@ WHAT YOU GET TODAY
          passed over so M9 could land before public users arrive with large
          codebases. still an afternoon's work - say so if you are building
          an icon browser and it moves back up
-    M10  LSP server, for editors that speak it
+    M10  LSP server, for editors that speak it              STARTED
+         Dm.Lsp serves diagnostics, completion, hover, signature help,
+         definition, symbols, semantic tokens, $/cancelRequest and the
+         dm/objectTree family (same shapes as dm_query_json) over stdio
+         today; editors/vscode/README.md is the five-minute recipe for
+         running it against a real game. The
+         same core answers both shells, so nothing here changes for you
+         - docs/capability-matrix.md tracks the parity.
     M11  semantic diagnostics, find-references, rename       STARTED
          the differential harness is in: we run dm.exe over a project and
          diff its diagnostics against ours, so every check added from here

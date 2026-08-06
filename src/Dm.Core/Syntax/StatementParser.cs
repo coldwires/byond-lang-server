@@ -770,7 +770,8 @@ public sealed class StatementParser
         return new BlockStatementSyntax(children, SpanFrom(start));
     }
 
-    private StatementSyntax ParseLocalVarNames(int start, List<string>? inherited = null, bool allowSiblings = true)
+    private StatementSyntax ParseLocalVarNames(
+        int start, List<string>? inherited = null, bool allowSiblings = true, bool inForHeader = false)
     {
         List<string> modifiers = inherited is null ? new() : new(inherited);
         List<string> segments = new();
@@ -847,7 +848,53 @@ public sealed class StatementParser
         if (Current == TokenKind.Assign)
         {
             _position++;
+            int initializerStart = _position;
             initializer = ParseExpression();
+
+            // A LOCAL var's initializer cannot end in a top-level relational `in` — dm.exe rejects
+            // `var/r = y in L` with "unexpected 'in' expression" whatever the left side is, bare,
+            // parenthesized or a ternary, while accepting the same text as a statement, a global,
+            // or a type-level var. Parenthesizing the whole test (`var/r = (y in L)`) and the
+            // `locate(X) in L` unit are both accepted, so only the relational form at the top of
+            // the tree is the error. Compiler-verified against 516.1666; a `for` header owns its
+            // `in` and is exempt.
+            //
+            // The AST alone cannot make the parenthesised distinction — parentheses leave no node —
+            // so the token scan settles it: `(y in L)` holds its `in` at bracket depth 1 and is
+            // fine, `(y) in L` at depth 0 and is the error.
+            //
+            // `input(...) in choices` is exempt alongside locate: it is the reference's documented
+            // choice-restricting idiom, and mlaas writes it as a local initializer eight times in
+            // a project dm.exe compiles clean — the diagdiff gate caught the first version of this
+            // check inventing on every one. The `as` clause peels because the idiom's full form is
+            // `input(...) as null|anything in choices`, which mlaas also writes.
+            if (!inForHeader
+                && initializer is BinaryExpressionSyntax { OperatorToken: TokenKind.KeywordIn } relational
+                && !IsChoiceIdiom(relational.Left)
+                && HasTopLevelIn(initializerStart, _position))
+            {
+                // A literal `list(...)` on the right is the one RHS dm.exe accepts — the
+                // declaration's value-restriction clause, the same grammar as a verb argument's
+                // `as num in list(...)`. It is NOT the membership operator: runtime-verified,
+                // `var/r = 2 in list(4,5)` leaves r holding 2, the left value, member or not. A
+                // local written this way almost always meant the test, so it earns the DM03xx
+                // treatment: match the compiler, then warn. tgstation ships exactly one.
+                if (relational.Right is InvocationExpressionSyntax
+                    {
+                        Target: IdentifierExpressionSyntax { Name: "list" },
+                    })
+                {
+                    _diagnostics.Add(Diagnostic.Warning(
+                        "DM0301",
+                        relational.Right.Span,
+                        "this `in list(...)` is a value restriction, not a membership test — the "
+                        + "var takes the left value; write `(x in list(...))` to test membership"));
+                }
+                else
+                {
+                    Report(relational.Right.Span, "unexpected 'in' expression");
+                }
+            }
         }
 
         // `as` constrains a declaration too, as in `var/t as text`.
@@ -873,14 +920,65 @@ public sealed class StatementParser
             _position++;
             int siblingStart = _position;
 
-            if (ParseLocalVarNames(siblingStart, inherited) is LocalVarStatementSyntax sibling)
+            if (ParseLocalVarNames(siblingStart, inherited, inForHeader: inForHeader)
+                is LocalVarStatementSyntax sibling)
+            {
                 siblings.Add(sibling);
+            }
             else
+            {
                 break;
+            }
         }
 
         return new LocalVarStatementSyntax(
             name, nameSpan, declaredType, modifiers, initializer, siblings, SpanFrom(start));
+    }
+
+    /// <summary>
+    /// True for the two call forms whose <c>in</c> is a grammatical unit rather than the
+    /// relational operator: <c>locate(X) in container</c> and
+    /// <c>input(...) [as types] in choices</c>.
+    /// </summary>
+    private static bool IsChoiceIdiom(ExpressionSyntax left)
+    {
+        while (left is AsExpressionSyntax asClause)
+            left = asClause.Expression;
+
+        return left is InvocationExpressionSyntax
+        {
+            Target: IdentifierExpressionSyntax { Name: "locate" or "input" },
+        };
+    }
+
+    /// <summary>True when a <c>KeywordIn</c> sits at bracket depth zero in the token range.</summary>
+    private bool HasTopLevelIn(int start, int end)
+    {
+        int depth = 0;
+
+        for (int i = start; i < end && i < _tokens.Count; i++)
+        {
+            switch (_tokens[i].Kind)
+            {
+                case TokenKind.OpenParen:
+                case TokenKind.OpenBracket:
+                case TokenKind.QuestionOpenBracket:
+                case TokenKind.OpenBrace:
+                    depth++;
+                    break;
+
+                case TokenKind.CloseParen:
+                case TokenKind.CloseBracket:
+                case TokenKind.CloseBrace:
+                    depth--;
+                    break;
+
+                case TokenKind.KeywordIn when depth == 0:
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1087,7 +1185,7 @@ public sealed class StatementParser
 
             // In a header a comma separates clauses, so `for(var/i = 1, i < n, i++)` must not read
             // `i < n` as a second declaration. The one exception is 516's `for(var/k, v in assoc)`.
-            return ParseLocalVarNames(start, null, IsAssociativeForHeader());
+            return ParseLocalVarNames(start, null, IsAssociativeForHeader(), inForHeader: true);
         }
 
         // The header's `in` belongs to the loop, not to this clause. `for(x in L)` with an already

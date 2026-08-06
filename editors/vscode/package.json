@@ -1,0 +1,95 @@
+{
+  "name": "dm-language-server",
+  "displayName": "DM Language Server",
+  "description": "BYOND DM language support: diagnostics, completion, hover, go to definition, symbols.",
+  "version": "0.1.0",
+  "publisher": "byond-lang-server",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:dm", "workspaceContains:*.dme"],
+  "contributes": {
+    "problemMatchers": [
+      {
+        "name": "dm",
+        "owner": "dm",
+        "source": "dm.exe",
+        "fileLocation": "autoDetect",
+        "pattern": {
+          "regexp": "^(.+?):(\\d+):(error|warning)(?:\\s+\\(([^)]+)\\))?:\\s?(.*)$",
+          "file": 1,
+          "line": 2,
+          "severity": 3,
+          "code": 4,
+          "message": 5
+        }
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "dm",
+        "properties": {
+          "environmentFile": {
+            "type": "string",
+            "description": "The .dme to compile."
+          },
+          "run": {
+            "type": "boolean",
+            "description": "Launch the compiled .dmb in Dream Seeker after a clean compile."
+          }
+        }
+      }
+    ],
+    "languages": [
+      {
+        "id": "dm",
+        "extensions": [".dm", ".dme"],
+        "aliases": ["DM", "DreamMaker"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dm",
+        "scopeName": "source.dm",
+        "path": "./syntaxes/dm.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "DM Language Server",
+      "properties": {
+        "dm.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to dm-lsp.dll (or a self-contained dm-lsp executable). Empty runs `dotnet <repo>/src/Dm.Lsp/bin/Debug/net9.0/dm-lsp.dll` relative to this extension."
+        },
+        "dm.environmentFile": {
+          "type": "string",
+          "default": "",
+          "description": "The .dme to analyse, absolute or relative to the workspace root. Empty picks the first .dme in the root."
+        },
+        "dm.defines": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Injected defines, exactly as dm.exe -D takes them: NAME, NAME=value, FN(x)=body. Pass what your build passes or you are analysing a different program."
+        },
+        "dm.compilerPath": {
+          "type": "string",
+          "default": "C:\\Program Files (x86)\\BYOND\\bin\\dm.exe",
+          "description": "dm.exe, for the compile task."
+        },
+        "dm.seekerPath": {
+          "type": "string",
+          "default": "C:\\Program Files (x86)\\BYOND\\bin\\dreamseeker.exe",
+          "description": "dreamseeker.exe, for the compile-and-run task."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

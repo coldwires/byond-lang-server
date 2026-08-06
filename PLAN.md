@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M7 complete · M8 passed over · M9 past its target · M11 started · ABI 0.11**
-> · 985 tests · Last updated: 2026-08-05
+> Status: **M0–M7 complete · M8 passed over · M9 past its target · M10 started · M11 at zero
+> invented · ABI 0.12** · 1,023 tests · Last updated: 2026-08-05
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -438,14 +438,15 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (1.98 MB, 19 exports) via NativeAOT, for six
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.00 MB, 20 exports) via NativeAOT, for six
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.11 and passing 110 checks. Reference
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.12 and passing 120 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 638 today (605 core, 33 native). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,023 today (975 core, 36 native,
+  12 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -1049,15 +1050,75 @@ open as buffers (safe, and useless here since the point is the 7,160 files it ha
 Decide with the IDE devs before building it, since whichever way it goes lands in `INTEGRATION.txt`
 as a rule they have to follow.
 
-### M10 — LSP shell → community v1
+### M10 — LSP shell → community v1 *(started 2026-08-05)*
 
-- `Dm.Lsp` as a .NET console app referencing `Dm.Core`. Stdio primary, TCP as a small option.
-- Spec 3.17. Honor `positionEncoding` negotiation. Implement `$/progress` and `$/cancelRequest`.
-- Standard methods over existing services: completion, hover, definition, document/workspace
-  symbols, publishDiagnostics, semanticTokens (backed by the M2/M6 classification service).
-- Custom methods for what LSP cannot express: `dm/objectTree`, `dm/subtypesOf`, `dm/iconStates`,
-  mirroring the bulk query schemas so both shells stay aligned.
-- TextMate grammar + VS Code extension in `editors/vscode/`.
+- ✅ `Dm.Lsp` as a .NET console app referencing `Dm.Core`, stdio, spec 3.17 subset. **Hand-rolled
+  JSON-RPC over `System.Text.Json`, which resolves open question 6**: the method set is a dozen
+  entries and the framing two header lines, so a reflection-based protocol library solves a bigger
+  problem than this shell has — and staying dependency-free keeps the AOT option open if startup
+  latency ever matters. One thread reads, dispatches and responds in order, which is the
+  workspace's documented concurrency contract.
+- ✅ Serving today: initialize (with `positionEncoding: utf-16` — the M0 constraint paying off,
+  every service takes the encoding as a parameter), full-text document sync driving
+  `SetBuffer`/`CloseBuffer`, publishDiagnostics carrying the parse **and binder** diagnostics —
+  the same set `dmc diagdiff` holds at zero invented — completion, hover, definition (every
+  declaration, nearest first), documentSymbol and workspace/symbol. The `.dme` comes from
+  `initializationOptions.environmentFile` or the first one in the workspace root, and
+  `initializationOptions.defines` reaches `SetDefines`.
+- ✅ VS Code extension in `editors/vscode/`: a thin `vscode-languageclient` shell that starts the
+  server and forwards `dm.environmentFile`/`dm.defines`, plus a deliberately small TextMate
+  grammar to read by until semantic tokens land.
+- ✅ Verified two ways: five in-process protocol tests (frames in, frames out), and a scripted
+  stdio session against mlaas — initialize, didOpen of a real file, **publishDiagnostics: 0** on
+  the project that compiles clean.
+- **Signature help** — planned nowhere before 2026-08-05: hover and completion already render
+  `heal(mob/target, amount as num, silent = 0)`, but no call answered "which proc, which
+  parameter am I on" mid-invocation. Per the sync rule it lands as all three surfaces.
+  - ✅ `SignatureHelpService` in `Dm.Core`, and `textDocument/signatureHelp` here, triggering on
+    `(` and `,`. The enclosing call and active parameter come from the server, **not from a
+    client counting text commas** — the whole argument in `dm-patch/docs/UPSTREAM-REQUESTS.md`
+    §2: a comma in a string is not a separator and a nested call resets the depth. The scan is a
+    bracket-frame walk over tokens, so it stays exact on the `f(a,` prefixes the parser only
+    sees through recovery. DM has no overloads, so there is exactly one signature per site.
+  - ✅ `dm_signature_at` on the ABI at 0.12, landed as one pass: `Exports.cs`, `SignatureJson`,
+    `dm_core.h`, ten abi-smoke checks, `INTEGRATION.txt` — plus `dmc signature`, so the CLI can
+    still arbitrate every position-shaped call an IDE makes. Proven from C++: 120 checks
+    reporting 0.12.
+- ⬜ **The dm-patch upstream requests** (`~/Desktop/dm-patch/docs/UPSTREAM-REQUESTS.md`,
+  2026-08-05) are adopted as follows, cheapest first:
+  - `dm_diagnostics` — diagnostics without buying the outline, and for files not open anywhere.
+    Their §3; also exactly what `publishDiagnostics` wants.
+  - A distinct completion context for a bare leading `.` (their §4), so no client has to guess
+    that the return-value variable's 332-item identifier list was not what the user wanted.
+  - The per-item `inferred` flag on completion (their §5), replacing every client's guess about
+    which items ride on inference `dm.exe` does not do.
+  - **The reference index (their §1) is the next big core work after M10** — one shape serving
+    references, call hierarchy, document highlight and rename, with `kind: call|read|write|
+    override` and the enclosing symbol carried per hit. It subsumes M11's find-references bullet.
+  - Their do-not-change list is contract: UTF-16 default stays honest, whole-document
+    `dm_set_buffer` stays, additive ABI changes bump the minor.
+- ✅ semanticTokens backed by the M2/M6 classification service, over the small TextMate base.
+  One wrinkle carried the design: a classifier span may cross lines — a `{" multiline "}` string
+  or a block comment is one span — while VS Code renders only the first line of a multi-line
+  semantic token, so the encoder splits every span at line boundaries using the line's content
+  span. A bare identifier deliberately maps to **no** token: the classifier calls it an
+  identifier exactly when it does not know more, and colouring it would claim knowledge M6
+  under-claims.
+- ✅ `$/cancelRequest` honoured. The piece that makes it possible at all is a reader thread:
+  delivered in order behind the queue, a cancel always arrives after the request it names has
+  been answered. The reader intercepts it at intake — touching only a lock-guarded ledger, never
+  the workspace — so a request still queued answers `-32800` without running, and one mid-flight
+  aborts at the service's next token check (the M0 cancellation constraint, paying off). Safe to
+  abort mid-writer because `Rpc.Write` buffers the whole body before emitting a byte.
+- ✅ Custom methods for what LSP cannot express: `dm/objectTree`, `dm/subtypesOf`, `dm/members`,
+  answered by the same `TreeQueryService` as `dm_query_json` with responses mirroring
+  `abi/schema/` field for field. A missing path is `-32803`, the LSP spelling of
+  `DM_ERR_NOT_FOUND`; `dm/iconStates` waits on M8.
+- ⬜ `$/progress` for the first build.
+- ⬜ Incremental document sync, when a profile asks for it — full sync costs one string per
+  keystroke and M9 priced the rebuild at ~10 ms on a real game.
+- `docs/capability-matrix.md` now exists, per §3's sync rule — there is finally a second shell to
+  drift from the first.
 
 ### M11 — Semantic analysis
 
@@ -1478,10 +1539,11 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.11, 19 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.12, 20 exports: version, last error, free, workspace
 open/close/root, injected defines, buffer set/close, classify plus its three accessors, document
-symbols, completion, definition, hover, workspace symbols and bulk queries. Everything listed below
-is implemented, and `abi/schema/` freezes the bulk request and response shapes.
+symbols, completion, definition, hover, signature help, workspace symbols and bulk queries.
+Everything listed below is implemented, and `abi/schema/` freezes the bulk request and response
+shapes.
 
 **Hot path — handles and accessors:**
 ```c
@@ -1506,6 +1568,8 @@ dm_status   dm_definition_at(dm_workspace, const char* file, int32_t line, int32
                              dm_position_encoding, char** out_json);           /* M7, 0.6 */
 dm_status   dm_hover_at(dm_workspace, const char* file, int32_t line, int32_t character,
                         dm_position_encoding, char** out_json);                /* M7, 0.7 */
+dm_status   dm_signature_at(dm_workspace, const char* file, int32_t line, int32_t character,
+                            dm_position_encoding, char** out_json);           /* M10, 0.12 */
 dm_status   dm_workspace_symbols(dm_workspace, const char* query, int32_t limit,
                                  dm_position_encoding, char** out_json);       /* M7, 0.8 */
 ```
@@ -1818,7 +1882,8 @@ that the two candidate behaviours produce different compiler output.
 | **A `switch`'s arm list may be a brace block.** | `switch(pH) { if(7 to 10) { c = "high" } if(2 to 7) { c = "mid" } else { c = "other" } }` compiles and dispatches to the right arm at runtime — the range arms and the `else` all verified by value on 516.1666, with the braces on the header line or the next one and indented arms inside them working identically. Another face of "braces and indentation nest freely", and again what a `\`-continued macro body has to write: tgstation's `CONVERT_PH_TO_COLOR` is exactly this shape. Worth 90 invented diagnostics — the entire "expected ')'" cluster and half the "expected an expression" one. |
 | **Thirteen statement keywords are legal type-path segments.** | `throw`, `set`, `step`, `if`, `else`, `for`, `while`, `switch`, `catch`, `try`, `do`, `spawn`, `null` — probed one per compilation unit, declaring `/datum/<kw>` and then reading a member through `var/datum/<kw>/x`, since the declaration compiling alone proves nothing. Rejected: `in`/`to` (*"missing expression"*), `as` (breaks at the use), `return`/`break`/`continue`/`del`/`new`/`goto` (*"instruction not allowed here"*), and `var`/`list`/`tmp`/`global`/`static`/`const`/`proc`/`verb`, which read as modifiers or group markers and declare no type. A keyword is still not a variable **name**: `var/throw = 1` is *"missing left-hand argument to ="*. Identical on 516.1686. tgstation declares `/datum/manipulator_task/cargo/dropoff_base/throw`. |
 | **Every var-modifier word is a legal variable name.** | `var/final = ""`, `var/const = 1`, `var/tmp = 1`, `var/global = 1`, `var/static = 1` all compile **with uses**, at proc level and type level alike — the word is a modifier only when a separator follows it (`var/final/x` carries 516's `final`), and a block header only when the line ends there (`var/const` + indented names, the stddef.dm shape). /tg/station writes `var/final = ""` five times. |
-| **`locate(X) in container` is one grammatical unit, not the relational `in`.** | Inside a ternary branch, `c ? locate(X) in L : y` compiles and runs — the found object comes back from the true branch — while `c ? 9 in L : y` is *"expected ':'"* and `c ? y : 9 in L` is *"unexpected 'in' expression"*. So the idiom is not the loosest-binding operator wearing a hat: it binds to the locate. That also decides statement level, where `x = locate(y) in L` must assign the **found object**, not evaluate the assignment first and test afterwards — a misparse with no diagnostic either way. tgstation writes the ternary form three times. |
+| **`locate(X) in container` is one grammatical unit, not the relational `in`.** | Inside a ternary's true branch, `c ? locate(X) in L : y` compiles and runs — the found object comes back — while `c ? 9 in L : y` is *"expected ':'"* in every position. So the idiom is not the loosest-binding operator wearing a hat: it binds to the locate. That also decides statement level, where `x = locate(y) in L` must assign the **found object**, not evaluate the assignment first and test afterwards — a misparse with no diagnostic either way. tgstation writes the ternary form three times. An earlier version of this row also called the **false** branch (`c ? y : 9 in L`) an error; that was the initializer rule below wearing a ternary costume — as a statement it compiles, parsing per §4c as `(x = c ? y : 9) in L`, runtime-verified: the var takes the branch value and the test is discarded. |
+| **A proc-local var's initializer rejects a top-level relational `in`.** | `var/r = y in L` is *"unexpected 'in' expression"* whatever the left side — bare, parenthesised, or a whole ternary — and whatever the right, `g()`, `typesof()`, `(L)` and `world` included. `var/r = (y in L)` parenthesised whole compiles, as do the same text as a statement, a global's initializer, and a type-level var's. Three exemptions, each its own grammar: the locate unit, `input(...) [as null\|anything] in choices` (mlaas ships eight), and a literal `list(...)` RHS — which is the declaration's **value-restriction clause**, not the operator: `var/r = 2 in list(4,5)` leaves `r` holding **2**, runtime-verified, so we match the compiler and warn (`DM0301`); tgstation ships one and its var holds the wrong thing. Fixture `errors/local_in` plus six runtime checks in `ok/parsing.dm`. |
 | **An `#include` is legal in expression position, splicing the file into the surrounding brackets.** | tgstation's `ApiVersion()` is `return new /datum/tgs_version(` + `#include "__interop_version.dm"` + `)`, where the included file is one string literal. Compiles clean and the value lands in the argument list — runtime-verified through the constructed object. The directive still ends at its own line even mid-expression. |
 | **`TRUE` and `FALSE` are built-in macros since 515.** | With no define anywhere: `#if TRUE` is taken, `#if FALSE` is silently not taken (no error — contrast §8's rule that `#if` rejects undefined names), `#ifdef TRUE` is defined, and the runtime values are 1 and 0. tgstation defines neither and writes `#define MERGERS_DEBUG FALSE` + `#if MERGERS_DEBUG`, which is what exposed the missing seed. |
 
@@ -2181,7 +2246,7 @@ it.
 | 3 | Where builtins come from | M5 | **Resolved** — `stddef.dm` + `info.html`. |
 | 4 | MSVC tooling for NativeAOT | M0 | **Resolved** — present and verified. |
 | 5 | Third IDE's language | Nothing; may justify a prebuilt binding package | Open |
-| 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | Deferred |
+| 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | **Resolved** — neither: hand-rolled JSON-RPC over `System.Text.Json`, dependency-free, so AOT stays open and no library is carried. See M10. |
 | 7 | Can a brace block contain indented sub-blocks? | M4 | **Resolved** — yes, and the two nest freely. `-o` prints an identical tree for the braced and indented forms. See §8. |
 | 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | **Resolved** — mlaas is the correctness harness and is exact against `dm.exe -o`. See §9. |
 | 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
@@ -2437,3 +2502,29 @@ it.
   under `-safe` — `-trusted` was never needed, and it hangs headless runs on a GUI approval prompt —
   and the appendix as printed in the notes did not compile (`\:` in a string is an undefined text
   macro), so the run instructions and the file are both corrected.
+- **2026-08-05** — `dm_signature_at` shipped at ABI 0.12, closing the capability matrix's loud gap:
+  `Exports.cs` + `SignatureJson` + `dm_core.h` + ten abi-smoke checks + `INTEGRATION.txt` in one
+  pass, with `dmc signature` added so the CLI stays the arbiter for every position-shaped call.
+  Proven from C++ — 120 checks reporting 0.12 — and covered managed-side by `SignatureExportTests`,
+  which also recorded a boundary fact worth keeping: a pushed buffer alone is enough for the
+  outline but not for tree-backed answers, because the include walk reaches files on disk and the
+  buffer then overrides their content.
+- **2026-08-05** — Three more M10 items in one pass, closing the pinned protocol list: semantic
+  tokens over the classification service (spans split at line boundaries, since VS Code renders
+  only the first line of a multi-line token; a bare identifier maps to no token on purpose),
+  `$/cancelRequest` honoured via a reader thread that intercepts cancels ahead of the queue
+  (in-order delivery could never cancel anything — a queued request answers `-32800` without
+  running, a mid-flight one aborts at its next token check), and the `dm/objectTree`,
+  `dm/subtypesOf` and `dm/members` custom methods answering from the same `TreeQueryService` as
+  `dm_query_json`, shape for shape. 1,008 tests.
+- **2026-08-05** — The recorded `c ? y : 9 in L` miss dissolved under probing: the ternary was
+  never the cause, and the rejection dm.exe reports is **a proc-local var initializer refusing a
+  top-level relational `in`** (§8) — the statement form compiles and, runtime-verified, means
+  `(x = ternary) in L` per §4c. Fifteen probes pinned the rule, the three exemptions, and the trap
+  inside one of them: a literal `list(...)` RHS is the value-restriction clause, so
+  `var/r = 2 in list(4,5)` leaves `r` holding 2 and tgstation's one such site holds the wrong
+  value — `DM0301` warns there, the DM0300 pattern (match the compiler, then warn). The
+  zero-invented gate earned its keep twice more before the check was right: mlaas's eight
+  `input(...) in choices` initializers, then the `as null|anything` form of the same idiom.
+  Fixture `errors/local_in`, six runtime checks in `ok/parsing.dm` (64 total), zero invented held
+  on all three projects.

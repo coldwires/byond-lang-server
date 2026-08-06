@@ -50,3 +50,5 @@ tests/fixtures/**/*.rsc
 tests/fixtures/**/*.int
 tests/fixtures/**/*.lk
 tests/fixtures/**/*.log
+
+editors/vscode/node_modules/

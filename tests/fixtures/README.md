@@ -105,8 +105,8 @@ sanity checks - are filtered by message text. 109 probes that compile clean and
 It runs only with `-Probes`, since 252 compiles plus 252 diagdiffs takes a few
 minutes.
 
-**It is a ratchet, not a gate.** We agree on **38 of 252** today; asserting
-"must agree on all" would fail 214 times and teach nothing. `BASELINE.txt`
+**It is a ratchet, not a gate.** We agree on **41 of 252** today; asserting
+"must agree on all" would fail 211 times and teach nothing. `BASELINE.txt`
 records the number and the names, and the run fails only if agreement *drops*.
 Raise it deliberately with `-Probes -UpdateBaseline`, after reading why it moved.
 
@@ -117,7 +117,7 @@ extra diagnostics on a must-fail file are recovery working, not spurious output.
 The zero-invented rule belongs to code that **compiles clean**, which is what
 sections 1-3 cover.
 
-That 38/252 is also the first honest denominator for M11: 214 known compiler
+That 41/252 is also the first honest denominator for M11: 211 known compiler
 messages we say nothing about.
 
 ## Adding to it
@@ -143,7 +143,7 @@ and a finding that does not land in it will be re-learned.
   ...
   ok    ok/ok compiles clean
 [2] ok/ runs, every check passing
-  ok    ok/ runtime, 58 checks
+  ok    ok/ runtime, 64 checks
 [3] diagdiff: zero invented
   ok    diagdiff errors/semantic.dme
   ...

@@ -367,6 +367,46 @@ dm_status dm_hover_at(dm_workspace workspace, const char *file,
                       int32_t line, int32_t character,
                       dm_position_encoding encoding, char **out_json);
 
+/* -- signature help ------------------------------------------------------- */
+
+/*
+ * Which call encloses a position, whose proc it is, and which parameter the
+ * caret sits in. Added in ABI 0.12.
+ *
+ * You own the buffer. Release it with dm_free. Line and character are ZERO-BASED.
+ *
+ * Returns an EMPTY JSON OBJECT - {} - with DM_OK when no call encloses the
+ * position, which is where a caret spends most of its time. Check for the
+ * "name" key rather than the status. Ask when the user types `(` or `,`, and
+ * re-ask while an argument list stays open.
+ *
+ * The enclosing call and the active parameter come from a scan over the
+ * TOKENS, so the answer stays exact mid-keystroke - `f(a,` is a prefix the
+ * parser only sees through error recovery - and a comma inside a string or a
+ * nested call never miscounts the parameter. DM has no overloads, so there is
+ * exactly one signature per site rather than a set to pick from.
+ *
+ * Shape:
+ *
+ *   {
+ *     "detail": "/mob/guy/heal",         the owning path
+ *     "name": "heal",
+ *     "label": "heal(mob/target, amount as num, silent = 0)",
+ *     "parameters": ["mob/target", "amount as num", "silent = 0"],
+ *     "activeParameter": 1               zero-based
+ *   }
+ *
+ * Each parameter is rendered as declared - type, `as` clause and default
+ * included - and is a substring of "label", so the active one can be
+ * highlighted by search instead of by re-parsing the label.
+ *
+ * COST: the first call after an edit rebuilds the object tree, same as
+ * dm_complete_at.
+ */
+dm_status dm_signature_at(dm_workspace workspace, const char *file,
+                          int32_t line, int32_t character,
+                          dm_position_encoding encoding, char **out_json);
+
 /* -- go to definition ---------------------------------------------------- */
 
 /*

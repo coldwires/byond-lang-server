@@ -24,6 +24,7 @@ public static class DeliberateDivergences
     {
         ["DM0102"] = "duplicate include - the compiler ignores the repeat silently, we surface it",
         ["DM0300"] = "proc block inside a var block - compiles clean and declares nothing",
+        ["DM0301"] = "`= x in list(...)` on a local - a value restriction that reads as a membership test",
     };
 
     /// <summary>Whether this id is one we emit knowing the compiler will not.</summary>

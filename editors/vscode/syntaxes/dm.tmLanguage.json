@@ -1,0 +1,56 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "DM",
+  "scopeName": "source.dm",
+  "comment": "Deliberately small: enough colour to read code before the semantic tokens arrive. The lexer-grade rules (nested block comments, {\"...\"} strings, @/raw/ strings) cannot be expressed here and are the classification service's job.",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#preprocessor" },
+    { "include": "#keywords" },
+    { "include": "#numbers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.dm", "match": "//.*$" },
+        { "name": "comment.block.dm", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.dm",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.dm", "match": "\\\\." }]
+        },
+        { "name": "string.quoted.single.dm", "begin": "'", "end": "'" }
+      ]
+    },
+    "preprocessor": {
+      "name": "meta.preprocessor.dm",
+      "match": "^\\s*#\\s*\\w+.*$"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.dm",
+          "match": "\\b(if|else|for|while|do|switch|return|break|continue|goto|spawn|del|new|try|catch|throw|in|to|as|set|step)\\b"
+        },
+        {
+          "name": "storage.type.dm",
+          "match": "\\b(var|proc|verb|const|tmp|global|static|final|list|alist|datum|atom|mob|obj|turf|area|client|world)\\b"
+        },
+        {
+          "name": "constant.language.dm",
+          "match": "\\b(null|src|usr|args|TRUE|FALSE)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.dm",
+      "match": "\\b(0x[0-9A-Fa-f]+|\\d+(\\.\\d+)?([eE][+-]?\\d+)?)\\b"
+    }
+  }
+}

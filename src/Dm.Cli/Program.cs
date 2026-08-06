@@ -45,6 +45,7 @@ internal static class Program
                 "complete" => Complete(args),
                 "definition" => Definition(args),
                 "hover" => Hover(args),
+                "signature" => Signature(args),
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
                 "bench" => Bench.Run(args),
@@ -93,6 +94,8 @@ internal static class Program
         Console.Error.WriteLine("  complete <dme> <file> <line> <col>   what can be typed there");
         Console.Error.WriteLine("      lines and columns are 1-based here, unlike the ABI");
         Console.Error.WriteLine("  hover <dme> <file> <line> <col>      the declaration, as a tooltip");
+        Console.Error.WriteLine("  signature <dme> <file> <line> <col>  the call enclosing the position,");
+        Console.Error.WriteLine("                           its parameters, and which one the position is in");
         Console.Error.WriteLine("  wsymbols <dme> <query>               search the project by name");
         Console.Error.WriteLine("      --limit <n>          how many hits to show (default 200)");
         Console.Error.WriteLine("  definition <dme> <file> <line> <col> where the symbol is declared");
@@ -729,6 +732,45 @@ internal static class Program
             Console.Out.WriteLine(hover.Documentation);
         }
 
+        return 0;
+    }
+
+    private static int Signature(string[] args)
+    {
+        if (args.Length < 5)
+        {
+            Console.Error.WriteLine("error: signature needs <dme> <file> <line> <col>");
+            return 1;
+        }
+
+        if (!int.TryParse(args[3], out int line) || !int.TryParse(args[4], out int column))
+        {
+            Console.Error.WriteLine("error: line and column must be numbers");
+            return 1;
+        }
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        Document document = workspace.GetDocument(args[2]);
+
+        SignatureHelpResult? help = SignatureHelpService.SignatureAt(
+            workspace.GetObjectTree(), document, line - 1, column - 1);
+
+        if (help is null)
+        {
+            Console.Out.WriteLine("no enclosing call here");
+            return 0;
+        }
+
+        Console.Out.WriteLine(help.Detail);
+        Console.Out.WriteLine(help.Label);
+
+        // Which parameter the position sits in, named rather than only counted, since the count
+        // is exactly what a caller of this command is trying to confirm.
+        string active = help.ActiveParameter < help.Parameters.Count
+            ? help.Parameters[help.ActiveParameter]
+            : "past the last parameter";
+
+        Console.Out.WriteLine($"active parameter: {help.ActiveParameter} ({active})");
         return 0;
     }
 
