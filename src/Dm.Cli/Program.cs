@@ -46,6 +46,7 @@ internal static class Program
                 "definition" => Definition(args),
                 "hover" => Hover(args),
                 "signature" => Signature(args),
+                "references" => References(args),
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
                 "bench" => Bench.Run(args),
@@ -96,6 +97,10 @@ internal static class Program
         Console.Error.WriteLine("  hover <dme> <file> <line> <col>      the declaration, as a tooltip");
         Console.Error.WriteLine("  signature <dme> <file> <line> <col>  the call enclosing the position,");
         Console.Error.WriteLine("                           its parameters, and which one the position is in");
+        Console.Error.WriteLine("  references <dme> <file> <line> <col> every use of the symbol there");
+        Console.Error.WriteLine("      --path <target>      query by canonical path instead: /mob/hp,");
+        Console.Error.WriteLine("                           /mob/heal(), /heal() for a global, a type path");
+        Console.Error.WriteLine("      --limit <n>          cap (default 1000)");
         Console.Error.WriteLine("  wsymbols <dme> <query>               search the project by name");
         Console.Error.WriteLine("      --limit <n>          how many hits to show (default 200)");
         Console.Error.WriteLine("  definition <dme> <file> <line> <col> where the symbol is declared");
@@ -731,6 +736,68 @@ internal static class Program
             Console.Out.WriteLine();
             Console.Out.WriteLine(hover.Documentation);
         }
+
+        return 0;
+    }
+
+    private static int References(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: references needs <dme> <file> <line> <col>, or <dme> --path <target>");
+            return 1;
+        }
+
+        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+
+        int limit = ReferenceService.DefaultLimit;
+        if (OptionValue(args, "--limit") is { } given && int.TryParse(given, out int parsed))
+            limit = parsed;
+
+        ReferenceListing? listing;
+
+        if (OptionValue(args, "--path") is { } target)
+        {
+            listing = ReferenceService.Find(
+                workspace.GetObjectTree(), workspace.GetProjectParses(), target, limit);
+        }
+        else
+        {
+            if (args.Length < 5
+                || !int.TryParse(args[3], out int line) || !int.TryParse(args[4], out int column))
+            {
+                Console.Error.WriteLine("error: references needs <dme> <file> <line> <col>, or <dme> --path <target>");
+                return 1;
+            }
+
+            listing = ReferenceService.At(
+                workspace.GetObjectTree(),
+                workspace.GetProjectParses(),
+                workspace.GetDocument(args[2]),
+                line - 1,
+                column - 1,
+                limit: limit);
+        }
+
+        if (listing is null)
+        {
+            Console.Out.WriteLine("nothing at that position is an index symbol");
+            return 0;
+        }
+
+        foreach (Reference reference in listing.References)
+        {
+            SourceText text = workspace.GetDocument(reference.File).Text;
+            LinePosition at = text.GetLinePosition(reference.Span.Start);
+
+            Console.Out.WriteLine(
+                $"{Relative(workspace.RootDirectory, reference.File)}({at.Line + 1},{at.Character + 1}): "
+                + $"{reference.Kind.ToString().ToLowerInvariant(),-8} {reference.Target}   inside {reference.Inside}");
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine(
+            $"{listing.References.Count} reference(s){(listing.Truncated ? " (truncated)" : "")}");
 
         return 0;
     }

@@ -206,10 +206,10 @@ public class FixtureTests
             TypeTreeBuilder.AddFile(tree, file, parse);
         }
 
-        foreach ((string _, ParseResult parse) in files)
+        foreach ((string name, ParseResult parse) in files)
         {
             found.AddRange(parse.Diagnostics);
-            found.AddRange(Binder.Bind(tree, parse.Root));
+            found.AddRange(Binder.Bind(tree, parse.Root, name));
         }
 
         return found;

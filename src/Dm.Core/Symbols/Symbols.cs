@@ -92,6 +92,15 @@ public sealed class ProcSymbol
     /// </summary>
     public int DeclaringCount { get; private set; }
 
+    /// <summary>
+    /// The sites that used the <c>proc/</c> or <c>verb/</c> segment, in include order — the ones
+    /// <see cref="DeclaringCount"/> counts. The duplicate-definition check needs which sites
+    /// declared, not only how many.
+    /// </summary>
+    public IReadOnlyList<DeclarationSite> DeclaringSites => _declaringSites;
+
+    private readonly List<DeclarationSite> _declaringSites = new();
+
     /// <summary>Sets the signature for a builtin, which has no declaration to read one from.</summary>
     internal void SetBuiltinParameters(IReadOnlyList<string> parameters) => Parameters = parameters;
 
@@ -100,7 +109,10 @@ public sealed class ProcSymbol
         _sites.Add(site);
 
         if (declaresNew)
+        {
             DeclaringCount++;
+            _declaringSites.Add(site);
+        }
 
         if (Parameters.Count == 0 && parameters.Count > 0)
             Parameters = parameters;

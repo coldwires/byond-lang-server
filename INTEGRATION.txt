@@ -5,8 +5,8 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.12  (20 exports, cdecl, six RIDs)
- Last updated: 2026-08-05
+ ABI version at last update: 0.14  (22 exports, cdecl, six RIDs)
+ Last updated: 2026-08-06
 ================================================================================
 
 
@@ -58,17 +58,30 @@ WHAT YOU GET TODAY
       dm_document_symbols. Types, vars, procs and verbs, nested, each with a
       range for the whole declaration and a second range for the name alone.
     - Object tree browsing via dm_query_json. A node and its children to a
-      depth, every subtype of a path, or one type's members with inheritance
-      resolved. This is what a tree panel runs on. Request and response
-      shapes are frozen in abi/schema/.
+      depth, every subtype of a path, one type's members with inheritance
+      resolved, or the whole ancestor chain in one call (ancestorsOf). This
+      is what a tree panel runs on. Request and response shapes are frozen
+      in abi/schema/.
+    - THE REFERENCE INDEX, via dm_query_json's "references" query: every USE
+      of a var, proc or type across the project, each hit carrying kind
+      (read | write | call | override) and the enclosing symbol - group by
+      it and you have a call hierarchy. Found by the same resolution the
+      diagnostics use, so the index and the squiggles cannot disagree.
+    - dm_invalidate, for files changing OUTSIDE the editor - a git checkout,
+      a branch switch. Drops derived answers; the rebuild revalidates
+      per-file, so only what actually changed is reprocessed.
+
+    - Semantic error squiggles via dm_diagnostics: undefined vars and procs
+      through a typed receiver, duplicate definitions, and the DM03xx
+      compiles-clean-but-lies warnings - the same set the LSP publishes and
+      dmc diagdiff holds at ZERO INVENTED against dm.exe on 1.5M lines.
 
   NOT YET - do not design around these being absent, they are coming
     - .dmi icon states                (M8)
-    - Semantic error squiggles        (M11)
 
-  Syntax errors already arrive with the outline, in the same
-  dm_document_symbols call. What is missing is the semantic layer - unknown
-  types, bad member access, duplicate definitions. That is M11.
+  Syntax errors arrive two ways: beside the outline in dm_document_symbols,
+  and - together with the semantic set - from dm_diagnostics, which is the
+  call to use when you want squiggles without paying for the outline.
 
 
 --------------------------------------------------------------------------------
@@ -111,11 +124,12 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.12 and
-  passing 120 checks. It covers version negotiation, string ownership, handle
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.14 and
+  passing 140 checks. It covers version negotiation, string ownership, handle
   lifetime including use-after-close, classification in both encodings,
   document symbols, completion, injected defines, go-to-definition, hover,
-  signature help and workspace symbols. The include and link lines in its CMakeLists.txt are meant
+  signature help, diagnostics, the reference index, invalidation and
+  workspace symbols. The include and link lines in its CMakeLists.txt are meant
   to be copied verbatim. If you are stuck on build setup, build that first and
   confirm it runs - it is 30 seconds and it separates "my build is wrong" from
   "my code is wrong".
@@ -245,6 +259,16 @@ WHAT YOU GET TODAY
   dm_close_buffer(ws, file)
       User closed the tab. We go back to reading that path from disk.
 
+  dm_invalidate(ws)                                             NEW in 0.14
+      Files changed OUTSIDE the editor: a git checkout, a branch switch,
+      another program saving. Drops every derived answer so the next
+      question rebuilds against current disk. Cheap by construction - the
+      per-file caches revalidate by write time and length during the
+      rebuild, so only files that actually changed are reprocessed. Pushed
+      buffers stay authoritative. If your host can watch the filesystem,
+      call this when the watcher fires; if not, calling it on window focus
+      is the pragmatic version.
+
   dm_classify_range(ws, file, start_line, end_line, encoding, &out)
       Line numbers are ZERO-BASED and INCLUSIVE. Out of range values clamp,
       they do not error.
@@ -272,7 +296,9 @@ WHAT YOU GET TODAY
       unknown kind as a neutral icon so a library update cannot break you.
 
       Diagnostics in the same document are the syntax errors for that file -
-      enough for squiggles. Semantic errors arrive at M11.
+      enough for squiggles. The SEMANTIC set arrives through dm_diagnostics,
+      below, which also repeats the syntax errors so one call carries
+      everything a squiggle pass needs.
 
       ** ONE WARNING ALREADY ARRIVES HERE: DM0300 **
       A proc block indented one level too far, into a var block, declares
@@ -286,6 +312,26 @@ WHAT YOU GET TODAY
       class - code that compiles and does not mean what it looks like -
       and more of them arrive at M11. Render them differently from the
       syntax errors if you can; this one is usually a real bug in the game.
+
+  dm_diagnostics(ws, file, encoding, &json)                     NEW in 0.13
+      Every diagnostic for one file - syntax AND semantic - as UTF-8 JSON.
+      YOU FREE IT with dm_free.
+
+      This is squiggles without the outline, and the only call carrying the
+      semantic set: undefined vars and procs reached through a typed
+      receiver, duplicate definitions, and the DM03xx warnings for code that
+      compiles clean and does not mean what it looks like. It is the same
+      set dmc diagdiff measures against dm.exe and holds at zero invented,
+      so a diagnostic from this call on a project that builds clean is a
+      bug worth reporting.
+
+      Elements are byte-identical to dm_document_symbols' diagnostics:
+      id, severity (a WORD - "error", "warning"), message, and a zero-based
+      range in your encoding. An empty array with DM_OK is the ordinary
+      answer on a clean file.
+
+      ** COST ** The semantic half needs the object tree, so the first call
+      after an edit rebuilds it - same as dm_complete_at. Debounce it.
 
   dm_complete_at(ws, file, line, character, encoding, &json)
       What can be typed at a position, as UTF-8 JSON. YOU FREE IT with
@@ -477,6 +523,30 @@ WHAT YOU GET TODAY
         {"query":"members","path":"/mob","inherited":true}
             a type's vars and procs, with inheritance already resolved -
             each one says which type it came from
+        {"query":"ancestorsOf","path":"/mob"}                    NEW in 0.14
+            the whole inheritance chain, nearest first, self excluded, in
+            one call instead of one objectTree round trip per level
+        {"query":"references","path":"/mob/hp","limit":1000}     NEW in 0.14
+            THE REFERENCE INDEX: every use of a symbol. The path is the
+            detail string a dm_definition_at hit gives you (take the LAST
+            hit - it is the canonical declaration): "/mob/hp" for a var,
+            "/mob/heal()" for a proc, "/heal()" for a global, a type's
+            path for a type. Each hit:
+
+              { "file": "code/mob.dm",
+                "kind": "write",           read | write | call | override
+                "inside": "/mob/hurt()",   the enclosing symbol
+                "startLine": 3, ... }      positions per the request's
+                                           "encoding": "utf16" (default)
+                                           or "utf8"
+
+            "override" hits are proc declarations overriding the target -
+            what-overrides-this, the safety question before changing a
+            proc's behaviour. Group hits by "inside" for a call hierarchy.
+            Locals and parameters are not index symbols; hits exist only
+            where the diagnostics' own resolution succeeds, so the list
+            under-reports rather than lies (an unresolvable-receiver use
+            is invisible to it, same as it is unchecked by dm.exe).
 
       Two fields exist so you do not have to make a second call or a wrong
       guess:
@@ -890,9 +960,10 @@ WHAT YOU GET TODAY
     M11  semantic diagnostics, find-references, rename       STARTED
          the differential harness is in: we run dm.exe over a project and
          diff its diagnostics against ours, so every check added from here
-         is measured against the compiler from its first commit. no calls
-         for you yet - when they arrive they come through the same
-         dm_document_symbols document the syntax errors already use
+         is measured against the compiler from its first commit. the
+         semantic set ships through dm_diagnostics (0.13) - new checks
+         arrive there with no ABI change - and find-references and rename
+         come with the reference index after M10
 
   If your ordering needs differ from this, say so.
 

@@ -11,13 +11,16 @@ work list.
 | Buffers (unsaved text is authoritative) | `Workspace.SetBuffer` | `dm_set_buffer` / `dm_close_buffer` | `didOpen`/`didChange`/`didClose`, full sync |
 | Injected defines | `Workspace.SetDefines` | `dm_set_defines` (0.5) | `initializationOptions.defines` |
 | Outline + syntax diagnostics | `DocumentSymbolService`, `ParseResult.Diagnostics` | `dm_document_symbols` (0.3, 0.10 severity) | `documentSymbol` + `publishDiagnostics` |
-| Semantic diagnostics (binder) | `Binder.Bind` | ⬜ syntax only crosses today — the planned `dm_diagnostics` (dm-patch §3) is the carrier | `publishDiagnostics` carries them |
+| Semantic diagnostics (binder) | `Binder.Bind` | `dm_diagnostics` (0.13) | `publishDiagnostics` carries them |
 | Completion | `CompletionService` | `dm_complete_at` (0.4) | `completion` |
 | Definition | `DefinitionService` | `dm_definition_at` (0.6) | `definition` |
 | Hover | `HoverService` | `dm_hover_at` (0.7) | `hover` |
 | Workspace symbols | `WorkspaceSymbolService` | `dm_workspace_symbols` (0.8) | `workspace/symbol` |
 | Object-tree bulk queries | `TreeQueryService` | `dm_query_json` (0.11) | `dm/objectTree`, `dm/subtypesOf`, `dm/members` — same shapes as `abi/schema/` |
 | Signature help | `SignatureHelpService` | `dm_signature_at` (0.12) | `signatureHelp`, triggers `(` and `,` |
+| Reference index (uses, kinds, enclosing symbol) | `ReferenceService` over the binder's walk | `dm_query_json` `references` (0.14) | `references`, `documentHighlight`, `dm/references` |
+| Ancestor chain in one call | `ObjectTree.InheritanceChain` | `dm_query_json` `ancestorsOf` (0.14) | `dm/ancestorsOf` |
+| Disk-change invalidation | `Workspace.Invalidate` | `dm_invalidate` (0.14) | `didChangeWatchedFiles` — ⬜ not yet wired; clients can send didChange |
 | `.dmi` icon states | ⬜ M8, unscheduled | ⬜ | ⬜ |
 
 Positions: the ABI and CLI speak both encodings by parameter; LSP negotiates and uses UTF-16.

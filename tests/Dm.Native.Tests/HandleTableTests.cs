@@ -7,6 +7,11 @@ namespace Dm.Native.Tests;
 /// matter when three independently written clients are calling in: slot reuse, generation
 /// mismatch, wrong-type resolution, and double release.
 /// </summary>
+// The handle table is one static, process-wide instance — the point of it — so every test class
+// that allocates against it shares this collection and runs serially. Without it, the absolute
+// count assertions below race the export tests' workspaces: 1 failure in 12 runs once three
+// export classes existed to run in parallel.
+[Collection("handle table")]
 public class HandleTableTests
 {
     private sealed class Target

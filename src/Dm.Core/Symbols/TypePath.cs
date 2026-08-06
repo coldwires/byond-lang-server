@@ -26,9 +26,22 @@ namespace Dm.Core.Symbols;
 /// </remarks>
 public readonly struct TypePath : IEquatable<TypePath>, IComparable<TypePath>
 {
-    private readonly string? _text;
+    // The default struct and an explicit Root are the same logical value, so they must hash the
+    // same — the default's hash cannot come from a ctor it never ran through.
+    private static readonly int RootHash = StringComparer.Ordinal.GetHashCode("/");
 
-    private TypePath(string text) => _text = text;
+    private readonly string? _text;
+    private readonly int _hash;
+
+    private TypePath(string text)
+    {
+        _text = text;
+
+        // Computed once here rather than per lookup: this is the hottest dictionary key in the
+        // system, and the tree merge probes it hundreds of thousands of times per rebuild while
+        // the contribution cache reuses the same instances.
+        _hash = StringComparer.Ordinal.GetHashCode(text);
+    }
 
     /// <summary>The root of the tree, written <c>/</c>. Every declared type descends from it.</summary>
     public static TypePath Root => new("/");
@@ -136,11 +149,14 @@ public readonly struct TypePath : IEquatable<TypePath>, IComparable<TypePath>
     public IReadOnlyList<string> Segments
         => IsRoot ? Array.Empty<string>() : Text[1..].Split('/');
 
-    public bool Equals(TypePath other) => string.Equals(Text, other.Text, StringComparison.Ordinal);
+    // Reference equality first: cached contributions replay the same instances every rebuild, so
+    // the ordinal compare is the cold path.
+    public bool Equals(TypePath other)
+        => ReferenceEquals(Text, other.Text) || string.Equals(Text, other.Text, StringComparison.Ordinal);
 
     public override bool Equals(object? obj) => obj is TypePath other && Equals(other);
 
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Text);
+    public override int GetHashCode() => _text is null ? RootHash : _hash;
 
     public int CompareTo(TypePath other) => string.CompareOrdinal(Text, other.Text);
 

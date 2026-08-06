@@ -7,6 +7,7 @@ using Dm.Core;
 using Dm.Core.Binding;
 using Dm.Core.Diagnostics;
 using Dm.Core.Services;
+using Dm.Core.Symbols;
 using Dm.Core.Syntax;
 using Dm.Core.Text;
 
@@ -51,6 +52,12 @@ internal sealed class LspServer
         string method = root.TryGetProperty("method", out JsonElement m) ? m.GetString() ?? "" : "";
         bool isRequest = root.TryGetProperty("id", out JsonElement id);
         JsonElement params_ = root.TryGetProperty("params", out JsonElement p) ? p : default;
+
+        // A message with an id and no method is the client's RESPONSE to a request this server
+        // sent (workDoneProgress/create). Fire-and-forget: answering it with "method not
+        // supported" — which the default case would do — is protocol noise.
+        if (method.Length == 0)
+            return;
 
         try
         {
@@ -151,6 +158,22 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteWorkspaceSymbols(json, params_, cancel));
                     break;
 
+                case "textDocument/references":
+                    RespondCancellable(id, (json, cancel) => WriteReferences(json, params_, cancel));
+                    break;
+
+                case "textDocument/documentHighlight":
+                    RespondCancellable(id, (json, cancel) => WriteDocumentHighlight(json, params_, cancel));
+                    break;
+
+                case "dm/references":
+                    RespondCancellable(id, (json, cancel) => WriteReferencesByPath(json, params_, cancel));
+                    break;
+
+                case "dm/ancestorsOf":
+                    RespondCancellable(id, (json, cancel) => WriteAncestorsOf(json, params_, cancel));
+                    break;
+
                 case "dm/objectTree":
                     RespondCancellable(id, (json, cancel) => WriteObjectTree(json, params_, cancel));
                     break;
@@ -184,6 +207,59 @@ internal sealed class LspServer
 
     private void Respond(JsonElement id, Action<Utf8JsonWriter> result)
         => Rpc.Respond(_output, id, result);
+
+    private int _serverRequestId = 1_000_000;
+
+    /// <summary>
+    /// The object tree, announcing a build when none exists yet — the first query after open or
+    /// after an edit is the one that pays for the whole project, and a client that cannot see
+    /// that shows a frozen UI instead of "indexing".
+    /// </summary>
+    private ObjectTree TreeAnnouncingBuild(Workspace ws, CancellationToken cancel = default)
+    {
+        if (ws.IsTreeBuilt)
+            return ws.GetObjectTree(cancel);
+
+        int id = _serverRequestId++;
+        string token = $"dm/build/{id}";
+
+        // Server-initiated progress needs the client to accept the token first. The response is
+        // ignored by the dispatcher; a client that refuses simply never renders the bar.
+        Rpc.Request(_output, id, "window/workDoneProgress/create", json =>
+        {
+            json.WriteStartObject();
+            json.WriteString("token", token);
+            json.WriteEndObject();
+        });
+
+        Rpc.Notify(_output, "$/progress", json =>
+        {
+            json.WriteStartObject();
+            json.WriteString("token", token);
+            json.WriteStartObject("value");
+            json.WriteString("kind", "begin");
+            json.WriteString("title", "DM: building the object tree");
+            json.WriteEndObject();
+            json.WriteEndObject();
+        });
+
+        try
+        {
+            return ws.GetObjectTree(cancel);
+        }
+        finally
+        {
+            Rpc.Notify(_output, "$/progress", json =>
+            {
+                json.WriteStartObject();
+                json.WriteString("token", token);
+                json.WriteStartObject("value");
+                json.WriteString("kind", "end");
+                json.WriteEndObject();
+                json.WriteEndObject();
+            });
+        }
+    }
 
     /// <summary>
     /// Marks a request cancelled. Called by the reader thread, which sees a
@@ -309,6 +385,8 @@ internal sealed class LspServer
         json.WriteEndArray();
         json.WriteEndObject();
         json.WriteBoolean("definitionProvider", true);
+        json.WriteBoolean("referencesProvider", true);
+        json.WriteBoolean("documentHighlightProvider", true);
         json.WriteBoolean("documentSymbolProvider", true);
         json.WriteBoolean("workspaceSymbolProvider", true);
         json.WriteStartObject("semanticTokensProvider");
@@ -411,7 +489,7 @@ internal sealed class LspServer
         ParseResult parse = document.Parse;
 
         List<Diagnostic> all = new(parse.Diagnostics);
-        all.AddRange(Binder.Bind(ws.GetObjectTree(), parse.Root));
+        all.AddRange(Binder.Bind(TreeAnnouncingBuild(ws), parse.Root, document.Path));
 
         Rpc.Notify(_output, "textDocument/publishDiagnostics", json =>
         {
@@ -453,7 +531,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         CompletionResult result = CompletionService.CompleteAt(
-            ws.GetObjectTree(cancel),
+            TreeAnnouncingBuild(ws, cancel),
             document,
             line,
             character,
@@ -508,7 +586,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         HoverResult? hover = HoverService.HoverAt(
-            ws.GetObjectTree(cancel), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16);
 
         if (hover is null)
         {
@@ -545,7 +623,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         SignatureHelpResult? help = SignatureHelpService.SignatureAt(
-            ws.GetObjectTree(cancel), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16);
 
         if (help is null)
         {
@@ -585,7 +663,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-            ws.GetObjectTree(cancel), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16);
 
         json.WriteStartArray();
 
@@ -776,7 +854,7 @@ internal sealed class LspServer
         }
 
         IReadOnlyList<WorkspaceSymbol> hits = WorkspaceSymbolService.Search(
-            ws.GetObjectTree(cancel), query, WorkspaceSymbolService.DefaultLimit);
+            TreeAnnouncingBuild(ws, cancel), query, WorkspaceSymbolService.DefaultLimit);
 
         json.WriteStartArray();
 
@@ -803,6 +881,171 @@ internal sealed class LspServer
         json.WriteEndArray();
     }
 
+    // -- references -------------------------------------------------------------
+
+    /// <summary>The references of the symbol at a position, or null when nothing there is one.</summary>
+    private ReferenceListing? ReferencesAtPosition(Workspace ws, JsonElement params_, CancellationToken cancel)
+    {
+        if (RequirePosition(params_, out string path, out int line, out int character) is null)
+            return null;
+
+        return ReferenceService.At(
+            TreeAnnouncingBuild(ws, cancel),
+            ws.GetProjectParses(cancel),
+            ws.GetDocument(path),
+            line,
+            character,
+            PositionEncoding.Utf16,
+            ReferenceService.DefaultLimit,
+            cancel);
+    }
+
+    private void WriteReferences(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        ReferenceListing? found = ReferencesAtPosition(ws, params_, cancel);
+
+        json.WriteStartArray();
+
+        if (found is not null)
+        {
+            foreach (Reference reference in found.References)
+            {
+                if (!ws.TryGetDocument(reference.File, out Document target))
+                    continue;
+
+                json.WriteStartObject();
+                json.WriteString("uri", UriOf(reference.File));
+                WriteRange(json, target.Text, reference.Span);
+                json.WriteEndObject();
+            }
+        }
+
+        json.WriteEndArray();
+    }
+
+    private void WriteDocumentHighlight(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string asked = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(asked);
+
+        ReferenceListing? found = ReferencesAtPosition(ws, params_, cancel);
+
+        json.WriteStartArray();
+
+        if (found is not null)
+        {
+            foreach (Reference reference in found.References)
+            {
+                // Highlight covers this document alone; reference identity by the cached
+                // Document, so path spelling cannot split them.
+                if (!ws.TryGetDocument(reference.File, out Document target)
+                    || !ReferenceEquals(target, document))
+                {
+                    continue;
+                }
+
+                json.WriteStartObject();
+                WriteRange(json, target.Text, reference.Span);
+                json.WriteNumber("kind", reference.Kind == ReferenceKind.Write ? 3 : 2); // Write : Read
+                json.WriteEndObject();
+            }
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>The path-shaped form, mirroring dm_query_json's "references" field for field.</summary>
+    private void WriteReferencesByPath(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string target = StringParam(params_, "path", string.Empty);
+
+        ReferenceListing listing = ReferenceService.Find(
+            TreeAnnouncingBuild(ws, cancel),
+            ws.GetProjectParses(cancel),
+            target,
+            IntParam(params_, "limit", ReferenceService.DefaultLimit),
+            cancel);
+
+        json.WriteStartObject();
+        json.WriteString("query", "references");
+        json.WriteString("path", target);
+        json.WriteBoolean("truncated", listing.Truncated);
+        json.WriteStartArray("references");
+
+        foreach (Reference reference in listing.References)
+        {
+            if (!ws.TryGetDocument(reference.File, out Document target_))
+                continue;
+
+            json.WriteStartObject();
+            json.WriteString("file", reference.File);
+            json.WriteString("uri", UriOf(reference.File));
+            json.WriteString("kind", reference.Kind switch
+            {
+                ReferenceKind.Write => "write",
+                ReferenceKind.Call => "call",
+                ReferenceKind.Override => "override",
+                _ => "read",
+            });
+            json.WriteString("inside", reference.Inside);
+            WriteRange(json, target_.Text, reference.Span);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+
+    private void WriteAncestorsOf(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = StringParam(params_, "path", "/");
+        ObjectTree tree = TreeAnnouncingBuild(ws, cancel);
+
+        if (tree.Find(path) is not { } type)
+            throw new NoSuchPathException();
+
+        json.WriteStartObject();
+        json.WriteString("query", "ancestorsOf");
+        json.WriteString("path", type.Path.Text);
+        json.WriteStartArray("ancestors");
+
+        foreach (var step in tree.InheritanceChain(type))
+        {
+            if (ReferenceEquals(step, type))
+                continue;
+
+            if (TreeQueryService.Browse(tree, step.Path.Text, depth: 0, includeBuiltins: true, cancel) is { } node)
+                WriteTreeNode(json, node);
+        }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+
     // -- dm/* bulk queries ------------------------------------------------------
     //
     // The custom methods LSP cannot express: a tree panel asks about a PATH rather than a caret.
@@ -818,7 +1061,7 @@ internal sealed class LspServer
         }
 
         TreeNode? node = TreeQueryService.Browse(
-            ws.GetObjectTree(cancel),
+            TreeAnnouncingBuild(ws, cancel),
             StringParam(params_, "path", "/"),
             Math.Max(0, IntParam(params_, "depth", TreeQueryService.DefaultDepth)),
             BoolParam(params_, "includeBuiltins", true),
@@ -845,7 +1088,7 @@ internal sealed class LspServer
         string path = StringParam(params_, "path", "/");
 
         SubtypeListing? listing = TreeQueryService.Subtypes(
-            ws.GetObjectTree(cancel),
+            TreeAnnouncingBuild(ws, cancel),
             path,
             IntParam(params_, "limit", TreeQueryService.DefaultSubtypeLimit),
             BoolParam(params_, "includeBuiltins", true),
@@ -876,7 +1119,7 @@ internal sealed class LspServer
         }
 
         TypeMembers? members = TreeQueryService.Members(
-            ws.GetObjectTree(cancel),
+            TreeAnnouncingBuild(ws, cancel),
             StringParam(params_, "path", "/"),
             BoolParam(params_, "inherited", true),
             BoolParam(params_, "includeBuiltins", true),

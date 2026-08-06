@@ -11,6 +11,7 @@ namespace Dm.Native.Tests;
 /// The C++ smoke test covers the same ground against the published binary; this runs in
 /// <c>dotnet test</c>, so a boundary regression is caught without a NativeAOT publish.
 /// </summary>
+[Collection("handle table")] // shares the static HandleTable with the count-asserting tests
 public unsafe class SignatureExportTests
 {
     private static readonly unsafe delegate* unmanaged[Cdecl]<byte*, IntPtr*, int> Open = &Exports.WorkspaceOpen;

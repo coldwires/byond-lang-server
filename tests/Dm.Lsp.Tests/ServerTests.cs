@@ -371,6 +371,81 @@ public sealed class ServerTests : IDisposable
         Assert.Equal(-32803, error.GetProperty("code").GetInt32());
     }
 
+    /// <summary>
+    /// References at a member's use finds every use and not the declaration; highlight filters to
+    /// the asked document and carries read/write kinds.
+    /// </summary>
+    [Fact]
+    public void References_and_highlight_find_the_uses()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+
+        // Line 3 `hp = 2` is a write inside hurt; line 7 `m.hp` is a read inside f.
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/mob\\n\\tvar/hp = 1\\n\\tproc/hurt()\\n\\t\\thp = 2\\n\\n/proc/f()\\n\\tvar/mob/m = new\\n\\treturn m.hp\\n\"}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"textDocument/references\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":7,\"character\":10}},\"context\":{{\"includeDeclaration\":false}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"textDocument/documentHighlight\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":7,\"character\":10}}}}}}");
+
+        List<JsonDocument> frames = Frames();
+
+        JsonElement references = frames[^2].RootElement.GetProperty("result");
+        Assert.Equal(2, references.GetArrayLength());
+
+        JsonElement highlights = frames[^1].RootElement.GetProperty("result");
+        Assert.Equal(2, highlights.GetArrayLength());
+
+        List<int> kinds = new();
+
+        foreach (JsonElement highlight in highlights.EnumerateArray())
+            kinds.Add(highlight.GetProperty("kind").GetInt32());
+
+        Assert.Contains(3, kinds); // the write
+        Assert.Contains(2, kinds); // the read
+    }
+
+    /// <summary>
+    /// The first tree build announces itself: a workDoneProgress/create request, a begin, the
+    /// answer, an end — and the client's response to the create is ignored rather than answered
+    /// with a method-not-supported error.
+    /// </summary>
+    [Fact]
+    public void The_first_build_reports_progress_and_responses_are_ignored()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/mob\\n\\tvar/hp = 1\\n\"}}}}}}");
+
+        List<JsonDocument> frames = Frames();
+
+        List<string> methods = new();
+
+        foreach (JsonDocument frame in frames)
+        {
+            if (frame.RootElement.TryGetProperty("method", out JsonElement m))
+                methods.Add(m.GetString() ?? "");
+        }
+
+        Assert.Contains("window/workDoneProgress/create", methods);
+        Assert.Equal(2, methods.Count(m => m == "$/progress")); // begin and end
+
+        // The begin arrives before the diagnostics the build produced.
+        Assert.True(
+            methods.IndexOf("$/progress") < methods.IndexOf("textDocument/publishDiagnostics"),
+            "progress must begin before the answer it announces");
+
+        // A second question on the built tree stays silent — no fresh progress.
+        int before = frames.Count;
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/hover\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":1,\"character\":6}}}}}}");
+        Assert.Equal(before + 1, Frames().Count);
+
+        // The client's response to the create request is consumed without a reply.
+        Send("{\"jsonrpc\":\"2.0\",\"id\":1000000,\"result\":null}");
+        Assert.Equal(before + 1, Frames().Count);
+    }
+
     [Fact]
     public void An_unknown_method_answers_with_an_error_rather_than_silence()
     {

@@ -25,11 +25,99 @@ public class BinderTests
 
         ObjectTree tree = TypeTreeBuilder.Build(parsed);
 
-        return Binder.Bind(tree, parsed[^1].Item2.Root);
+        return Binder.Bind(tree, parsed[^1].Item2.Root, parsed[^1].Item1);
     }
 
     private static IReadOnlyList<string> Ids(IReadOnlyList<Diagnostic> diagnostics)
         => diagnostics.Select(d => d.Id).ToList();
+
+    // -- duplicate definitions (DM0403) --------------------------------------
+    // Compiler-verified shapes, probes dup1-dup9: proc/ twice on one type, on an ancestor at any
+    // depth, on the root, and against a builtin are all errors; an override and a var sharing a
+    // proc's name are not.
+
+    [Fact]
+    public void A_proc_declared_twice_on_one_type_reports_the_pair()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/f()\n\t\treturn 1\n\tproc/f()\n\t\treturn 2\n");
+
+        Assert.Equal(new[] { "DM0403", "DM0403" }, Ids(found));
+        Assert.Contains(found, d => d.Message.Contains("previous definition"));
+        Assert.Contains(found, d => d.Message.Contains("duplicate definition"));
+    }
+
+    [Fact]
+    public void A_proc_redeclared_on_a_subtype_reports_the_pair_in_one_file()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/f()\n\t\treturn 1\n\n/datum/thing/mid\n\n"
+            + "/datum/thing/mid/deep\n\tproc/f()\n\t\treturn 2\n");
+
+        Assert.Equal(new[] { "DM0403", "DM0403" }, Ids(found));
+    }
+
+    [Fact]
+    public void A_global_proc_declared_twice_reports_the_pair()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/proc/g()\n\treturn 1\n\n/proc/g()\n\treturn 2\n");
+
+        Assert.Equal(new[] { "DM0403", "DM0403" }, Ids(found));
+    }
+
+    /// <summary>Needs the seeded tree: `Move` exists only as a builtin on /atom/movable.</summary>
+    [Fact]
+    public void Redeclaring_a_builtin_proc_conflicts()
+    {
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+
+        ParseResult parse = DeclarationParser.Parse(
+            Lexer.Lex(SourceText.From("/mob/proc/Move()\n\treturn 1\n")));
+        TypeTreeBuilder.AddFile(tree, "a.dm", parse);
+
+        IReadOnlyList<Diagnostic> found = Binder.Bind(tree, parse.Root, "a.dm");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Equal("DM0403", reported.Id);
+        Assert.Contains("built-in proc", reported.Message);
+    }
+
+    /// <summary>Would fail by inventing: an override carries no marker and is the ordinary case.</summary>
+    [Fact]
+    public void An_override_is_not_a_duplicate()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/f()\n\t\treturn 1\n\n/datum/thing/sub\n\tf()\n\t\treturn 2\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>Would fail by inventing: dm.exe accepts a var and a proc sharing a name (dup7).</summary>
+    [Fact]
+    public void A_var_and_a_proc_may_share_a_name()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tvar/f = 1\n\tproc/f()\n\t\treturn 2\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
+    /// Cross-file: the file holding the LATER declaration reports the duplicate; the earlier
+    /// file's "previous definition" line is the documented miss.
+    /// </summary>
+    [Fact]
+    public void A_cross_file_redeclaration_reports_the_duplicate_half()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/f()\n\t\treturn 1\n",
+            "/datum/thing/sub\n\tproc/f()\n\t\treturn 2\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Contains("duplicate definition", reported.Message);
+    }
 
     // -- what it must catch -------------------------------------------------
 

@@ -74,10 +74,44 @@ ok/        _harness.dm   CHECK(), the world, the summary line
            macros.dm     preprocessor shapes real codebases use
 errors/    semantic.dm   undefined member, subtype through `.`, untyped receiver
            else_*.dm     the boundaries of the separator-run rule (notes §19)
+           dup_*.dm      duplicate proc definitions, same type and subtype
+           local_in.dm   the relational `in` as a local initializer
            names/        one .dme per case - see the masking note below
            pragma/       numeric pragma ids, unknown warning names
+services/  tier 2: projects that compile clean AND carry //? marks
 run.ps1
 ```
+
+## Tier 2: the services answer end to end
+
+`services/` closes the axis the rest of the suite cannot reach: everything else
+checks the pipeline against `dm.exe`, and nothing checked that the SERVICES —
+completion, definition, hover, signature help — answer correctly through a real
+workspace. `ServiceFixtureTests` opens each `.dme` here the way an IDE does and
+answers every mark in the source:
+
+```
+//? complete 7:4 => hp, weapon, !on_subtype    these present, that absent
+//? complete 25:20 => (empty)                  the whole list must be empty
+//? definition 7:4 => types.dm:8               the nearest hit
+//? hover 7:4 => /mob/test/hp                  the resolved detail
+//? signature 13:13 => heal @ 1                the proc and active parameter
+//? references 7:4 => types.dm:12 write, code.dm:7 write
+//                                             every use, as file:line kind -
+//                                             exact set equality, so a missing
+//                                             hit and a surplus one both fail
+```
+
+Positions are 1-based line:column, the CLI's convention, so a failing mark is
+reproduced verbatim with `dmc complete|definition|hover|signature`. The
+projects also compile clean under dm.exe and are swept by every gate above, so
+the same files hold the zero-invented line. Adding a case is adding a comment
+line — and the runner fails a fixture with no marks at all, because a probe
+that cannot fail proves nothing.
+
+It earned its keep on its first run: definition and hover returned nothing on
+the first character of every name, a shipped off-by-one no unit test had
+reached because every unit test builds its own tree.
 
 ## Two rules the layout encodes
 
@@ -105,8 +139,8 @@ sanity checks - are filtered by message text. 109 probes that compile clean and
 It runs only with `-Probes`, since 252 compiles plus 252 diagdiffs takes a few
 minutes.
 
-**It is a ratchet, not a gate.** We agree on **41 of 252** today; asserting
-"must agree on all" would fail 211 times and teach nothing. `BASELINE.txt`
+**It is a ratchet, not a gate.** We agree on **44 of 252** today; asserting
+"must agree on all" would fail 208 times and teach nothing. `BASELINE.txt`
 records the number and the names, and the run fails only if agreement *drops*.
 Raise it deliberately with `-Probes -UpdateBaseline`, after reading why it moved.
 
@@ -117,7 +151,7 @@ extra diagnostics on a must-fail file are recovery working, not spurious output.
 The zero-invented rule belongs to code that **compiles clean**, which is what
 sections 1-3 cover.
 
-That 41/252 is also the first honest denominator for M11: 211 known compiler
+That 44/252 is also the first honest denominator for M11: 208 known compiler
 messages we say nothing about.
 
 ## Adding to it

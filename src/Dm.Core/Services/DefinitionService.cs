@@ -110,10 +110,18 @@ public static class DefinitionService
     /// <summary>The token containing the offset, rather than the one before it.</summary>
     /// <remarks>
     /// Completion asks what precedes the caret; this asks what the caret is <i>on</i>, so a caret
-    /// anywhere inside a name resolves that name.
+    /// anywhere inside a name resolves that name. A caret on a boundary belongs to the token
+    /// STARTING there: hovering the first character of `hp` in `t.hp` must answer about `hp`, not
+    /// the dot — which an inclusive end matched first, so definition and hover returned nothing on
+    /// the first character of every member. The tier-2 service fixture caught it on its first run.
+    /// A caret with nothing on its right still falls back to the token it just left, so `hp|`
+    /// resolves. Shared with <see cref="HoverService"/>, which highlights the token it answers
+    /// about — two copies of this boundary carried the same bug.
     /// </remarks>
-    private static int IndexAt(IReadOnlyList<Token> tokens, int offset)
+    internal static int IndexAt(IReadOnlyList<Token> tokens, int offset)
     {
+        int endsHere = -1;
+
         for (int i = 0; i < tokens.Count; i++)
         {
             Token token = tokens[i];
@@ -121,11 +129,17 @@ public static class DefinitionService
             if (token.Span.Start > offset)
                 break;
 
-            if (offset >= token.Span.Start && offset <= token.Span.End && !token.Span.IsEmpty)
+            if (token.Span.IsEmpty)
+                continue;
+
+            if (offset < token.Span.End)
                 return i;
+
+            if (token.Span.End == offset)
+                endsHere = i;
         }
 
-        return -1;
+        return endsHere;
     }
 
     private static TokenKind PreviousMeaningful(IReadOnlyList<Token> tokens, int index)

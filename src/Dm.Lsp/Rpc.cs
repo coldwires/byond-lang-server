@@ -125,6 +125,22 @@ internal static class Rpc
             json.WriteEndObject();
         });
 
+    /// <summary>
+    /// A server-initiated request, such as <c>window/workDoneProgress/create</c>. The client's
+    /// response comes back as a message with an id and no method; the dispatcher ignores those.
+    /// </summary>
+    public static void Request(Stream output, int id, string method, Action<Utf8JsonWriter> parameters)
+        => Write(output, json =>
+        {
+            json.WriteStartObject();
+            json.WriteString("jsonrpc", "2.0");
+            json.WriteNumber("id", id);
+            json.WriteString("method", method);
+            json.WritePropertyName("params");
+            parameters(json);
+            json.WriteEndObject();
+        });
+
     /// <summary>A server-initiated notification, such as publishDiagnostics.</summary>
     public static void Notify(Stream output, string method, Action<Utf8JsonWriter> parameters)
         => Write(output, json =>
