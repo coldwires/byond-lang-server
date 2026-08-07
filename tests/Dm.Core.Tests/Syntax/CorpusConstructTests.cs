@@ -165,4 +165,52 @@ public class CorpusConstructTests
     [Fact]
     public void A_doubled_path_separator_collapses()
         => ParsesClean("/obj/thing\n\tproc/f()\n\t\treturn nameof(/datum/beam/.proc/Start)\n");
+
+    /// <summary>
+    /// 516.1686 rejects a numeric literal as an associative list key — a breaking change, since
+    /// 516.1666 compiled the same source. `alist()` is the escape hatch the message names.
+    /// </summary>
+    [Theory]
+    [InlineData("list(1 = \"a\")")]
+    [InlineData("list(0 = \"a\")")]
+    [InlineData("list(1.5 = \"a\")")]
+    [InlineData("list(-1 = \"a\")")]          // a unary minus over the literal, rejected the same
+    [InlineData("list(\"k\" = list(1 = \"a\"))")]  // nested, so every invocation is checked
+    public void A_numeric_associative_list_key_is_rejected(string expression)
+    {
+        IReadOnlyList<Diagnostic> diagnostics =
+            Parse($"/obj/thing\n\tproc/f()\n\t\tvar/list/L = {expression}\n\t\treturn L\n");
+
+        Assert.Contains(diagnostics, d => d.Id == "DM0404");
+    }
+
+    /// <summary>
+    /// The boundaries, each compiled against dm.exe: `alist()` takes numeric keys, a string key is
+    /// fine, and a VARIABLE key is accepted because the compiler cannot know statically what it
+    /// holds — so only a literal is reported.
+    /// </summary>
+    [Theory]
+    [InlineData("alist(1 = \"a\")")]
+    [InlineData("list(\"k\" = \"a\")")]
+    [InlineData("list(v = \"a\")")]
+    public void A_numeric_key_is_only_reported_for_a_literal_in_list(string expression)
+    {
+        IReadOnlyList<Diagnostic> diagnostics =
+            Parse($"/obj/thing\n\tproc/f()\n\t\tvar/v = 1\n\t\tvar/list/L = {expression}\n\t\treturn L\n");
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "DM0404");
+    }
+
+    /// <summary>
+    /// ONE diagnostic per list, not one per key: dm.exe reports a three-numeric-key list once, on
+    /// the line the call opens. Reporting per key invented 12 on madridspy against its 2.
+    /// </summary>
+    [Fact]
+    public void A_list_with_several_numeric_keys_reports_once()
+    {
+        IReadOnlyList<Diagnostic> diagnostics = Parse(
+            "/obj/thing\n\tproc/f()\n\t\tvar/list/L = list(1 = \"a\", 2 = \"b\", 3 = \"c\")\n\t\treturn L\n");
+
+        Assert.Single(diagnostics, d => d.Id == "DM0404");
+    }
 }

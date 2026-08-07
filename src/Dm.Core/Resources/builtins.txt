@@ -454,18 +454,18 @@ V /alist len
 V /alist parent_type
 V /alist tag
 V /alist type
-V /alist vars
+V /alist vars /list
 V /area parent_type
 V /atom alpha
 V /atom appearance
 V /atom appearance_flags
 V /atom blend_mode
 V /atom color
-V /atom contents
+V /atom contents /list
 V /atom density
 V /atom desc
 V /atom dir
-V /atom filters
+V /atom filters /list
 V /atom gender
 V /atom icon
 V /atom icon_state
@@ -474,7 +474,7 @@ V /atom icon_z
 V /atom infra_luminosity
 V /atom invisibility
 V /atom layer
-V /atom loc
+V /atom loc /atom
 V /atom luminosity
 V /atom maptext
 V /atom maptext_height
@@ -488,7 +488,7 @@ V /atom mouse_opacity
 V /atom mouse_over_pointer
 V /atom name
 V /atom opacity
-V /atom overlays
+V /atom overlays /list
 V /atom override
 V /atom pixel_w
 V /atom pixel_x
@@ -500,9 +500,9 @@ V /atom render_source
 V /atom render_target
 V /atom suffix
 V /atom text
-V /atom transform
-V /atom underlays
-V /atom verbs
+V /atom transform /matrix
+V /atom underlays /list
+V /atom verbs /list
 V /atom vis_contents
 V /atom vis_flags
 V /atom vis_locs
@@ -515,15 +515,15 @@ V /atom/movable bound_width
 V /atom/movable bound_x
 V /atom/movable bound_y
 V /atom/movable glide_size
-V /atom/movable locs
-V /atom/movable particles
+V /atom/movable locs /list
+V /atom/movable particles /particles
 V /atom/movable pixel_step_size
 V /atom/movable screen_loc
 V /atom/movable step_size
 V /atom/movable step_x
 V /atom/movable step_y
-V /callee args
-V /callee caller
+V /callee args /list
+V /callee caller /callee
 V /callee desc
 V /callee file
 V /callee invisibility
@@ -532,7 +532,7 @@ V /callee name
 V /callee proc
 V /callee src
 V /callee type
-V /callee usr
+V /callee usr /mob
 V /client CGI
 V /client PASSWORD_TRIGGER
 V /client URL
@@ -560,12 +560,12 @@ V /client eye
 V /client fps
 V /client gender
 V /client glide_size
-V /client images
+V /client images /list
 V /client inactivity
 V /client key
 V /client lazy_eye
 V /client macro
-V /client mob
+V /client mob /mob
 V /client mouse_pointer_icon
 V /client parent_type
 V /client perspective
@@ -575,7 +575,7 @@ V /client pixel_x
 V /client pixel_y
 V /client pixel_z
 V /client preload_rsc
-V /client screen
+V /client screen /list
 V /client script
 V /client show_map
 V /client show_popup_menus
@@ -587,8 +587,8 @@ V /client tag
 V /client tick_lag
 V /client timezone
 V /client type
-V /client vars
-V /client verbs
+V /client vars /list
+V /client verbs /list
 V /client view
 V /client virtual_eye
 V /database _binobj
@@ -597,7 +597,7 @@ V /database/query database
 V /datum parent_type
 V /datum tag
 V /datum type
-V /datum vars
+V /datum vars /list
 V /dm_filter alpha
 V /dm_filter color
 V /dm_filter falloff
@@ -625,11 +625,11 @@ V /image appearance
 V /image appearance_flags
 V /image blend_mode
 V /image color
-V /image contents
+V /image contents /list
 V /image density
 V /image desc
 V /image dir
-V /image filters
+V /image filters /list
 V /image gender
 V /image glide_size
 V /image icon
@@ -637,7 +637,7 @@ V /image icon_state
 V /image infra_luminosity
 V /image invisibility
 V /image layer
-V /image loc
+V /image loc /atom
 V /image luminosity
 V /image maptext
 V /image maptext_height
@@ -651,7 +651,7 @@ V /image mouse_opacity
 V /image mouse_over_pointer
 V /image name
 V /image opacity
-V /image overlays
+V /image overlays /list
 V /image override
 V /image pixel_w
 V /image pixel_x
@@ -663,10 +663,10 @@ V /image render_target
 V /image screen_loc
 V /image suffix
 V /image text
-V /image transform
-V /image underlays
-V /image verbs
-V /image vis_contents
+V /image transform /matrix
+V /image underlays /list
+V /image verbs /list
+V /image vis_contents /list
 V /image x
 V /image y
 V /image z
@@ -674,7 +674,7 @@ V /list len
 V /list parent_type
 V /list tag
 V /list type
-V /list vars
+V /list vars /list
 V /matrix _dm_interface
 V /matrix a
 V /matrix b
@@ -683,8 +683,8 @@ V /matrix d
 V /matrix e
 V /matrix f
 V /mob ckey
-V /mob client
-V /mob group
+V /mob client /client
+V /mob group /list
 V /mob key
 V /mob parent_type
 V /mob see_in_dark
@@ -699,8 +699,8 @@ V /mutable_appearance mouse_drop_pointer
 V /mutable_appearance mouse_drop_zone
 V /mutable_appearance opacity
 V /mutable_appearance screen_loc
-V /mutable_appearance verbs
-V /mutable_appearance vis_contents
+V /mutable_appearance verbs /list
+V /mutable_appearance vis_contents /list
 V /mutable_appearance vis_flags
 V /obj parent_type
 V /particles bound1
@@ -736,7 +736,7 @@ V /pixloc z
 V /regex _binobj
 V /regex _dm_interface
 V /regex flags
-V /regex group
+V /regex group /list
 V /regex index
 V /regex match
 V /regex name
@@ -745,13 +745,13 @@ V /regex text
 V /savefile byond_build
 V /savefile byond_version
 V /savefile cd
-V /savefile dir
+V /savefile dir /list
 V /savefile eof
 V /savefile name
 V /savefile parent_type
 V /savefile tag
 V /savefile type
-V /savefile vars
+V /savefile vars /list
 V /sound _dm_interface
 V /sound atom
 V /sound channel
@@ -786,7 +786,7 @@ V /world area
 V /world byond_build
 V /world byond_version
 V /world cache_lifespan
-V /world contents
+V /world contents /list
 V /world cpu
 V /world executor
 V /world fps
@@ -806,7 +806,7 @@ V /world maxz
 V /world mob
 V /world movement_mode
 V /world name
-V /world params
+V /world params /list
 V /world port
 V /world process
 V /world reachable
@@ -821,7 +821,7 @@ V /world timeofday
 V /world timezone
 V /world turf
 V /world url
-V /world vars
+V /world vars /list
 V /world version
 V /world view
 V /world visibility

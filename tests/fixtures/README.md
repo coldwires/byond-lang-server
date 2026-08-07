@@ -188,6 +188,26 @@ The runtime step runs DreamDaemon with `-safe`, not `-trusted`: nothing in `ok/`
 needs trusted mode, and a `-trusted` world waits on a GUI approval prompt when
 nothing interactive can click it, which reads as a hang and "no log produced".
 
-BYOND is Windows-only and is not on CI runners. With no `dm.exe` the
-compiler-side checks **skip** and ours still run; a skip is reported as a skip,
-never as a pass.
+## Where it runs
+
+**CI runs this suite against the real compiler**, in the `byond-fixtures` job:
+BYOND is Windows-only and no runner ships it, so the job fetches the standalone
+zip for the build in `ci.yml`'s `BYOND_BUILD`, points `DM_BYOND_BIN` at it, and
+runs `dotnet test` plus `run.ps1 -Probes`. The build is pinned rather than
+floating — a job that always took the newest would go red on BYOND's release
+schedule rather than on a commit, and name no change of ours.
+
+That job is the only place the compiler-backed assertions execute. The `test`
+job runs on Linux, where every one of them takes its skip path, so before it
+existed CI was checking that our parser still agreed with our parser.
+
+With no `dm.exe` the compiler-side checks still **skip** rather than fail, which
+is what keeps a Linux `dotnet test` and a machine without BYOND usable; a skip
+is reported as a skip, never as a pass.
+
+**Anything that shells out to `dm.exe` must be told which one.** `dmc diagdiff`
+reads `DM_BYOND_BIN` before falling back to the install location, and `run.ps1`
+forwards its `-Byond` to every `diagdiff` call. Without that, a run against a
+standalone build compiles the fixtures with the new compiler and then diffs the
+diagnostics against the installed one — two compilers in one run, reported as
+agreement.

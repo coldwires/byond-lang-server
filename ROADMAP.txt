@@ -2,7 +2,7 @@
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-05
+ Last updated: 2026-08-06
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -16,13 +16,15 @@ WHERE WE ARE
   M0-M7 complete - that is TEAM V1, everything an IDE needs to draw its panels.
   M8 passed over. M9 past its target. M10 DONE. M11 started.
 
-    dm_core.dll     2.04 MB, ABI 0.18, 28 exports, cdecl on every platform
+    dm_core.dll     2.08 MB, ABI 0.21, 36 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,084 green (1,026 core, 44 native, 14 lsp)
-    BYOND 516.1686  goldens, probes and the 52-check world all hold on the
-                    latest build (standalone zip, DM_BYOND_BIN) - only the
-                    version tripwire fires, by design
-    abi-smoke       184 checks from C++, on x64 AND x86, run in CI not just built
+    tests           1,145 green (1,087 core, 44 native, 14 lsp)
+    BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
+                    516.1686 is the newest build (2026-08-05); the suite is
+                    green on it end to end, tripwire included
+    abi-smoke       220 checks from C++, x64 at 0.21 (x86 last run at 0.20);
+                    the four Unix RIDs are CI-only, since NativeAOT refuses
+                    cross-OS native compilation
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
@@ -32,6 +34,10 @@ WHERE WE ARE
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
     fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 252-probe ratchet
+                    - and it now runs IN CI against the real compiler, which it
+                    never did before: the byond-fixtures job fetches the
+                    standalone zip, so a BYOND release that changes what DM
+                    means fails a build instead of waiting to be noticed
 
   Shipping through the ABI today: syntax highlighting (lexical AND semantic
   colours 12-15), document outline with syntax diagnostics, completion,
@@ -144,9 +150,21 @@ WHAT'S NEXT
        From the re-cut UPSTREAM-REQUESTS, still open, near the front:
        parameter-name hints (12's other half), code actions (14,
        unblocked by dm_diagnostics), formatting/folding/links (18).
+       NEAR THE FRONT, and RE-CATEGORISED 2026-08-06: dm.exe's own
+       DEFAULT-ON WARNINGS on code that COMPILES CLEAN - we miss 14 of
+       14 on warklan and 2 of 2 on madridspy. This was sitting in the
+       "error-message parity, last" bucket and does not belong there:
+       that call was about matching wording on BROKEN code, where the
+       compiler has already spoken. These fire on a clean build, so the
+       editor is silent about something the build says - a missing
+       product feature, not parity polish. unused_var is the likely
+       bulk and is already written and BACKED OUT (PLAN 9 has both
+       causes). Group the missed lines by warning name before
+       estimating; the aggregation axis has lied three times here.
+       PLAN 11's baseline table and its new "missed column" section.
        THEN the rest: the probe ratchet's remaining classes (PLAN 8a),
-       var duplicate definitions (VarSymbol keeps one site), unused_var
-       (backed out, PLAN 9), "." on an untyped local, ":" against the
+       var duplicate definitions (VarSymbol keeps one site),
+       "." on an untyped local, ":" against the
        subtype tree, M8 .dmi, incremental sync if a profile asks.
        CANDY, unscheduled: M8 .dmi, .dmm maps, the rung-1 debugger.
        Contract (their do-not-change list): UTF-16 default honest,

@@ -35,6 +35,14 @@ internal static class CompletionJson
             json.Append(",\"kind\":").Append((int)item.Kind);
             json.Append(",\"builtin\":").Append(item.IsBuiltin ? "true" : "false");
             json.Append(",\"inferred\":").Append(item.Inferred ? "true" : "false");
+
+            // The item's OWN declared type and initialiser, so a client renders `fatigue - num`
+            // without re-parsing the file. Both empty is the ordinary case and is honest: DM has
+            // no num or text to name, and most vars carry neither.
+            json.Append(",\"type\":");
+            SymbolJson.AppendString(json, item.DeclaredType);
+            json.Append(",\"value\":");
+            SymbolJson.AppendString(json, item.InitialValue);
             json.Append(",\"documentation\":");
             SymbolJson.AppendString(json, item.Documentation);
             json.Append('}');

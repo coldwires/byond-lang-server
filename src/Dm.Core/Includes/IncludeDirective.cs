@@ -10,11 +10,12 @@ namespace Dm.Core.Includes;
 /// </summary>
 public readonly struct IncludeDirective
 {
-    public IncludeDirective(string target, bool isLibrary, TextSpan span)
+    public IncludeDirective(string target, bool isLibrary, TextSpan span, TextSpan targetSpan = default)
     {
         Target = target;
         IsLibrary = isLibrary;
         Span = span;
+        TargetSpan = targetSpan;
     }
 
     /// <summary>The path as written, before normalisation.</summary>
@@ -25,6 +26,15 @@ public readonly struct IncludeDirective
 
     /// <summary>Span of the whole directive, for diagnostics.</summary>
     public TextSpan Span { get; }
+
+    /// <summary>
+    /// Span of the path text alone, inside the quotes or brackets.
+    /// </summary>
+    /// <remarks>
+    /// What a document link makes clickable: underlining the whole <c>#include "x.dm"</c> line
+    /// would put the hit target on the directive keyword as well as the file it names.
+    /// </remarks>
+    public TextSpan TargetSpan { get; }
 
     public override string ToString() => IsLibrary ? $"<{Target}>" : $"\"{Target}\"";
 
@@ -57,7 +67,7 @@ public readonly struct IncludeDirective
                 return false;
 
             TextSpan inner = TextSpan.FromBounds(tokens[start].Span.End, tokens[end].Span.Start);
-            include = new IncludeDirective(lex.Text.ToString(inner), isLibrary: false, directive.Span);
+            include = new IncludeDirective(lex.Text.ToString(inner), isLibrary: false, directive.Span, inner);
             return true;
         }
 
@@ -71,7 +81,7 @@ public readonly struct IncludeDirective
                 return false;
 
             TextSpan inner = TextSpan.FromBounds(tokens[start].Span.End, tokens[end].Span.Start);
-            include = new IncludeDirective(lex.Text.ToString(inner).Trim(), isLibrary: true, directive.Span);
+            include = new IncludeDirective(lex.Text.ToString(inner).Trim(), isLibrary: true, directive.Span, inner);
             return true;
         }
 

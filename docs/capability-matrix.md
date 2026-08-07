@@ -25,7 +25,22 @@ work list.
 | Inlay hints (inferred local types) | `InlayHintService` | `dm_inlay_hints` (0.16) | `textDocument/inlayHint` |
 | Lazy completion documentation | `CompleteBriefAt` + `ResolveDocumentation` | `dm_complete_brief`, `dm_complete_resolve` (0.17) | `resolveProvider` + `completionItem/resolve` |
 | Completion ranking + opt-in cap | `CompletionResult.Truncated`, scope-distance order | `dm_set_completion_limit` (0.18), `truncated` | `isIncomplete` + `sortText` |
+| Per-item declared type + initial value | `CompletionItem.DeclaredType`, `.InitialValue` | `dm_complete_at` `type` / `value` (0.21) | `completion`, nonstandard `type` / `value` |
+| Go-to-type-definition | `DefinitionService.TypeDefinitionAt` | `dm_type_definition_at` (0.19) | `typeDefinition` |
+| What-overrides-this | `ReferenceService`, `kind: override` | `dm_query_json` `references` (0.14) | `implementation` |
+| Folding ranges | `FoldingService` | `dm_folding_ranges` (0.19) | `foldingRange` |
+| Document links (`#include`) | `DocumentLinkService` | `dm_document_links` (0.19) | `documentLink` |
+| Is this file in the project | `Workspace.IsFileInProject` | `dm_file_in_project` (0.19) | `dm/fileInProject` |
+| Standalone (no `.dme`) analysis | `Workspace.OpenStandalone`, `GetTreeFor` | `dm_workspace_open_standalone` (0.20) | falls back automatically when no `.dme` is found |
+| `.dme` tickmarks (tick/untick) | `DmeIncludeBlock`, `Workspace.TickFile`/`UntickFile` | `dm_dme_is_ticked`, `dm_dme_tick`, `dm_dme_untick` (0.20) | `dm/tickFile`, `dm/untickFile` + the client's toggle command |
+| Workspace-symbol kind filters | `WorkspaceSymbolService` (`var/`, `proc/`, `verb/`, `#`) | `dm_workspace_symbols` (0.8) — filters ride in the query string | `workspace/symbol` |
+| Object-tree panel | `TreeQueryService` | `dm_query_json` (0.11) | `dm/objectTree` + the client's Explorer view |
 | `.dmi` icon states | ⬜ M8, unscheduled | ⬜ | ⬜ |
+
+**No ABI gaps remain.** The three editor-shaped rows — type-definition, folding, document links —
+were briefly blank on the reasoning that no in-process consumer had asked; the user asked, and
+they went in at 0.19 alongside `dm_file_in_project`. The one remaining blank is `.dmi`, which is
+M8 and is a gap on every surface rather than a deliberate omission on one.
 
 Positions: the ABI and CLI speak both encodings by parameter; LSP negotiates and uses UTF-16.
 CLI lines/columns are 1-based, ABI and LSP 0-based.

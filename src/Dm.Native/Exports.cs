@@ -239,7 +239,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             System.Collections.Generic.IReadOnlyList<InlayHint> hints = InlayHintService.HintsFor(
-                ws.GetObjectTree(), document, startLine, endLine, (PositionEncoding)encoding);
+                ws.GetTreeFor(path), document, startLine, endLine, (PositionEncoding)encoding);
 
             *outJson = NativeStrings.Allocate(InlayHintJson.Write(hints));
             return Ok();
@@ -247,6 +247,261 @@ internal static unsafe class Exports
         catch (Exception ex)
         {
             return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Opens a workspace with no <c>.dme</c>: every file is its own single-file project.
+    /// Added in ABI 0.20.
+    /// </summary>
+    /// <remarks>
+    /// For a host with no project to point at — a single file, a folder with no <c>.dme</c>.
+    /// Everything per-file still works, and each file resolves against the builtins plus itself.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_workspace_open_standalone")]
+    public static int WorkspaceOpenStandalone(byte* rootDirectoryUtf8, IntPtr* outWorkspace)
+    {
+        if (outWorkspace is null)
+            return Fail(DmStatus.InvalidArgument, "out_workspace is null");
+
+        *outWorkspace = IntPtr.Zero;
+
+        try
+        {
+            string? root = NativeStrings.Read(rootDirectoryUtf8);
+            if (string.IsNullOrWhiteSpace(root))
+                return Fail(DmStatus.InvalidArgument, "root directory is null or empty");
+
+            *outWorkspace = HandleTable.Alloc(Workspace.OpenStandalone(root));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>Whether DreamMaker's include block lists this file. Added in ABI 0.20.</summary>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_dme_is_ticked")]
+    public static int DmeIsTicked(IntPtr workspace, byte* filePath)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return -1;
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return -1;
+
+            return ws.IsFileTicked(path) ? 1 : 0;
+        }
+        catch (Exception ex)
+        {
+            Fail(DmStatus.Internal, ex.Message);
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// The edit that adds a file to the <c>.dme</c>'s include block. Added in ABI 0.20.
+    /// </summary>
+    /// <remarks>
+    /// Returns the edit rather than writing the file, because the <c>.dme</c> is usually open in
+    /// the editor that asked and often dirty. Push it as a buffer first if you hold unsaved
+    /// changes: offsets index the text this workspace currently sees.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_dme_tick")]
+    public static int DmeTick(IntPtr workspace, byte* filePath, byte** outJson)
+        => DmeEditExport(workspace, filePath, outJson, ticking: true);
+
+    /// <summary>The edit that removes a file from the include block. Added in ABI 0.20.</summary>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_dme_untick")]
+    public static int DmeUntick(IntPtr workspace, byte* filePath, byte** outJson)
+        => DmeEditExport(workspace, filePath, outJson, ticking: false);
+
+    private static int DmeEditExport(IntPtr workspace, byte* filePath, byte** outJson, bool ticking)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Dm.Core.Includes.DmeEdit? edit = ticking
+                ? ws.TickFile(path, out Dm.Core.Includes.DmeEditRefusal refusal)
+                : ws.UntickFile(path, out refusal);
+
+            *outJson = NativeStrings.Allocate(EditorJson.WriteDmeEdit(edit, refusal));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Where the TYPE of the symbol at a position is declared. Added in ABI 0.19.
+    /// </summary>
+    /// <remarks>
+    /// One hop past <c>dm_definition_at</c>: on <c>var/mob/test/M</c> that goes to the variable,
+    /// this goes to <c>/mob/test</c>. Only a written type is followed — an inferred one would send
+    /// a caret into a guess.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_type_definition_at")]
+    public static int TypeDefinitionAt(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            IReadOnlyList<DefinitionLocation> found = DefinitionService.TypeDefinitionAt(
+                ws.GetTreeFor(path), document, line, character, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(DefinitionJson.Write(ws, found, (PositionEncoding)encoding));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Foldable regions for a file. Added in ABI 0.19.
+    /// </summary>
+    /// <remarks>
+    /// Built from the AST rather than from indentation: DM's two block syntaxes nest freely, so
+    /// folding by leading whitespace drops everything written inside braces. Needs no object tree.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_folding_ranges")]
+    public static int FoldingRanges(IntPtr workspace, byte* filePath, byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            *outJson = NativeStrings.Allocate(
+                EditorJson.WriteFolding(FoldingService.RangesFor(document)));
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Resolved <c>#include</c> targets in a file, for clickable navigation. Added in ABI 0.19.
+    /// </summary>
+    /// <remarks>
+    /// Per file and off the token stream, so a link works before the project has been walked and a
+    /// directive inside a comment is correctly not one. An unresolved include yields no link.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_document_links")]
+    public static int DocumentLinks(IntPtr workspace, byte* filePath, int encoding, byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            *outJson = NativeStrings.Allocate(EditorJson.WriteLinks(
+                DocumentLinkService.LinksFor(document, ws.LibraryRoot),
+                document.Text,
+                (PositionEncoding)encoding));
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Whether the <c>.dme</c>'s include walk reaches this file. Added in ABI 0.19.
+    /// </summary>
+    /// <remarks>
+    /// 1 in the project, 0 outside it, -1 on a bad handle. A pushed buffer for a path the project
+    /// does not include succeeds and then resolves nothing, which is indistinguishable from a bug
+    /// in the client — this is how a client tells the two apart and says so.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_file_in_project")]
+    public static int FileInProject(IntPtr workspace, byte* filePath)
+    {
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return -1;
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return -1;
+
+            return ws.IsFileInProject(path) ? 1 : 0;
+        }
+        catch (Exception ex)
+        {
+            Fail(DmStatus.Internal, ex.Message);
+            return -1;
         }
     }
 
@@ -458,7 +713,7 @@ internal static unsafe class Exports
             ParseResult parse = document.Parse;
 
             List<Diagnostic> all = new(parse.Diagnostics);
-            all.AddRange(Binder.Bind(ws.GetObjectTree(), parse.Root, document.Path));
+            all.AddRange(Binder.Bind(ws.GetTreeFor(path), parse.Root, document.Path));
 
             StringBuilder json = new();
             json.Append("{\"diagnostics\":");
@@ -521,7 +776,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding,
+                ws.GetTreeFor(path), document, line, character, (PositionEncoding)encoding,
                 macros: ws.GetMacroTable());
 
             *outJson = NativeStrings.Allocate(DefinitionJson.Write(ws, found, (PositionEncoding)encoding));
@@ -569,7 +824,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             HoverResult? hover = HoverService.HoverAt(
-                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding,
+                ws.GetTreeFor(path), document, line, character, (PositionEncoding)encoding,
                 macros: ws.GetMacroTable());
 
             *outJson = NativeStrings.Allocate(
@@ -622,7 +877,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             SignatureHelpResult? help = SignatureHelpService.SignatureAt(
-                ws.GetObjectTree(), document, line, character, (PositionEncoding)encoding);
+                ws.GetTreeFor(path), document, line, character, (PositionEncoding)encoding);
 
             *outJson = NativeStrings.Allocate(SignatureJson.Write(help));
             return Ok();
@@ -754,7 +1009,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             CompletionResult result = CompletionService.CompleteAt(
-                ws.GetObjectTree(),
+                ws.GetTreeFor(path),
                 document,
                 line,
                 character,

@@ -362,7 +362,10 @@ static void test_completion(const fs::path &dir)
     }
     {
         std::ofstream out(dir / "complete.dm");
-        out << "/mob/test\n\tvar/base_var = 1\n";
+        // base_var is UNTYPED with an initialiser and friend is TYPED with none, so the two
+        // together pin "type" and "value" independently - a check on one var alone could pass
+        // with the pair swapped.
+        out << "/mob/test\n\tvar/base_var = 1\n\tvar/mob/test/friend\n";
         out << "/mob/test/special\n\tvar/subtype_var = 2\n";
         out << "/datum/unrelated\n\tvar/elsewhere = 3\n";
         out << "/proc/f()\n\tvar/mob/test/t = new\n\tt.\n";
@@ -375,7 +378,7 @@ static void test_completion(const fs::path &dir)
 
     char *json = nullptr;
     // Line 8 (0-based) is `\tt.`; character 3 is just past the dot.
-    check(dm_complete_at(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: call succeeds");
     check(json != nullptr, "complete: json returned");
 
@@ -389,13 +392,26 @@ static void test_completion(const fs::path &dir)
         check(doc.find("\"builtin\":") != std::string::npos, "complete: builtin flag present");
         check(doc.find("\"inferred\":true") == std::string::npos,
               "complete: a declared receiver marks nothing inferred");
+
+        // The item's OWN type and initialiser, so a client renders the list without re-parsing.
+        // base_var is `var/base_var = 1`: no declared type, value 1. DM has no `num` to name, so
+        // the empty type is the honest answer rather than a missing one.
+        check(doc.find("\"name\":\"base_var\",\"detail\":\"/mob/test\",\"kind\":1,\"builtin\":false,"
+                       "\"inferred\":false,\"type\":\"\",\"value\":\"1\"") != std::string::npos,
+              "complete: an untyped var carries its value and an empty type");
+
+        // friend is `var/mob/test/friend`: a declared type and no initialiser - the other way
+        // round, so neither field can be passing by accident.
+        check(doc.find("\"name\":\"friend\",\"detail\":\"/mob/test\",\"kind\":1,\"builtin\":false,"
+                       "\"inferred\":false,\"type\":\"/mob/test\",\"value\":\"\"") != std::string::npos,
+              "complete: a typed var carries its type and an empty value");
         dm_free(json);
     }
 
     // Line 11 (0-based) is `\tu.` — an UNTYPED local initialised with `new /mob/test`. The list
     // rides on inference dm.exe does not do, and every item says so.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 11, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 12, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: inferred-receiver call succeeds");
 
     if (json)
@@ -411,7 +427,7 @@ static void test_completion(const fs::path &dir)
     // Line 13 (0-based) is `\t.` — a bare leading dot is DM's return-value variable, not member
     // access, and the distinct context is what lets a client show nothing without guessing.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 13, 2, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 14, 2, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: bare-dot call succeeds");
 
     if (json)
@@ -427,7 +443,7 @@ static void test_completion(const fs::path &dir)
     // own var comes before the builtins it inherits; and a cap is off until asked for,
     // because a client filtering locally over a truncated list misses what is being typed.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "limit: uncapped call succeeds");
 
     if (json)
@@ -447,7 +463,7 @@ static void test_completion(const fs::path &dir)
     check(dm_set_completion_limit(ws, 3) == DM_OK, "limit: accepted");
 
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "limit: capped call succeeds");
 
     if (json)
@@ -464,7 +480,7 @@ static void test_completion(const fs::path &dir)
     // resolve fills in the one the user highlighted. A bare identifier on a real project
     // offers tens of thousands of items and the user reads one.
     json = nullptr;
-    check(dm_complete_brief(ws, "complete.dm", 8, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_brief(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "resolve: brief list succeeds");
 
     if (json)
@@ -478,7 +494,7 @@ static void test_completion(const fs::path &dir)
     }
 
     json = nullptr;
-    check(dm_complete_resolve(ws, "complete.dm", 8, 3, "base_var", DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_resolve(ws, "complete.dm", 9, 3, "base_var", DM_ENCODING_UTF16, &json) == DM_OK,
           "resolve: resolving one item succeeds");
 
     if (json)
@@ -490,18 +506,18 @@ static void test_completion(const fs::path &dir)
 
     // A name the position does not offer is an empty answer, not an error.
     json = nullptr;
-    check(dm_complete_resolve(ws, "complete.dm", 8, 3, "no_such_item", DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_resolve(ws, "complete.dm", 9, 3, "no_such_item", DM_ENCODING_UTF16, &json) == DM_OK,
           "resolve: an unknown item still succeeds");
     dm_free(json);
 
     char *rejected = reinterpret_cast<char *>(0x1);
-    check(dm_complete_resolve(ws, "complete.dm", 8, 3, nullptr, DM_ENCODING_UTF16, &rejected)
+    check(dm_complete_resolve(ws, "complete.dm", 9, 3, nullptr, DM_ENCODING_UTF16, &rejected)
               == DM_ERR_INVALID_ARG,
           "resolve: a null name is rejected");
     check(rejected == nullptr, "resolve: out-param cleared on failure");
 
     rejected = reinterpret_cast<char *>(0x1);
-    check(dm_complete_at(ws, "complete.dm", 8, 3, 99, &rejected) == DM_ERR_INVALID_ARG,
+    check(dm_complete_at(ws, "complete.dm", 9, 3, 99, &rejected) == DM_ERR_INVALID_ARG,
           "complete: unknown encoding rejected");
     check(rejected == nullptr, "complete: out-param cleared on failure");
 
@@ -684,7 +700,9 @@ static void test_hover(const fs::path &dir)
     {
         const std::string doc(json);
         check(doc.find("/atom/loc") != std::string::npos, "hover: a builtin member resolves");
-        check(doc.find("var/loc") != std::string::npos, "hover: its signature is rendered");
+        // `var/atom/loc`, not `var/loc`: builtin vars carry a compiler-probed declared type as of
+        // the table that took them from 1 recorded to 39, so the rendering names what loc holds.
+        check(doc.find("var/atom/loc") != std::string::npos, "hover: its signature is rendered");
         dm_free(json);
     }
 
@@ -751,16 +769,156 @@ static void test_references(const fs::path &dir)
         dm_free(json);
     }
 
-    // The readiness signal. A tree exists here - the queries above built it - and
-    // invalidation is exactly what drops it, so the boolean tracks both edges.
-    check(dm_tree_ready(ws) == 1, "ready: a queried workspace reports a tree");
+    // The editor surfaces, added at 0.19 because the LSP had them and the C ABI did not.
+    json = nullptr;
+    check(dm_folding_ranges(ws, "refs.dm", &json) == DM_OK, "editor: folding succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"ranges\":") != std::string::npos, "editor: folding has a ranges array");
+        check(doc.find("\"kind\":\"region\"") != std::string::npos, "editor: kind is a word");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_document_links(ws, "refs.dme", DM_ENCODING_UTF16, &json) == DM_OK,
+          "editor: document links succeed");
+
+    if (json)
+    {
+        check(std::string(json).find("refs.dm") != std::string::npos,
+              "editor: the include resolves to a target");
+        dm_free(json);
+    }
+
+    // refs.dm declares `var/mob/guy/g` - a written type, so its type-definition is /mob/guy.
+    // Line 5 (0-based) is `\tvar/mob/guy/g = new`; character 15 is inside `g`.
+    json = nullptr;
+    check(dm_type_definition_at(ws, "refs.dm", 5, 15, DM_ENCODING_UTF16, &json) == DM_OK,
+          "editor: type definition succeeds");
+    dm_free(json);
+
+    // The out-of-project signal: refs.dm is included, a scratch path is not, and the
+    // difference is invisible to a client without this call.
+    check(dm_file_in_project(ws, "refs.dm") == 1, "editor: an included file reports in-project");
+    check(dm_file_in_project(ws, "notinproject.dm") == 0,
+          "editor: a file the .dme never includes reports out-of-project");
+
+    // A buffer for that path still SUCCEEDS - which is the whole confusion this answers.
+    const char *orphan = "/mob/orphan\n\tvar/hp = 1\n";
+    check(dm_set_buffer(ws, "notinproject.dm", orphan, (int32_t)std::strlen(orphan)) == DM_OK,
+          "editor: pushing an out-of-project buffer still succeeds");
+    check(dm_file_in_project(ws, "notinproject.dm") == 0,
+          "editor: and it is still reported out-of-project");
+    check(dm_close_buffer(ws, "notinproject.dm") == DM_OK, "editor: orphan buffer closed");
+
+    // The .dme tickmarks. refs.dme has no BEGIN_INCLUDE block, so both edits refuse with a
+    // reason rather than inventing one - which is the behaviour a client has to handle.
+    json = nullptr;
+    check(dm_dme_tick(ws, "newfile.dm", &json) == DM_OK, "dme: tick succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"refusal\":\"noBlock\"") != std::string::npos,
+              "dme: a .dme with no block refuses rather than inventing one");
+        dm_free(json);
+    }
+
+    check(dm_dme_is_ticked(ws, "refs.dm") == 0, "dme: no block means nothing reads as ticked");
+
+    // A real block: tick lands as a zero-length insert carrying the whole line.
+    const fs::path ticked = dir / "ticked.dme";
+    {
+        std::ofstream out(ticked);
+        out << "// BEGIN_INCLUDE\r\n#include \"src\\a.dm\"\r\n// END_INCLUDE\r\n";
+    }
+
+    dm_workspace tw = nullptr;
+    check(dm_workspace_open(ticked.string().c_str(), &tw) == DM_OK, "dme: block workspace opens");
+
+    check(dm_dme_is_ticked(tw, "src\\a.dm") == 1, "dme: an entry reads as ticked");
+    check(dm_dme_is_ticked(tw, "src/a.dm") == 1, "dme: separators normalise");
+    check(dm_dme_is_ticked(tw, "src\\b.dm") == 0, "dme: a missing entry is not ticked");
+
+    json = nullptr;
+    check(dm_dme_tick(tw, "src\\b.dm", &json) == DM_OK, "dme: tick into a real block succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"refusal\":\"none\"") != std::string::npos, "dme: the tick is allowed");
+        check(doc.find("\"length\":0") != std::string::npos,
+              "dme: a tick is a zero-length insert, so it applies to a dirty buffer");
+        check(doc.find("src\\\\b.dm") != std::string::npos, "dme: the line carries the path");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_dme_untick(tw, "src\\a.dm", &json) == DM_OK, "dme: untick succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"refusal\":\"none\"") != std::string::npos, "dme: the untick is allowed");
+        check(doc.find("\"length\":0") == std::string::npos, "dme: an untick removes a span");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_dme_untick(tw, "src\\nothere.dm", &json) == DM_OK, "dme: unticking a missing file succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"refusal\":\"noChange\"") != std::string::npos,
+              "dme: and reports noChange rather than an error");
+        dm_free(json);
+    }
+
+    dm_workspace_close(tw);
+
+    // A workspace with no .dme at all: analysis stays on, per file.
+    dm_workspace sw = nullptr;
+    check(dm_workspace_open_standalone(dir.string().c_str(), &sw) == DM_OK,
+          "standalone: opens with no .dme");
+    check(dm_file_in_project(sw, "refs.dm") == 0, "standalone: nothing is in a project");
+
+    const char *lone = "/mob/lone\n\tvar/hp = 1\n\tproc/f()\n\t\treturn hp\n";
+    check(dm_set_buffer(sw, "lone.dm", lone, (int32_t)std::strlen(lone)) == DM_OK,
+          "standalone: buffer accepted");
+
+    json = nullptr;
+    check(dm_document_symbols(sw, "lone.dm", DM_ENCODING_UTF16, &json) == DM_OK,
+          "standalone: the outline works");
+    dm_free(json);
+
+    // The point of it: the file's OWN declarations resolve, so it is not half-broken.
+    json = nullptr;
+    check(dm_complete_at(sw, "lone.dm", 3, 9, DM_ENCODING_UTF16, &json) == DM_OK,
+          "standalone: completion works");
+
+    if (json)
+    {
+        check(std::string(json).find("\"name\":\"hp\"") != std::string::npos,
+              "standalone: a lone file resolves its own members");
+        dm_free(json);
+    }
+
+    dm_workspace_close(sw);
+
+    // The readiness signal. These checks share one workspace with everything above, so they
+    // establish the state they assert instead of inheriting it - closing a buffer legitimately
+    // drops the tree, and a check that depends on invisible prior ordering breaks the moment a
+    // section is added before it. That has now happened twice.
+    check(dm_build_tree(ws) == DM_OK, "ready: dm_build_tree succeeds");
+    check(dm_tree_ready(ws) == 1, "ready: a built workspace reports a tree");
+    check(dm_build_tree(ws) == DM_OK, "ready: warming a warm tree is a no-op");
 
     check(dm_invalidate(ws) == DM_OK, "references: dm_invalidate succeeds");
 
     check(dm_tree_ready(ws) == 0, "ready: invalidation drops it to 0");
     check(dm_build_tree(ws) == DM_OK, "ready: dm_build_tree warms it back");
     check(dm_tree_ready(ws) == 1, "ready: and the tree reports built");
-    check(dm_build_tree(ws) == DM_OK, "ready: warming a warm tree is a no-op");
 
     json = nullptr;
     check(dm_query_json(ws, "{\"query\":\"references\",\"path\":\"/mob/guy/hp\"}", &json) == DM_OK,

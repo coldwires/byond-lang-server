@@ -147,6 +147,78 @@ public class DefinitionServiceTests
         Assert.Empty(Definition("/obj/item\n|\n"));
     }
 
+    /// <summary>
+    /// Go-to-type-definition is one hop past definition: on a typed local, the caret lands on the
+    /// TYPE rather than on the variable.
+    /// </summary>
+    [Fact]
+    public void A_typed_local_resolves_to_its_type()
+    {
+        const string SourceWithCaret =
+            "/mob/test\n\tvar/hp = 1\n/proc/f()\n\tvar/mob/test/M = new\n\treturn M|.hp\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret - 1);
+
+        DefinitionLocation location = Assert.Single(DefinitionService.TypeDefinitionAt(
+            tree, document, position.Line, position.Character));
+
+        Assert.Equal("/mob/test", location.Detail);
+    }
+
+    /// <summary>
+    /// An INFERRED type is not followed. Inference exists so completion can serve a half-written
+    /// declaration and knowingly goes past what dm.exe checks; sending a caret there would be
+    /// navigation into a guess.
+    /// </summary>
+    [Fact]
+    public void An_inferred_type_is_not_followed()
+    {
+        const string SourceWithCaret =
+            "/mob/test\n\tvar/hp = 1\n/proc/f()\n\tvar/M = new /mob/test\n\treturn M|.hp\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret - 1);
+
+        Assert.Empty(DefinitionService.TypeDefinitionAt(
+            tree, document, position.Line, position.Character));
+    }
+
+    /// <summary>A member's declared type is followed through its receiver.</summary>
+    [Fact]
+    public void A_typed_member_resolves_to_its_type()
+    {
+        const string SourceWithCaret =
+            "/obj/gun\n\tvar/ammo = 1\n/mob/test\n\tvar/obj/gun/weapon\n"
+            + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M.weap|on\n";
+
+        int caret = SourceWithCaret.IndexOf('|');
+        string source = SourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+
+        DefinitionLocation location = Assert.Single(DefinitionService.TypeDefinitionAt(
+            tree, document, position.Line, position.Character));
+
+        Assert.Equal("/obj/gun", location.Detail);
+    }
+
     /// <summary>A macro use goes to its <c>#define</c>.</summary>
     [Fact]
     public void A_macro_use_resolves_to_its_define()

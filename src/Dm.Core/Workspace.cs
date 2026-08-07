@@ -32,6 +32,11 @@ public sealed class Workspace : IDisposable
 
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParseResult, TreeContribution>
         _contributions = new();
+
+    /// <summary>Single-file trees for documents the project does not include. See GetTreeFor.</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParseResult, ObjectTree>
+        _standalone = new();
+
     private bool _disposed;
 
     private Workspace(string dmePath, string rootDirectory, IReadOnlyList<string>? defines)
@@ -87,6 +92,17 @@ public sealed class Workspace : IDisposable
     /// </remarks>
     public int CompletionLimit { get; set; }
 
+    /// <summary>
+    /// Where <c>#include &lt;vendor/name&gt;</c> resolves from. Null uses BYOND's per-user default.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so a document link can resolve a library include the same way the walk does. The
+    /// reference says the system lib dir is searched before the per-user one; we only check the
+    /// user dir, which is the known gap recorded in PLAN §3.
+    /// </remarks>
+    public string? LibraryRoot
+        => new IncludeOptions().ResolveLibraryRoot();
+
     /// <summary>Absolute path to the <c>.dme</c> this workspace was opened from.</summary>
     public string DmePath { get; }
 
@@ -106,6 +122,32 @@ public sealed class Workspace : IDisposable
     /// <exception cref="ArgumentException">The path is empty or has no parent directory.</exception>
     /// <exception cref="FileNotFoundException">The <c>.dme</c> does not exist.</exception>
     public static Workspace Open(string dmePath) => Open(dmePath, null);
+
+    /// <summary>
+    /// Opens a workspace with <b>no</b> <c>.dme</c>: every file is its own single-file project.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a host that has no project to point at — VS Code's single-file mode, a folder with no
+    /// <c>.dme</c> in it, a scratch buffer. Without this the only honest answer was to refuse to
+    /// open at all, which left an editor with no analysis rather than analysis of one file.
+    /// </para>
+    /// <para>
+    /// There is no include walk, so there is no object tree beyond the BYOND builtins, and
+    /// <see cref="IsFileInProject"/> is false for everything. <see cref="GetTreeFor"/> then does
+    /// the real work: builtins plus the file being asked about.
+    /// </para>
+    /// </remarks>
+    public static Workspace OpenStandalone(string rootDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(rootDirectory))
+            throw new ArgumentException("root directory is empty", nameof(rootDirectory));
+
+        return new Workspace(string.Empty, System.IO.Path.GetFullPath(rootDirectory), null);
+    }
+
+    /// <summary>True when this workspace has a <c>.dme</c> and therefore a project to walk.</summary>
+    public bool HasEnvironmentFile => DmePath.Length > 0;
 
     /// <summary>Opens a workspace, defining macros before the walk as <c>dm.exe -D</c> would.</summary>
     public static Workspace Open(string dmePath, IReadOnlyList<string>? defines)
@@ -186,6 +228,15 @@ public sealed class Workspace : IDisposable
         ObjectTree tree = new();
         Builtins.Seed(tree);
 
+        // No .dme means no include walk and so no project: the builtins are the whole tree, and
+        // every file resolves through GetTreeFor as its own compilation unit.
+        if (!HasEnvironmentFile)
+        {
+            _parses = System.Array.Empty<(string, ParseResult)>();
+            _tree = tree;
+            return tree;
+        }
+
         // The preprocessed stream, not each file's own text, so a declaration produced by a macro is
         // the declaration it expands to rather than the macro's name. Reading per file cannot see
         // through `SUBSYSTEM_DEF(air)` or `VAR_PRIVATE/hidden` at all.
@@ -263,6 +314,138 @@ public sealed class Workspace : IDisposable
     /// <summary>Whether a tree exists right now — the readiness signal, costing nothing to ask.</summary>
     public bool IsTreeBuilt => _tree is not null;
 
+    // -- the .dme's tickmarks ----------------------------------------------
+
+    /// <summary>
+    /// The <c>.dme</c>'s text, honouring a pushed buffer.
+    /// </summary>
+    /// <remarks>
+    /// Through the document store on purpose: an IDE editing tickmarks usually has the
+    /// <c>.dme</c> open, often with unsaved changes, and editing the disk copy underneath it would
+    /// lose them.
+    /// </remarks>
+    private SourceText? EnvironmentText()
+        => HasEnvironmentFile && TryGetDocument(DmePath, out Document dme) ? dme.Text : null;
+
+    /// <summary>
+    /// The path as the <c>.dme</c> block spells it: relative to the project root, backslashes.
+    /// </summary>
+    private string RelativeToRoot(string path)
+    {
+        string full = NormalisePath(path);
+
+        return System.IO.Path.GetRelativePath(RootDirectory, full).Replace('/', '\\');
+    }
+
+    /// <summary>Whether DreamMaker's include block lists this file.</summary>
+    public bool IsFileTicked(string path)
+        => EnvironmentText() is { } dme && DmeIncludeBlock.IsTicked(dme, RelativeToRoot(path));
+
+    /// <summary>
+    /// The edit that adds this file to the <c>.dme</c>'s block, or null with a reason.
+    /// </summary>
+    /// <remarks>
+    /// Returned rather than applied: the caller owns the buffer. Offsets index the <c>.dme</c>'s
+    /// text as this workspace currently sees it, so apply it against the same text — push the
+    /// buffer first if you are holding unsaved changes.
+    /// </remarks>
+    public DmeEdit? TickFile(string path, out DmeEditRefusal refusal)
+    {
+        if (EnvironmentText() is not { } dme)
+        {
+            refusal = DmeEditRefusal.NoBlock;
+            return null;
+        }
+
+        return DmeIncludeBlock.Tick(dme, RelativeToRoot(path), out refusal);
+    }
+
+    /// <summary>The edit that removes this file from the block, or null with a reason.</summary>
+    public DmeEdit? UntickFile(string path, out DmeEditRefusal refusal)
+    {
+        if (EnvironmentText() is not { } dme)
+        {
+            refusal = DmeEditRefusal.NoBlock;
+            return null;
+        }
+
+        return DmeIncludeBlock.Untick(dme, RelativeToRoot(path), out refusal);
+    }
+
+    /// <summary>
+    /// The tree to answer questions about one file with: the project's, or a standalone one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A file the <c>.dme</c> never includes is not part of the program, so the project tree knows
+    /// nothing it declares — and answering from that tree makes an ordinary situation (a scratch
+    /// file, a snippet, something written but not yet <c>#include</c>d) look like a broken editor:
+    /// symbols from project files resolve while the file's own procs do not.
+    /// </para>
+    /// <para>
+    /// So an outside file gets its own compilation unit — the BYOND builtins plus itself — and
+    /// resolves correctly <i>as a single-file project</i>, which is what it is. It deliberately
+    /// cannot see the project's declarations: the compiler would not either, and inventing that
+    /// reach would be the one thing this codebase does not do.
+    /// </para>
+    /// <para>
+    /// Cached against the <see cref="ParseResult"/> instance rather than the path, so an edit
+    /// rebuilds it and an unchanged buffer does not. The weak table drops entries when a parse is
+    /// replaced, so closed files cost nothing.
+    /// </para>
+    /// </remarks>
+    public ObjectTree GetTreeFor(string path, CancellationToken cancellationToken = default)
+    {
+        if (IsFileInProject(path, cancellationToken))
+            return GetObjectTree(cancellationToken);
+
+        Document document = GetDocument(path);
+
+        if (_standalone.TryGetValue(document.Parse, out ObjectTree? cached))
+            return cached;
+
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+        TypeTreeBuilder.AddFile(tree, document.Path, document.Parse);
+
+        _standalone.Add(document.Parse, tree);
+        return tree;
+    }
+
+    /// <summary>
+    /// Whether the <c>.dme</c>'s include walk actually reaches this file.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The answer to a confusion that has cost real debugging time: <see cref="SetBuffer"/> accepts
+    /// any path and succeeds, but a buffer only joins the object tree if the walk asks for that
+    /// path. A file outside the project therefore analyses fine for anything per-file — outline,
+    /// classification, syntax diagnostics — while its own declarations resolve nowhere, which
+    /// looks exactly like a broken buffer push from the client's side.
+    /// </para>
+    /// <para>
+    /// Cheap by construction, and deliberately not a search: the walk already produced this list,
+    /// so the question is free once a tree exists and forces one build if not. Asking it before
+    /// choosing a <c>.dme</c> would be the expensive direction.
+    /// </para>
+    /// </remarks>
+    public bool IsFileInProject(string path, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !HasEnvironmentFile)
+            return false;
+
+        string key = NormalisePath(path);
+
+        foreach ((string file, ParseResult _) in GetProjectParses(cancellationToken))
+        {
+            if (PathComparer.Equals(file, key))
+                return true;
+        }
+
+        // The .dme itself is the root of the walk rather than an entry in it.
+        return PathComparer.Equals(DmePath, key);
+    }
+
     /// <summary>
     /// Drops every derived answer, so the next question rebuilds against what is on disk now.
     /// </summary>
@@ -320,7 +503,7 @@ public sealed class Workspace : IDisposable
     /// </remarks>
     public MacroTable? GetMacroTable(CancellationToken cancellationToken = default)
     {
-        if (_macros is null)
+        if (_macros is null && HasEnvironmentFile)
             GetObjectTree(cancellationToken);
 
         return _macros;

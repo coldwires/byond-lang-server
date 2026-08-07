@@ -49,6 +49,17 @@ public sealed class VarSymbol
     /// <summary>True for a BYOND builtin, which has no declaration site in any file.</summary>
     public bool IsBuiltin { get; init; }
 
+    /// <summary>
+    /// The initialiser as the author wrote it, or empty when there is none.
+    /// </summary>
+    /// <remarks>
+    /// Rendered from the source span rather than from the expression tree, for the same reason a
+    /// parameter's default is: a construct we model loosely still shows the author's own text, and
+    /// the text cannot drift from the declaration the way a rendering can. Not evaluated — <c>5 + 1</c>
+    /// stays <c>5 + 1</c> until there is a constant evaluator to fold it.
+    /// </remarks>
+    public string InitialValue { get; init; } = string.Empty;
+
     public bool IsConst => Modifiers.Contains("const");
 
     public override string ToString() => DeclaredType is { } type ? $"{type}/{Name}" : Name;

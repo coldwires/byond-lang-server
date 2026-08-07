@@ -3,6 +3,12 @@ name: CI
 # The managed tests run once - they are platform-independent - while the native job runs per RID,
 # because NativeAOT produces a separate binary for each and the C ABI is the thing most likely to
 # break in a platform-specific way. See PLAN.md §M0.
+#
+# The byond-fixtures job is the third axis and the only one that runs the REAL COMPILER. Without it
+# CI asserts that our parser still agrees with our parser: the `test` job runs on Linux, so every
+# compiler-backed fixture takes its SkippableFact path and the whole tests/fixtures suite - the
+# goldens, the runtime world, the probe ratchet - reports as skipped. That is the half which can
+# catch a BYOND release changing what DM means, and it was local-only until it was wired up here.
 
 on:
   push:
@@ -13,6 +19,12 @@ on:
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  # The compiler the fixtures are recorded against. Pinned rather than floating: a job that always
+  # fetched the newest build would go red on BYOND's release schedule instead of on a commit, and
+  # the failure would name no change of ours. Bumping this is a deliberate edit, and it comes with
+  # re-reading what moved and updating tests/fixtures/BYOND_VERSION.txt in the same change - the
+  # procedure is in tests/fixtures/README.md.
+  BYOND_BUILD: '516.1686'
 
 jobs:
   test:
@@ -30,6 +42,105 @@ jobs:
 
       - name: Test
         run: dotnet test -c Release --no-build --verbosity normal
+
+  # Everything that needs the real dm.exe. Windows-only because BYOND is, and no runner ships it -
+  # so the standalone zip is fetched and DM_BYOND_BIN points at it, exactly as a local run against
+  # a build you have not installed does.
+  byond-fixtures:
+    name: fixtures against the real compiler
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # The standalone zip needs no installer, no licence prompt and no registry: it expands to a
+      # byond/bin holding dm.exe and dreamdaemon.exe, which is all the suite wants. Cached because
+      # it is ~9 MB and never changes for a given build number.
+      - name: Cache BYOND ${{ env.BYOND_BUILD }}
+        id: byond-cache
+        uses: actions/cache@v4
+        with:
+          path: byond-dist
+          key: byond-${{ env.BYOND_BUILD }}
+
+      - name: Fetch BYOND ${{ env.BYOND_BUILD }}
+        if: steps.byond-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $build = "${env:BYOND_BUILD}"
+          $url = "https://www.byond.com/download/build/$($build.Split('.')[0])/${build}_byond.zip"
+          Write-Host "fetching $url"
+          Invoke-WebRequest -Uri $url -OutFile byond.zip -UseBasicParsing
+          Expand-Archive byond.zip -DestinationPath byond-dist -Force
+
+      # Fail here with a clear message rather than letting every fixture report "no dm.exe" and
+      # pass as a skip, which is the one outcome this job exists to prevent. A skip is honest
+      # locally and is a silent hole here, so the compiler's presence is asserted rather than
+      # assumed, and its VERSION is checked too - a cache or a moved zip serving a different build
+      # would otherwise measure the wrong compiler against goldens recorded for this one.
+      - name: Check the compiler is the build we asked for
+        shell: pwsh
+        run: |
+          # dm.exe with no arguments prints its banner and usage and then exits 1. That is not a
+          # failure, but GitHub's pwsh aborts a step on a native non-zero exit and again on a
+          # non-zero $LASTEXITCODE at the end - so both are neutralised deliberately.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $ErrorActionPreference = 'Continue'
+
+          $bin = Join-Path (Get-Location) 'byond-dist\byond\bin'
+          $dm = Join-Path $bin 'dm.exe'
+          if (-not (Test-Path $dm)) {
+            Write-Host "::error::no dm.exe under $bin - the standalone zip's layout changed"
+            exit 1
+          }
+
+          $banner = & $dm 2>$null
+          $hit = $banner | Select-String -Pattern 'version\s+([0-9][0-9.]*)' | Select-Object -First 1
+          if (-not $hit) {
+            Write-Host "::error::could not read a version out of dm.exe's banner"
+            exit 1
+          }
+
+          $reported = $hit.Matches[0].Groups[1].Value
+          Write-Host "dm.exe reports $reported, expected $env:BYOND_BUILD"
+          if ($reported -ne $env:BYOND_BUILD) {
+            Write-Host "::error::fetched build is $reported but BYOND_BUILD says $env:BYOND_BUILD"
+            exit 1
+          }
+
+          Add-Content -Path $env:GITHUB_ENV -Value "DM_BYOND_BIN=$bin"
+          exit 0
+
+      # DM_BYOND_BIN is read by FixtureTests and by `dmc diagdiff`, so this run compiles, runs and
+      # diffs against the fetched build and nothing falls back to an install that is not there.
+      #
+      # The whole managed suite runs, not just the fixtures: on Linux the compiler-backed cases
+      # skip, so this is the only place their assertions are ever executed.
+      - name: Test with the real compiler
+        run: dotnet test -c Release --verbosity normal
+
+      # xunit covers the compile-and-diff half. run.ps1 adds the one thing it is a poor fit for:
+      # running the compiled world under DreamDaemon. Every push and every PR pays for this,
+      # because it is the tier that catches a BYOND release changing what DM MEANS rather than
+      # what it accepts - a silent behaviour change shows up here as a wrong value and nowhere
+      # else.
+      # The 252-probe ratchet rides along on pushes to main and on demand, and is left off pull
+      # requests: it is 252 compiles plus 252 diagdiffs, minutes rather than seconds, and it is a
+      # coverage FLOOR rather than a correctness gate - it fails only if agreement drops. A PR
+      # that lowers it fails at merge, on the commit that did it. One invocation either way, since
+      # run.ps1 -Probes does everything the plain run does and then some.
+      - name: Runtime world${{ github.event_name != 'pull_request' && ' and the probe ratchet' || '' }}
+        shell: pwsh
+        run: |
+          # not $args - that is an automatic variable and assigning to it is a trap
+          $runArgs = @('-Byond', $env:DM_BYOND_BIN)
+          if ('${{ github.event_name }}' -ne 'pull_request') { $runArgs += '-Probes' }
+
+          & .\tests\fixtures\run.ps1 @runArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   native:
     name: ${{ matrix.rid }}

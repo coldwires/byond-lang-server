@@ -125,10 +125,10 @@ public static class TypeTreeBuilder
             }
 
             case VarDeclarationSyntax variable:
-                AddVar(contribution, file, variable, enclosing);
+                AddVar(contribution, file, text, variable, enclosing);
 
                 foreach (VarDeclarationSyntax sibling in variable.Siblings)
-                    AddVar(contribution, file, sibling, enclosing);
+                    AddVar(contribution, file, text, sibling, enclosing);
 
                 break;
 
@@ -139,7 +139,8 @@ public static class TypeTreeBuilder
     }
 
     private static void AddVar(
-        TreeContribution contribution, string file, VarDeclarationSyntax variable, TypePath enclosing)
+        TreeContribution contribution, string file, SourceText text, VarDeclarationSyntax variable,
+        TypePath enclosing)
     {
         // What the leading segments mean depends on how the variable was introduced. Under a `var`
         // they are its declared type and it belongs to the enclosing type; without one this is a
@@ -167,13 +168,24 @@ public static class TypeTreeBuilder
             ? TypePath.FromSegments(written.Segments)
             : null;
 
+        // The initialiser AS WRITTEN, rendered from source rather than from the tree, for the same
+        // reason a parameter's default is: an expression we model loosely still shows the author's
+        // own text. It is what a client would otherwise re-parse the file to display, and for a
+        // `const` it is the whole meaning of the declaration.
+        string initialValue = variable.Initializer is { } initializer
+            ? text.ToString(initializer.Span)
+            : string.Empty;
+
         contribution.RecordVar(
             owner,
             new VarSymbol(
                 variable.Name,
                 declaredType,
                 variable.Modifiers,
-                new DeclarationSite(file, variable.Span, variable.NameSpan)),
+                new DeclarationSite(file, variable.Span, variable.NameSpan))
+            {
+                InitialValue = initialValue,
+            },
             parentType,
             relativeParentType);
     }

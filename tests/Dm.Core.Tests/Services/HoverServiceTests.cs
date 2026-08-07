@@ -137,7 +137,11 @@ public class HoverServiceTests
 
         Assert.NotNull(hover);
         Assert.Equal("/atom/loc", hover!.Detail);
-        Assert.Equal("var/loc", hover.Signature);
+
+        // The DECLARED TYPE is in the rendering because `loc` finally has one. Builtin vars
+        // carried no type at all until the compiler-probed table landed — one of 380 did — so
+        // this read `var/loc` and a reader learned nothing about what `loc` holds.
+        Assert.Equal("var/atom/loc", hover.Signature);
 
         Assert.Empty(DefinitionService.DefinitionAt(
             tree, document, position.Line, position.Character));

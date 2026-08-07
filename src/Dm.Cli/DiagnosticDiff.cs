@@ -297,8 +297,25 @@ internal static class DiagnosticDiff
         return Path.GetRelativePath(root, full).Replace('\\', '/').ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Where to find <c>dm.exe</c> when <c>--dm</c> was not passed.
+    /// </summary>
+    /// <remarks>
+    /// <c>DM_BYOND_BIN</c> wins over the install location, which is the same order
+    /// <c>FixtureTests.ByondBin</c> uses — the two halves of the harness have to agree about where
+    /// BYOND is or one of them silently measures a different compiler. That is not hypothetical:
+    /// this method used to consult the install location only, so a run against a standalone build
+    /// compiled the fixtures with the new compiler and then diffed diagnostics against the old one.
+    /// On a machine with no install at all — a CI runner — it failed for every fixture instead.
+    /// </remarks>
     private static string DefaultCompiler()
-        => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            "BYOND", "bin", "dm.exe");
+    {
+        string? overridden = Environment.GetEnvironmentVariable("DM_BYOND_BIN");
+
+        return string.IsNullOrWhiteSpace(overridden)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "BYOND", "bin", "dm.exe")
+            : Path.Combine(overridden, "dm.exe");
+    }
 }
