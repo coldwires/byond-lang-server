@@ -71,6 +71,21 @@ typedef void *dm_workspace;
 
 dm_status dm_workspace_open(const char *dme_path, dm_workspace *out_workspace);
 
+/*
+ * Opens a workspace with NO .dme, rooted at a directory. Added in ABI 0.20.
+ *
+ * For a host with no project to point at: a single file, a folder with no .dme
+ * in it, a scratch buffer. There is no include walk, so there is no project
+ * tree beyond the BYOND builtins - but every file still resolves against the
+ * builtins PLUS ITSELF, so a lone .dm gets its own declarations, completion
+ * and hover rather than nothing. dm_file_in_project answers 0 for everything.
+ *
+ * Prefer dm_workspace_open when you have a .dme: a real project resolves
+ * across files, and this cannot.
+ */
+dm_status dm_workspace_open_standalone(const char *root_directory,
+                                       dm_workspace *out_workspace);
+
 /* Safe on an invalid or already-closed handle. */
 void dm_workspace_close(dm_workspace workspace);
 
@@ -299,8 +314,10 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  *
  *   {
  *     "context": "Member",
+ *     "truncated": false,
  *     "items": [
- *       { "name": "loc", "detail": "/atom", "kind": 1, "builtin": true }
+ *       { "name": "loc", "detail": "/atom", "kind": 1, "builtin": true,
+ *         "inferred": false, "type": "/atom", "value": "", "documentation": "" }
  *     ]
  *   }
  *
@@ -309,6 +326,10 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  *   "Member"          after `.` - the declared type and what it inherits
  *   "SubtypeMember"   after `:` - the above PLUS members declared on subtypes
  *   "TypePath"        after `/` - type paths
+ *   "ReturnValue"     a bare leading `.` - DM's return-value variable, not member
+ *                     access. The list is EMPTY; show nothing. Added in 0.14, and
+ *                     it exists so you do not have to guess what a user who just
+ *                     typed `.` on a fresh line meant.
  *   "None"            nothing useful here
  *
  * `.` and `:` differ on purpose and both are checked. `:` widens the check to the
@@ -321,6 +342,48 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  *
  * kind is the dm_completion_kind values below. builtin is true for BYOND's own
  * members rather than anything the project declared, so you can style them apart.
+ *
+ * "inferred" (0.14) is true exactly when the RECEIVER'S type was worked out rather
+ * than written down - an untyped local through `new` or an assignment, or an `as`
+ * clause. dm.exe performs no local type inference at all, so those items are the
+ * one place we knowingly go further than the compiler and accepting one can produce
+ * code that does not build. It is a per-item fact, NOT a property of the context:
+ * a member list off a written type carries false throughout, so deriving it from
+ * the trigger character marks correct items as risky. Badge them, rank them lower
+ * or drop them - the flag is the fact that decision needs.
+ *
+ * "type" and "value" (0.21) are the ITEM'S OWN declared type and its initialiser
+ * as written - "/mob" and "" for var/mob/M, "" and "6" for var/fatigue = 6 - so
+ * a list renders without re-parsing the file. Both are held at the declaration by
+ * the parser; a client assembling them itself is doing our job again.
+ *
+ * Empty is the ordinary answer for both and it is honest rather than missing. DM
+ * has no "num" or "text" to name: an initialiser does not type a variable, so
+ * var/fatigue = 6 genuinely has no declared type and what a reader wants there is
+ * the value. A parameter's `as` clause is NOT reported as a type either - it is an
+ * input filter, and dm.exe does not check members through it - so it stays in
+ * "detail" where it reads as what it is.
+ *
+ * "value" is source text, not an evaluated result: `5 + 1` stays `5 + 1`. Folding
+ * waits on a constant evaluator, and until there is one this is the author's text
+ * rather than a claim about what it comes to.
+ *
+ * "documentation" (0.9) is the doc comment above the declaration - a run of ///
+ * lines or a slash-star-star block - or empty. Use dm_complete_brief and
+ * dm_complete_resolve to defer it.
+ *
+ * (Spelled out rather than written literally: a block-comment terminator inside
+ * this comment ends it, and everything below becomes code. C does not nest block
+ * comments and quotes do not protect the terminator - the same rule PLAN 8
+ * records for DM. It cost a build here.)
+ *
+ * "truncated" (0.18) says a cap cut the list, and is false unless you asked for one
+ * with dm_set_completion_limit. It also tells you whether filtering our list by the
+ * typed prefix is still safe: over a truncated list it is not.
+ *
+ * The list is RANKED by scope distance, nearest first (0.18) - locals, parameters,
+ * the enclosing type's members, globals, macros, builtins last. The ORDER is the
+ * ranking; nothing repeats it as a number, so preserve it.
  *
  * COST: the first call after an edit rebuilds the project's object tree. Debounce
  * this on a keystroke path rather than calling it per character.
@@ -485,6 +548,116 @@ dm_status dm_complete_brief(dm_workspace workspace, const char* file,
 dm_status dm_complete_resolve(dm_workspace workspace, const char* file,
                               int32_t line, int32_t character, const char* name,
                               dm_position_encoding encoding, char** out_json);
+
+/* -- the .dme's tickmarks -------------------------------------------------- */
+
+/*
+ * Whether DreamMaker's include block lists this file. Added in ABI 0.20.
+ * Returns 1 ticked, 0 not, -1 on a bad handle or path.
+ *
+ * `file` may be absolute or relative to the project root - we work out the
+ * spelling the block uses.
+ */
+int32_t dm_dme_is_ticked(dm_workspace workspace, const char* file);
+
+/*
+ * The edit that adds (dm_dme_tick) or removes (dm_dme_untick) a file from the
+ * .dme's include block. Added in ABI 0.20. YOU FREE IT with dm_free.
+ *
+ *   { "refusal": "none", "start": 412, "length": 0,
+ *     "text": "#include \"src\\mob.dm\"\r\n" }
+ *
+ * ** WE RETURN THE EDIT, WE DO NOT WRITE THE FILE **
+ * The .dme is usually open in the editor that asked, and often has unsaved
+ * changes. Writing it underneath you would lose them. A tick is a zero-length
+ * insert, which applies cleanly to a dirty buffer. Offsets index the .dme text
+ * THIS WORKSPACE CURRENTLY SEES, so if you hold unsaved changes, push the .dme
+ * with dm_set_buffer first and apply the edit to that same text.
+ *
+ * "refusal" is always present and is a word:
+ *   "none"         an edit is included
+ *   "noChange"     already in the state you asked for; nothing to do
+ *   "noBlock"      no // BEGIN_INCLUDE ... // END_INCLUDE pair to edit
+ *   "conditional"  the block contains #if/#else/#elif/#endif. A line inside a
+ *                  conditional does not mean the file is in the build, so
+ *                  neither ticking nor unticking has a correct answer and we
+ *                  refuse rather than guess at your project file.
+ *
+ * The block can list the same path twice - DreamMaker's generated block
+ * re-adding one the author wrote manually. Untick removes one per call, so
+ * call again until you get "noChange" if you want them all gone.
+ *
+ * Only the region between the BEGIN and END markers is ever touched. Includes
+ * written above or below it are the author's and are left alone, and an
+ * #include <library> is skipped entirely - it is not a project file.
+ */
+dm_status dm_dme_tick(dm_workspace workspace, const char* file, char** out_json);
+dm_status dm_dme_untick(dm_workspace workspace, const char* file, char** out_json);
+
+/* -- editor surfaces ------------------------------------------------------ */
+
+/*
+ * Where the TYPE of the symbol at a position is declared. Added in ABI 0.19.
+ * YOU FREE the result with dm_free. Same shape as dm_definition_at.
+ *
+ * One hop past go-to-definition: on `var/mob/test/M` that lands on the variable,
+ * this lands on /mob/test. Only a WRITTEN type is followed - an inferred one
+ * would send your user's caret into a guess, so it answers empty instead.
+ */
+dm_status dm_type_definition_at(dm_workspace workspace, const char* file,
+                                int32_t line, int32_t character,
+                                dm_position_encoding encoding, char** out_json);
+
+/*
+ * Foldable regions for a file. Added in ABI 0.19. YOU FREE IT with dm_free.
+ *
+ *   { "ranges": [ { "startLine": 0, "endLine": 4, "kind": "region" } ] }
+ *
+ * Lines are zero-based and INCLUSIVE of both ends. kind is "region" or
+ * "comment" - a word, not a number, so it cannot be decoded with the wrong
+ * table. Treat an unknown kind as "region".
+ *
+ * Built from the AST, not from indentation: DM's brace blocks and significant
+ * indentation nest freely, so folding on leading whitespace silently drops
+ * everything written inside braces, which is most macro-generated code. Needs
+ * no object tree, so it is cheap and works before the project is walked.
+ */
+dm_status dm_folding_ranges(dm_workspace workspace, const char* file, char** out_json);
+
+/*
+ * Resolved #include targets in a file, for clickable navigation. Added in 0.19.
+ * YOU FREE IT with dm_free.
+ *
+ *   { "links": [ { "startLine": 0, "startChar": 10, "endLine": 0,
+ *                  "endChar": 20, "target": "C:\\game\\src\\mob.dm" } ] }
+ *
+ * The span covers the path text alone, inside its quotes or brackets, so the
+ * hit target is the file rather than the whole directive line. An include that
+ * does not resolve yields NO link: navigation that dead-ends is worse than
+ * none, and a broken include is where a reader most wants to notice.
+ */
+dm_status dm_document_links(dm_workspace workspace, const char* file,
+                            dm_position_encoding encoding, char** out_json);
+
+/*
+ * Whether the .dme's include walk actually reaches this file. Added in 0.19.
+ *
+ * Returns 1 in the project, 0 outside it, -1 on a bad handle or path.
+ *
+ * ** THIS IS THE ANSWER TO A CONFUSION THAT WILL COST YOU A DEBUGGING SESSION **
+ * dm_set_buffer accepts ANY path and returns DM_OK. But a buffer only joins the
+ * object tree if the walk asks for that path. So a file the .dme does not
+ * include analyses fine for anything per-file - outline, colours, syntax
+ * diagnostics - while its own procs and vars resolve to NOTHING, even as
+ * symbols from project files resolve normally in the same buffer. That
+ * asymmetry reads exactly like a broken buffer push.
+ *
+ * Ask this before blaming your own code, and tell your user "this file is not
+ * part of the project" instead of drawing an empty outline that looks like a
+ * failure. Cheap: the walk already produced the list, so the answer is free
+ * once a tree exists.
+ */
+int32_t dm_file_in_project(dm_workspace workspace, const char* file);
 
 /* -- inlay hints ---------------------------------------------------------- */
 

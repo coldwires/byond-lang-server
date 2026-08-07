@@ -13,6 +13,12 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 21: completion items carry "type" and "value" — the item's own declared type and its
+    ///     initialiser as written. Additive; no export changed.
+    /// 20: added dm_workspace_open_standalone, and the .dme tickmark trio dm_dme_is_ticked /
+    ///     dm_dme_tick / dm_dme_untick.
+    /// 19: added dm_type_definition_at, dm_folding_ranges, dm_document_links and
+    ///     dm_file_in_project — the editor-shaped surfaces, and the out-of-project signal.
     /// 18: completion is ranked by scope distance and reports "truncated"; added
     ///     dm_set_completion_limit.
     /// 17: added dm_complete_brief and dm_complete_resolve — lazy completion documentation.
@@ -33,7 +39,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 18;
+    public const int Minor = 21;
 
     public static int Packed => (Major << 16) | Minor;
 }

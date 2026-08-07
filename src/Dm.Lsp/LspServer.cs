@@ -6,6 +6,7 @@ using System.Threading;
 using Dm.Core;
 using Dm.Core.Binding;
 using Dm.Core.Diagnostics;
+using Dm.Core.Includes;
 using Dm.Core.Services;
 using Dm.Core.Symbols;
 using Dm.Core.Syntax;
@@ -154,6 +155,14 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteInlayHints(json, params_, cancel));
                     break;
 
+                case "textDocument/foldingRange":
+                    RespondCancellable(id, (json, cancel) => WriteFoldingRanges(json, params_, cancel));
+                    break;
+
+                case "textDocument/documentLink":
+                    RespondCancellable(id, (json, cancel) => WriteDocumentLinks(json, params_, cancel));
+                    break;
+
                 case "completionItem/resolve":
                     RespondCancellable(id, (json, cancel) => WriteCompletionResolve(json, params_, cancel));
                     break;
@@ -170,12 +179,32 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteReferences(json, params_, cancel));
                     break;
 
+                case "textDocument/implementation":
+                    RespondCancellable(id, (json, cancel) => WriteImplementations(json, params_, cancel));
+                    break;
+
+                case "textDocument/typeDefinition":
+                    RespondCancellable(id, (json, cancel) => WriteTypeDefinition(json, params_, cancel));
+                    break;
+
                 case "textDocument/documentHighlight":
                     RespondCancellable(id, (json, cancel) => WriteDocumentHighlight(json, params_, cancel));
                     break;
 
                 case "dm/references":
                     RespondCancellable(id, (json, cancel) => WriteReferencesByPath(json, params_, cancel));
+                    break;
+
+                case "dm/tickFile":
+                    RespondCancellable(id, (json, cancel) => WriteDmeEdit(json, params_, ticking: true));
+                    break;
+
+                case "dm/untickFile":
+                    RespondCancellable(id, (json, cancel) => WriteDmeEdit(json, params_, ticking: false));
+                    break;
+
+                case "dm/fileInProject":
+                    RespondCancellable(id, (json, cancel) => WriteFileInProject(json, params_, cancel));
                     break;
 
                 case "dm/ancestorsOf":
@@ -223,10 +252,17 @@ internal sealed class LspServer
     /// after an edit is the one that pays for the whole project, and a client that cannot see
     /// that shows a frozen UI instead of "indexing".
     /// </summary>
-    private ObjectTree TreeAnnouncingBuild(Workspace ws, CancellationToken cancel = default)
+    /// <param name="forFile">
+    /// When given, the tree to answer about <i>that file</i> — the project's if the walk reaches
+    /// it, otherwise a single-file one of the builtins plus itself. A scratch file, a snippet, or
+    /// something written but not yet <c>#include</c>d then resolves correctly as what it is,
+    /// instead of showing project symbols while its own procs resolve nowhere.
+    /// </param>
+    private ObjectTree TreeAnnouncingBuild(
+        Workspace ws, CancellationToken cancel = default, string? forFile = null)
     {
         if (ws.IsTreeBuilt)
-            return ws.GetObjectTree(cancel);
+            return forFile is null ? ws.GetObjectTree(cancel) : ws.GetTreeFor(forFile, cancel);
 
         int id = _serverRequestId++;
         string token = $"dm/build/{id}";
@@ -253,7 +289,7 @@ internal sealed class LspServer
 
         try
         {
-            return ws.GetObjectTree(cancel);
+            return forFile is null ? ws.GetObjectTree(cancel) : ws.GetTreeFor(forFile, cancel);
         }
         finally
         {
@@ -367,11 +403,21 @@ internal sealed class LspServer
             if (DefinesOf(params_) is { Count: > 0 } defines)
                 _workspace.SetDefines(defines);
         }
+        else if (root is not null)
+        {
+            // No project to point at — a folder with no .dme, or single-file mode. Analysis stays
+            // ON: every file becomes its own compilation unit of the builtins plus itself, which
+            // is far better than the nothing this used to return. Cross-file resolution is what
+            // is lost, and dm/fileInProject reports every file as outside a project.
+            _workspace = Workspace.OpenStandalone(root);
+
+            Console.Error.WriteLine(
+                $"dm-lsp: no .dme under {root}; analysing each file on its own. "
+                + "Point dm.environmentFile at one for cross-file resolution.");
+        }
         else
         {
-            Console.Error.WriteLine(
-                $"dm-lsp: no .dme found under {root ?? "(no root)"}; analysis is off. "
-                + "Point dm.environmentFile at one.");
+            Console.Error.WriteLine("dm-lsp: no workspace root and no .dme; analysis is off.");
         }
 
         json.WriteStartObject();
@@ -399,6 +445,13 @@ internal sealed class LspServer
         json.WriteEndObject();
         json.WriteBoolean("definitionProvider", true);
         json.WriteBoolean("referencesProvider", true);
+
+        // What overrides this proc - the reference index's `override` kind, which is the safety
+        // question before changing a proc's behaviour in an override-heavy tree.
+        json.WriteBoolean("implementationProvider", true);
+        json.WriteBoolean("typeDefinitionProvider", true);
+        json.WriteBoolean("documentLinkProvider", true);
+        json.WriteBoolean("foldingRangeProvider", true);
         json.WriteBoolean("documentHighlightProvider", true);
         json.WriteBoolean("documentSymbolProvider", true);
         json.WriteBoolean("workspaceSymbolProvider", true);
@@ -604,6 +657,16 @@ internal sealed class LspServer
             if (item.Inferred)
                 json.WriteBoolean("inferred", true);
 
+            // Nor are these, and they are named as the C ABI names them so one client can serve
+            // both. `detail` is left alone rather than having the type folded into it: a client
+            // that wants `fatigue: num` in labelDetails composes it, and one that does not keeps
+            // the owner path it already renders. Omitted when empty, which is the common case.
+            if (item.DeclaredType.Length > 0)
+                json.WriteString("type", item.DeclaredType);
+
+            if (item.InitialValue.Length > 0)
+                json.WriteString("value", item.InitialValue);
+
             json.WriteEndObject();
         }
 
@@ -622,7 +685,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         HoverResult? hover = HoverService.HoverAt(
-            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16,
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16,
             cancel, ws.GetMacroTable(cancel));
 
         if (hover is null)
@@ -660,7 +723,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         SignatureHelpResult? help = SignatureHelpService.SignatureAt(
-            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16);
 
         if (help is null)
         {
@@ -700,7 +763,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-            TreeAnnouncingBuild(ws, cancel), document, line, character, PositionEncoding.Utf16,
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16,
             cancel, ws.GetMacroTable(cancel));
 
         json.WriteStartArray();
@@ -792,6 +855,159 @@ internal sealed class LspServer
         }
 
         json.WriteEndObject();
+    }
+
+    /// <summary>Where the type of the symbol at a position is declared.</summary>
+    private void WriteTypeDefinition(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (RequirePosition(params_, out string path, out int line, out int character) is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        Document document = ws.GetDocument(path);
+
+        IReadOnlyList<DefinitionLocation> found = DefinitionService.TypeDefinitionAt(
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16, cancel);
+
+        json.WriteStartArray();
+
+        foreach (DefinitionLocation location in found)
+        {
+            if (location.File.Length == 0 || !ws.TryGetDocument(location.File, out Document target))
+                continue;
+
+            json.WriteStartObject();
+            json.WriteString("uri", UriOf(location.File));
+            WriteRange(json, target.Text, location.NameSpan);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>
+    /// Whether the project's include walk reaches a file, so a client can say so.
+    /// </summary>
+    /// <remarks>
+    /// A file the <c>.dme</c> does not include analyses fine per-file while its own declarations
+    /// resolve nowhere — indistinguishable from a broken push unless the client can ask.
+    /// </remarks>
+    private void WriteFileInProject(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        json.WriteStartObject();
+
+        if (_workspace is Workspace ws && params_.TryGetProperty("textDocument", out JsonElement doc))
+        {
+            string path = PathOf(doc);
+
+            json.WriteString("file", path);
+            json.WriteBoolean("inProject", ws.IsFileInProject(path, cancel));
+            json.WriteString("environmentFile", ws.DmePath);
+        }
+        else
+        {
+            json.WriteBoolean("inProject", false);
+        }
+
+        json.WriteEndObject();
+    }
+
+    /// <summary>
+    /// The edit that ticks or unticks a file in the <c>.dme</c>, plus the range to replace.
+    /// </summary>
+    /// <remarks>
+    /// Positions come back as an LSP range so the client can apply a `WorkspaceEdit` directly —
+    /// which is what keeps this safe against a `.dme` the user has open with unsaved changes.
+    /// </remarks>
+    private void WriteDmeEdit(Utf8JsonWriter json, JsonElement params_, bool ticking)
+    {
+        json.WriteStartObject();
+
+        if (_workspace is not Workspace ws || !params_.TryGetProperty("textDocument", out JsonElement doc))
+        {
+            json.WriteString("refusal", "noBlock");
+            json.WriteEndObject();
+            return;
+        }
+
+        string path = PathOf(doc);
+
+        DmeEdit? edit = ticking
+            ? ws.TickFile(path, out DmeEditRefusal refusal)
+            : ws.UntickFile(path, out refusal);
+
+        json.WriteString("refusal", refusal switch
+        {
+            DmeEditRefusal.None => "none",
+            DmeEditRefusal.NoBlock => "noBlock",
+            DmeEditRefusal.Conditional => "conditional",
+            _ => "noChange",
+        });
+
+        if (edit is not null && ws.TryGetDocument(ws.DmePath, out Document dme))
+        {
+            json.WriteString("uri", UriOf(ws.DmePath));
+            WriteRange(json, dme.Text, edit.Span);
+            json.WriteString("text", edit.Replacement);
+        }
+
+        json.WriteEndObject();
+    }
+
+    /// <summary>Foldable regions — the AST and the token stream, no object tree.</summary>
+    private void WriteFoldingRanges(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+
+        json.WriteStartArray();
+
+        foreach (FoldingRange range in FoldingService.RangesFor(document, cancel))
+        {
+            json.WriteStartObject();
+            json.WriteNumber("startLine", range.StartLine);
+            json.WriteNumber("endLine", range.EndLine);
+
+            if (range.Kind == FoldKind.Comment)
+                json.WriteString("kind", "comment");
+
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>Clickable <c>#include</c> targets — needs no object tree, only this file's tokens.</summary>
+    private void WriteDocumentLinks(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+
+        json.WriteStartArray();
+
+        foreach (DocumentLink link in DocumentLinkService.LinksFor(document, ws.LibraryRoot, cancel))
+        {
+            json.WriteStartObject();
+            WriteRange(json, document.Text, link.Span);
+            json.WriteString("target", UriOf(link.Target));
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
     }
 
     private void WriteInlayHints(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
@@ -1048,6 +1264,47 @@ internal sealed class LspServer
         {
             foreach (Reference reference in found.References)
             {
+                if (!ws.TryGetDocument(reference.File, out Document target))
+                    continue;
+
+                json.WriteStartObject();
+                json.WriteString("uri", UriOf(reference.File));
+                WriteRange(json, target.Text, reference.Span);
+                json.WriteEndObject();
+            }
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>
+    /// What overrides the proc at a position — LSP's <c>textDocument/implementation</c>.
+    /// </summary>
+    /// <remarks>
+    /// The reference index already answers this: an <see cref="ReferenceKind.Override"/> hit is a
+    /// declaration overriding the target, which is the safety question an author asks before
+    /// changing a proc's behaviour. So this is the same query as references with one filter, not a
+    /// second index — go-to-definition walks the chain up, this walks it down.
+    /// </remarks>
+    private void WriteImplementations(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        ReferenceListing? found = ReferencesAtPosition(ws, params_, cancel);
+
+        json.WriteStartArray();
+
+        if (found is not null)
+        {
+            foreach (Reference reference in found.References)
+            {
+                if (reference.Kind != ReferenceKind.Override)
+                    continue;
+
                 if (!ws.TryGetDocument(reference.File, out Document target))
                     continue;
 

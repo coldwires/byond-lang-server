@@ -679,4 +679,54 @@ public class CompletionServiceTests
         Assert.NotEmpty(result.Items);
         Assert.All(result.Items, i => Assert.True(i.Inferred));
     }
+
+    // -- the item's own type and initialiser --------------------------------
+
+    /// <summary>
+    /// A member carries its OWN declared type and initialiser, so a client renders the list
+    /// without re-parsing. The two vars are deliberately opposite — typed with no value, untyped
+    /// with one — because a single var could pass with the pair swapped.
+    /// </summary>
+    [Fact]
+    public void A_member_carries_its_declared_type_and_initial_value()
+    {
+        CompletionResult result = Complete(
+            "/mob/test\n\tvar/fatigue = 6\n\tvar/mob/test/friend\n"
+            + "/proc/f()\n\tvar/mob/test/t = new\n\tt.|\n");
+
+        CompletionItem fatigue = Assert.Single(result.Items, i => i.Name == "fatigue");
+        CompletionItem friend = Assert.Single(result.Items, i => i.Name == "friend");
+
+        // `var/fatigue = 6` has NO declared type - DM has no `num` to name, and an initialiser
+        // does not type a variable (PLAN 8). Empty is the honest answer, and the value is what a
+        // reader actually wants there.
+        Assert.Equal(string.Empty, fatigue.DeclaredType);
+        Assert.Equal("6", fatigue.InitialValue);
+
+        Assert.Equal("/mob/test", friend.DeclaredType);
+        Assert.Equal(string.Empty, friend.InitialValue);
+    }
+
+    /// <summary>
+    /// Locals and parameters carry the same two fields, from the statement rather than the object
+    /// tree — and a parameter's <c>as</c> clause is NOT reported as a type, because dm.exe does not
+    /// check members through it.
+    /// </summary>
+    [Fact]
+    public void A_local_and_a_parameter_carry_their_type_and_value()
+    {
+        CompletionResult result = Complete(
+            "/proc/f(mob/target, amount as num, silent = 0)\n\tvar/list/held = list()\n\t|\n");
+
+        Assert.Equal("/mob", Assert.Single(result.Items, i => i.Name == "target").DeclaredType);
+        Assert.Equal("/list", Assert.Single(result.Items, i => i.Name == "held").DeclaredType);
+        Assert.Equal("list()", Assert.Single(result.Items, i => i.Name == "held").InitialValue);
+
+        // `as num` is an input filter, not a type: reporting `num` here would claim something the
+        // compiler does not hold. The default value is still reported.
+        CompletionItem amount = Assert.Single(result.Items, i => i.Name == "amount");
+        Assert.Equal(string.Empty, amount.DeclaredType);
+
+        Assert.Equal("0", Assert.Single(result.Items, i => i.Name == "silent").InitialValue);
+    }
 }

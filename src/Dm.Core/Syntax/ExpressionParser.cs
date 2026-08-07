@@ -150,6 +150,58 @@ public sealed class ExpressionParser
         => _diagnostics.Add(Diagnostic.Error("DM0201", span, message));
 
     /// <summary>
+    /// <c>list(1 = "a")</c> — a numeric literal as an associative key, which 516.1686 rejects.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A breaking change rather than a new warning: the same source compiled clean on 516.1666, so
+    /// a project that built yesterday stops building. Found by moving the goldens to 1686 and
+    /// re-running the corpus — madridspy went from 0 errors to 2, both of them this.
+    /// </para>
+    /// <para>
+    /// The boundaries were compiled rather than assumed, and two of them shape the check: a
+    /// <b>variable</b> key is accepted (<c>list(v = "a")</c> compiles — the compiler cannot know
+    /// statically what it holds), so only a literal is reported; and <c>alist()</c> takes numeric
+    /// keys, which is what 516 added it for and what the message points at. <c>1.5</c>, <c>0</c>
+    /// and <c>-1</c> are all rejected, so the unary minus has to be seen through.
+    /// </para>
+    /// <para>
+    /// Reported here rather than in the binder because it needs no tree — the key is a literal in
+    /// hand — so it answers on a file the project never includes, and at type level as well as
+    /// inside a proc. Both were verified against the compiler.
+    /// </para>
+    /// </remarks>
+    private void CheckNumericAssociativeKeys(InvocationExpressionSyntax invocation)
+    {
+        foreach (ArgumentSyntax argument in invocation.Arguments)
+        {
+            if (argument.Name is not { } key || !IsNumericLiteral(key))
+                continue;
+
+            // ONE diagnostic per list, anchored on the `list` token rather than on the key.
+            // dm.exe reports a three-numeric-key list once, on the line the call opens, and the
+            // first version of this reported per key: 12 invented on madridspy against its 2,
+            // caught by the zero-invented gate before it went anywhere.
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0404",
+                invocation.Target.Span,
+                "numbers are not allowed as associative list keys except in alist()"));
+
+            break;
+        }
+
+        static bool IsNumericLiteral(ExpressionSyntax expression) => expression switch
+        {
+            LiteralExpressionSyntax { Kind: LiteralKind.Number } => true,
+
+            // `-1` is a unary minus over the literal, and the compiler rejects it the same way.
+            UnaryExpressionSyntax { Operand: { } operand } => IsNumericLiteral(operand),
+
+            _ => false,
+        };
+    }
+
+    /// <summary>
     /// True when the <c>:</c> at the cursor closes a conditional rather than starting a member
     /// access.
     /// </summary>
@@ -398,11 +450,15 @@ public sealed class ExpressionParser
                 case TokenKind.OpenParen:
                 {
                     bool isLocate = expression is IdentifierExpressionSyntax { Name: "locate" };
+                    bool isList = expression is IdentifierExpressionSyntax { Name: "list" };
 
                     expression = new InvocationExpressionSyntax(
                         expression,
                         ParseArgumentList(TokenKind.OpenParen, TokenKind.CloseParen),
                         SpanTo(start));
+
+                    if (isList)
+                        CheckNumericAssociativeKeys((InvocationExpressionSyntax)expression);
 
                     // `locate(X) in container` is one grammatical unit, not the relational `in`:
                     // dm.exe accepts it inside a ternary branch, where a bare `in` is its own

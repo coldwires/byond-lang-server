@@ -21,6 +21,51 @@ public class WorkspaceSymbolServiceTests
     private static string[] Names(IReadOnlyList<WorkspaceSymbol> hits)
         => hits.Select(h => h.Detail).ToArray();
 
+    /// <summary>
+    /// A leading kind filter narrows the search, spelled the way DM already spells the same
+    /// distinction — <c>var/</c>, <c>proc/</c>, <c>verb/</c>, and <c>#</c> for a type, which is the
+    /// one kind with no segment word of its own.
+    /// </summary>
+    [Fact]
+    public void A_prefix_filter_narrows_to_one_kind()
+    {
+        // One name shared by a type, a var and a proc, so only the filter can tell them apart.
+        ObjectTree tree = Build(
+            "/obj/blade\n\tvar/blade = 1\n\tproc/blade()\n\t\treturn\n\tverb/blade_verb()\n\t\treturn\n");
+
+        Assert.Equal(new[] { "/obj/blade" }, Names(WorkspaceSymbolService.Search(tree, "#blade")));
+        Assert.Equal(new[] { "/obj/blade/blade" }, Names(WorkspaceSymbolService.Search(tree, "var/blade")));
+        Assert.Equal(new[] { "/obj/blade/blade()" }, Names(WorkspaceSymbolService.Search(tree, "proc/blade")));
+        Assert.Equal(new[] { "/obj/blade/blade_verb()" }, Names(WorkspaceSymbolService.Search(tree, "verb/blade")));
+    }
+
+    /// <summary>A bare filter lists that whole kind — what a user mid-type has actually asked for.</summary>
+    [Fact]
+    public void A_bare_filter_lists_the_kind()
+    {
+        ObjectTree tree = Build("/obj/sword\n\tvar/sharpness = 1\n\tvar/weight = 2\n\tproc/swing()\n\t\treturn\n");
+
+        string[] vars = Names(WorkspaceSymbolService.Search(tree, "var/"));
+
+        Assert.Contains("/obj/sword/sharpness", vars);
+        Assert.Contains("/obj/sword/weight", vars);
+        Assert.DoesNotContain("/obj/sword/swing()", vars);
+        Assert.DoesNotContain("/obj/sword", vars);
+    }
+
+    /// <summary>An unfiltered query is untouched by the feature.</summary>
+    [Fact]
+    public void An_unfiltered_query_still_searches_every_kind()
+    {
+        ObjectTree tree = Build("/obj/blade\n\tvar/blade = 1\n\tproc/blade()\n\t\treturn\n");
+
+        string[] all = Names(WorkspaceSymbolService.Search(tree, "blade"));
+
+        Assert.Contains("/obj/blade", all);
+        Assert.Contains("/obj/blade/blade", all);
+        Assert.Contains("/obj/blade/blade()", all);
+    }
+
     [Fact]
     public void Finds_types_vars_and_procs()
     {

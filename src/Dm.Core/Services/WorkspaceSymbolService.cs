@@ -67,13 +67,21 @@ public static class WorkspaceSymbolService
             return Array.Empty<WorkspaceSymbol>();
 
         string needle = query.Trim();
+        SymbolKind? only = TakePrefixFilter(ref needle);
+
+        // A filter with nothing after it - a bare `var/` - narrows to that kind rather than
+        // matching every name, which is what a user part-way through typing has asked for.
+        if (needle.Length == 0)
+            needle = string.Empty;
+
         List<(int Rank, int Length, WorkspaceSymbol Symbol)> hits = new();
 
         foreach (TypeSymbol type in tree.Types)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!type.Path.IsRoot && Rank(type.Path.Name, needle) is { } typeRank)
+            if (Wants(only, SymbolKind.Type)
+                && !type.Path.IsRoot && Rank(type.Path.Name, needle) is { } typeRank)
             {
                 foreach (DeclarationSite site in type.Sites)
                 {
@@ -85,6 +93,9 @@ public static class WorkspaceSymbolService
 
             foreach (VarSymbol variable in type.Vars)
             {
+                if (!Wants(only, SymbolKind.Variable))
+                    break;
+
                 if (variable.IsBuiltin || Rank(variable.Name, needle) is not { } rank)
                     continue;
 
@@ -96,6 +107,9 @@ public static class WorkspaceSymbolService
 
             foreach (ProcSymbol proc in type.Procs)
             {
+                if (!Wants(only, proc.IsVerb ? SymbolKind.Verb : SymbolKind.Proc))
+                    continue;
+
                 if (Rank(proc.Name, needle) is not { } rank)
                     continue;
 
@@ -132,9 +146,55 @@ public static class WorkspaceSymbolService
         return results;
     }
 
+    /// <summary>
+    /// Strips a leading kind filter off the query, in DM's own spelling.
+    /// </summary>
+    /// <remarks>
+    /// <c>var/hp</c>, <c>proc/heal</c>, <c>verb/say</c> and <c>#</c> for a type — the segments DM
+    /// already uses to say what a declaration is, so nothing new has to be learned. Unfiltered
+    /// queries are untouched, and a name that genuinely starts with one of these is still
+    /// reachable by typing the rest of it.
+    /// </remarks>
+    private static SymbolKind? TakePrefixFilter(ref string query)
+    {
+        if (query.StartsWith("var/", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query["var/".Length..];
+            return SymbolKind.Variable;
+        }
+
+        if (query.StartsWith("proc/", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query["proc/".Length..];
+            return SymbolKind.Proc;
+        }
+
+        if (query.StartsWith("verb/", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query["verb/".Length..];
+            return SymbolKind.Verb;
+        }
+
+        // `#` for a type: short, and the one kind with no DM segment word of its own.
+        if (query.StartsWith('#'))
+        {
+            query = query[1..];
+            return SymbolKind.Type;
+        }
+
+        return null;
+    }
+
+    private static bool Wants(SymbolKind? only, SymbolKind kind) => only is null || only == kind;
+
     /// <summary>0 exact, 1 prefix, 2 substring, or null for no match. Case-insensitive.</summary>
     private static int? Rank(string name, string query)
     {
+        // An empty needle follows a bare filter such as `var/`: everything of that kind matches,
+        // ranked as a substring hit so shorter names still come first.
+        if (query.Length == 0)
+            return 2;
+
         if (string.Equals(name, query, StringComparison.OrdinalIgnoreCase))
             return 0;
 

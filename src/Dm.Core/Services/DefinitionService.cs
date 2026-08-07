@@ -147,6 +147,64 @@ public static class DefinitionService
         return FromMember(tree, tree.Root, name, includeBuiltins);
     }
 
+    /// <summary>
+    /// Where the <b>type</b> of the symbol at a position is declared — LSP's
+    /// <c>textDocument/typeDefinition</c>.
+    /// </summary>
+    /// <remarks>
+    /// One hop past <see cref="DefinitionAt"/>: on <c>var/mob/test/M</c> ordinary definition goes
+    /// to the variable, this goes to <c>/mob/test</c>. Only a <b>written</b> type is followed, not
+    /// an inferred one — inference exists so completion can serve a half-written declaration and
+    /// knowingly goes further than <c>dm.exe</c>, and sending a caret to a type the compiler does
+    /// not agree the variable has would be navigation into a guess.
+    /// </remarks>
+    public static IReadOnlyList<DefinitionLocation> TypeDefinitionAt(
+        ObjectTree tree,
+        Document document,
+        int line,
+        int character,
+        PositionEncoding encoding = PositionEncoding.Utf16,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(document);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int offset = document.Text.GetOffset(new LinePosition(line, character), encoding);
+        IReadOnlyList<Token> tokens = document.Lex.Tokens;
+
+        int index = IndexAt(tokens, offset);
+        if (index < 0 || !CompletionService.IsName(tokens[index].Kind))
+            return Array.Empty<DefinitionLocation>();
+
+        string name = document.Text.ToString(tokens[index].Span);
+
+        // A local or parameter with a written type. Inference is deliberately not consulted.
+        if (CompletionService.FindLocalType(document, offset, name, out bool inferred) is { } local
+            && !inferred
+            && tree.Find(local) is { } localType)
+        {
+            return FromType(localType, includeBuiltins: false);
+        }
+
+        // A member reached through a receiver, or a bare name on the enclosing type: follow the
+        // var's declared type.
+        TypeSymbol? owner = PreviousMeaningful(tokens, index) is TokenKind.Dot or TokenKind.Colon
+            or TokenKind.QuestionDot or TokenKind.QuestionColon
+            ? CompletionService.ResolveReceiver(tree, document, tokens, IndexOfPrevious(tokens, index) - 1, offset)
+            : CompletionService.EnclosingType(tree, document, offset);
+
+        if (owner is not null
+            && tree.ResolveVar(owner, name) is { DeclaredType: { } declared }
+            && tree.Find(declared) is { } declaredType)
+        {
+            return FromType(declaredType, includeBuiltins: false);
+        }
+
+        return Array.Empty<DefinitionLocation>();
+    }
+
     /// <summary>The token containing the offset, rather than the one before it.</summary>
     /// <remarks>
     /// Completion asks what precedes the caret; this asks what the caret is <i>on</i>, so a caret

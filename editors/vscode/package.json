@@ -11,6 +11,46 @@
   "main": "./extension.js",
   "activationEvents": ["onLanguage:dm", "workspaceContains:*.dme"],
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "dmObjectTree",
+          "name": "DM Object Tree",
+          "contextualTitle": "DM Object Tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dm.refreshObjectTree",
+        "title": "DM: Refresh Object Tree",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dm.selectEnvironmentFile",
+        "title": "DM: Select Environment File (.dme)"
+      },
+      {
+        "command": "dm.toggleFileInEnvironment",
+        "title": "DM: Toggle This File in the .dme"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dm.refreshObjectTree",
+          "when": "view == dmObjectTree",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dm.toggleFileInEnvironment",
+          "when": "editorLangId == dm",
+          "group": "dm"
+        }
+      ]
+    },
     "problemMatchers": [
       {
         "name": "dm",

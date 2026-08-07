@@ -29,6 +29,30 @@ program:
 }
 ```
 
+## The object tree panel
+
+**Explorer → DM Object Tree.** The project's type hierarchy, browsed lazily — each
+expand fetches one level, because `/obj` alone can carry thousands of subtypes on
+a real game. Every row shows its var and proc counts, and its tooltip names the
+type it inherits from, which is not the same as its path parent: `/mob` is a child
+of the root by path and inherits from `/atom/movable`.
+
+Clicking a type opens its declaration. Builtins are deliberately not clickable —
+nothing declares them, so there is nowhere to go.
+
+The tree is built lazily by the server, so the panel is empty until something has
+asked a question that needs it. It refreshes on save and from the toolbar button.
+
+## Which `.dme` is being analysed
+
+The status bar shows it, right-hand side. Click it to pick another — the picker
+lists every `.dme` in the workspace. This matters more than it looks: which `.dme`
+is analysed decides every answer the server gives, and until now it was invisible
+unless something resolved wrongly.
+
+Changing it writes `dm.environmentFile` to workspace settings. The `.dme` is read
+once at startup, so reload the window to apply it.
+
 ## What works
 
 Everything the C ABI ships: squiggles (syntax and semantic, the same
@@ -36,6 +60,14 @@ diagnostics `dmc diagdiff` measures against dm.exe), completion with the
 `.`/`:` distinction, hover with signatures and `///` docs, signature help
 on `(` and `,`, go-to-definition returning every declaration, the outline,
 and workspace symbol search.
+
+Also: go-to-type-definition (`var/mob/test/M` → `/mob/test`, following only a
+**written** type, never an inferred one), go-to-implementation (what overrides
+this proc), folding ranges, clickable `#include` targets, and inlay hints showing
+the inferred type of untyped locals.
+
+Workspace symbol search takes kind filters in DM's own spelling — `var/hp`,
+`proc/heal`, `verb/say`, and `#` for a type. A bare `var/` lists every variable.
 
 Syntax colouring is classifier-grade: the server publishes semantic tokens
 — the same classification the C ABI ships, type and proc and macro names

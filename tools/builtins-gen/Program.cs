@@ -285,6 +285,8 @@ internal static class Program
         if (Add(entries, new Entry { Kind = 'V', Owner = "/", Name = "world", Signature = "/world" }))
             added++;
 
+        added += AddVerifiedVarTypes(entries);
+
         foreach ((string owner, string[] names) in members)
         {
             foreach (string name in names)
@@ -301,6 +303,116 @@ internal static class Program
         {
             if (Add(entries, new Entry { Kind = 'P', Owner = "/alist", Name = name }))
                 added++;
+        }
+
+        return added;
+    }
+
+    /// <summary>
+    /// The declared type of every builtin var that has one, read off the compiler.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A member reached THROUGH a builtin var is type-checked by <c>dm.exe</c> —
+    /// <c>src.client.key</c> compiles and <c>src.client.nonexistent_xyz</c> is "undefined var" — so
+    /// every one of these types exists and we simply did not record it. Until this table there was
+    /// exactly one: the global <c>world</c>. Every chain through a builtin var therefore
+    /// dead-ended, which is what a client reported as <c>src.client.</c> offering nothing.
+    /// </para>
+    /// <para>
+    /// The reference cannot supply these. Its heading is <c>&lt;name&gt; [list] var (&lt;owner&gt;)</c>,
+    /// so <c>group list var (mob)</c> yields <c>list</c> and <c>client var (mob)</c> yields nothing;
+    /// the object types appear only in prose. Same shape as the inheritance links, which it states
+    /// for four of fourteen.
+    /// </para>
+    /// <para>
+    /// <b>Established by compiling, in two passes over all 380 builtin vars.</b> First
+    /// <c>o.VAR.type</c>, which compiles only when VAR carries a declared type — <c>.</c> on an
+    /// untyped var rejects every member (§8) — and that alone answered the surprise: only
+    /// <b>43 of 380</b> are object-typed at all, which is why the reference says so little. Then a
+    /// member unique to each candidate type, one compilation unit per question because dm.exe stops
+    /// at the first error.
+    /// </para>
+    /// <para>
+    /// <b>Two of the first discriminators were not unique, and the run said so by reporting two
+    /// hits.</b> <c>/atom</c> has <c>override</c> and <c>/image</c> has <c>loc</c>, so those two
+    /// cannot be told apart by any member either carries — their surfaces are all but identical.
+    /// <c>client</c> is genuinely <c>/mob</c>-only and is what pins the mob-typed rows.
+    /// </para>
+    /// <para>
+    /// <b>Five object-typed vars are deliberately left untyped rather than guessed at:</b>
+    /// <c>appearance</c> on <c>/atom</c> and <c>/image</c> (indistinguishable between those two),
+    /// <c>pixloc</c> (carries <c>x</c> but neither <c>contents</c> nor <c>override</c>, so it is an
+    /// internal type with no name to record), <c>/callee proc</c>, and
+    /// <c>/database/query database</c> (only <c>vars</c> compiled, which every object type has, so
+    /// the probe did not discriminate). A missing type costs a completion list; a wrong one sends a
+    /// reader where the compiler disagrees.
+    /// </para>
+    /// <para>Verified on 516.1686. Re-run the sweep after a BYOND upgrade, as with the rest of this file.</para>
+    /// </remarks>
+    private static int AddVerifiedVarTypes(SortedDictionary<string, Entry> entries)
+    {
+        (string Owner, string Type, string[] Names)[] typed =
+        {
+            // `len` is unique to /list, so these are unambiguous.
+            ("/atom", "/list", new[] { "contents", "filters", "overlays", "underlays", "verbs" }),
+            ("/atom/movable", "/list", new[] { "locs" }),
+            ("/alist", "/list", new[] { "vars" }),
+            ("/callee", "/list", new[] { "args" }),
+            ("/client", "/list", new[] { "images", "screen", "vars", "verbs" }),
+            ("/datum", "/list", new[] { "vars" }),
+            ("/image", "/list", new[] { "contents", "filters", "overlays", "underlays", "verbs", "vis_contents" }),
+            ("/list", "/list", new[] { "vars" }),
+            ("/mob", "/list", new[] { "group" }),
+            ("/mutable_appearance", "/list", new[] { "verbs", "vis_contents" }),
+            ("/regex", "/list", new[] { "group" }),
+            ("/savefile", "/list", new[] { "dir", "vars" }),
+            ("/world", "/list", new[] { "contents", "params", "vars" }),
+
+            // `a` is a /matrix component and exists on nothing else here.
+            ("/atom", "/matrix", new[] { "transform" }),
+            ("/image", "/matrix", new[] { "transform" }),
+
+            // `CGI` is /client-only.
+            ("/mob", "/client", new[] { "client" }),
+
+            // `client` is /mob-only — verified that neither /atom nor /image carries it.
+            ("/callee", "/mob", new[] { "usr" }),
+            ("/client", "/mob", new[] { "mob" }),
+
+            // Atom-ish and not /mob (`contents` compiles, `client` does not). /atom rather than
+            // /image because the reference says a location is always an atom, and the two types
+            // cannot be separated by probing.
+            ("/atom", "/atom", new[] { "loc" }),
+            ("/image", "/atom", new[] { "loc" }),
+
+            ("/atom/movable", "/particles", new[] { "particles" }),
+            ("/callee", "/callee", new[] { "caller" }),
+        };
+
+        int added = 0;
+
+        foreach ((string owner, string type, string[] names) in typed)
+        {
+            foreach (string name in names)
+            {
+                // These vars mostly come from the scrape, so a plain Add would refuse as a
+                // duplicate and silently record nothing. The type is written onto the entry that
+                // is already there, and one is created only when the scrape missed the var.
+                string key = $"V{owner}\0{name}";
+
+                if (entries.TryGetValue(key, out Entry? existing))
+                {
+                    existing.Signature = type;
+                }
+                else if (Add(entries, new Entry
+                         {
+                             Kind = 'V', Owner = owner, Name = name, Signature = type,
+                         }))
+                {
+                    added++;
+                }
+            }
         }
 
         return added;

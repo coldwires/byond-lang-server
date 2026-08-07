@@ -7,9 +7,13 @@
 #   3. does dm.exe reject what we think?   errors/ produces exactly the
 #                                          diagnostics recorded beside it
 #
-# Degrades on purpose: BYOND is Windows-only and is not on CI runners, so with
-# no dm.exe the compiler-side checks SKIP and our own side still runs. A skip is
-# reported as a skip - never as a pass.
+# Degrades on purpose: with no dm.exe the compiler-side checks SKIP and our own
+# side still runs. A skip is reported as a skip - never as a pass.
+#
+# CI does have a compiler: the byond-fixtures job fetches the standalone zip and
+# passes -Byond, since BYOND is Windows-only and no runner ships it. Every step
+# here that shells out to dm.exe forwards that path rather than letting a child
+# process fall back to the install location - see the --dm notes below.
 
 [CmdletBinding()]
 param(
@@ -139,7 +143,11 @@ foreach ($dme in Get-ChildItem $root -Recurse -Filter '*.dme' |
     if (-not $haveByond) { Skip "$name (no dm.exe)"; continue }
 
     Push-Location $repo
-    $out = & dotnet run -c Release --project src\Dm.Cli -- diagdiff $dme.FullName 2>&1 | Out-String
+    # --dm is forwarded rather than left to the default, or this step diffs against whatever
+    # dm.exe is installed while step [1] compiled with $Byond. A run against a standalone build
+    # then measures two different compilers and reads as agreement; on a machine with no install
+    # it fails for every fixture.
+    $out = & dotnet run -c Release --project src\Dm.Cli -- diagdiff $dme.FullName --dm $dm 2>&1 | Out-String
     Pop-Location
 
     if ($out -match 'invented\s+(\d+)') {
@@ -176,7 +184,9 @@ if ($Probes) {
         $agreeing = @()
 
         foreach ($probe in Get-ChildItem (Join-Path $root 'errors\probes') -Filter '*.dme') {
-            $out = & dotnet $dll diagdiff $probe.FullName 2>&1 | Out-String
+            # --dm for the same reason as step [3]: the ratchet is a comparison against a specific
+            # compiler, so it has to be the one this run was pointed at.
+            $out = & dotnet $dll diagdiff $probe.FullName --dm $dm 2>&1 | Out-String
 
             if ($out -match 'agreed\s+(\d+)' -and [int]$Matches[1] -gt 0) {
                 $agreeing += $probe.BaseName

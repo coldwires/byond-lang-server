@@ -355,7 +355,9 @@ public static class CompletionService
                     ? DocumentationFor(variable.Site, variable.IsBuiltin, fileText)
                     : string.Empty,
                 inferred,
-                variable.IsBuiltin ? Rank.Builtin : rank));
+                variable.IsBuiltin ? Rank.Builtin : rank,
+                variable.DeclaredType?.Text ?? string.Empty,
+                variable.InitialValue));
         }
 
         foreach (ProcSymbol proc in type.Procs)
@@ -427,22 +429,61 @@ public static class CompletionService
         if (index < 0)
             return null;
 
-        // A dotted path written out, `/obj/item.`, resolves as a path.
-        int start = index;
-        while (start > 0 && tokens[start - 1].Kind is TokenKind.Slash or TokenKind.Dot
-               && start - 2 >= 0 && IsName(tokens[start - 2].Kind))
-        {
-            start -= 2;
-        }
-
         if (tokens[index].Kind == TokenKind.KeywordSrc)
             return EnclosingType(tree, document, offset);
+
+        // `usr` is always a /mob, and unlike `src` it does NOT take the enclosing type — verified
+        // by compiling `usr.key` inside a proc on /obj, which resolves a /mob-only var, with
+        // `usr.nonexistent_xyz` as the control that says the compiler is checking at all.
+        if (tokens[index].Kind == TokenKind.KeywordUsr)
+            return tree.Find(UsrType);
 
         if (!IsName(tokens[index].Kind))
             return null;
 
+        // Walk back over a `name <sep> name` run, recording whether any separator was a `/`.
+        int start = index;
+        bool sawSlash = false;
+
+        while (start > 0 && tokens[start - 1].Kind is TokenKind.Slash or TokenKind.Dot
+               && start - 2 >= 0 && IsName(tokens[start - 2].Kind))
+        {
+            sawSlash |= tokens[start - 1].Kind == TokenKind.Slash;
+            start -= 2;
+        }
+
+        bool leadingSeparator = start > 0
+            && tokens[start - 1].Kind is TokenKind.Slash or TokenKind.Dot
+            && (start - 2 < 0 || !IsName(tokens[start - 2].Kind));
+
+        // §4a context 3, and this is the rule the run has to be tested against rather than
+        // assumed: NO LEADING SEPARATOR MEANS IT IS NOT A PATH AT ALL. `m.friend` is the var
+        // `friend` on whatever `m` holds, not the type `/m/friend` — so a dot-only run with
+        // nothing in front of it is member access and is walked one member at a time.
+        //
+        // Folding it into a path instead is what made every two-level chain answer nothing:
+        // `src.client.`, `usr.client.` and `m.friend.` alike, whether the vars were builtin or
+        // written in the project. A single receiver worked, so it read as a builtins problem.
+        if (start < index && !sawSlash && !leadingSeparator)
+        {
+            TypeSymbol? current = ResolveReceiver(tree, document, tokens, start, offset, out inferred);
+
+            for (int i = start + 2; i <= index && current is not null; i += 2)
+            {
+                string member = document.Text.ToString(tokens[i].Span);
+
+                current = tree.ResolveVar(current, member) is { DeclaredType: { } memberType }
+                    ? tree.Find(memberType)
+                    : null;
+            }
+
+            // An unresolved link breaks the chain rather than falling back to a path lookup: a
+            // wrong list here is worse than none, and dm.exe rejects the member outright.
+            return current;
+        }
+
         // A written path: `/obj/item`, `obj/item`, or the relative `.item/sword`.
-        if (start < index)
+        if (start < index || leadingSeparator)
         {
             List<string> segments = new();
 
@@ -486,6 +527,12 @@ public static class CompletionService
         return tree.Find(TypePath.Root.Append(name));
     }
 
+    /// <summary>
+    /// The type of <c>usr</c>. Always <c>/mob</c>, and deliberately not the enclosing type the way
+    /// <c>src</c> is — see the note at its use site for the compiler evidence.
+    /// </summary>
+    private static TypePath UsrType => TypePath.Parse("/mob");
+
     internal static bool IsName(TokenKind kind) => kind
         is TokenKind.Identifier or TokenKind.KeywordSrc or TokenKind.KeywordUsr
         or TokenKind.KeywordWorld or TokenKind.KeywordGlobal;
@@ -508,16 +555,27 @@ public static class CompletionService
         {
             foreach (ParameterSyntax parameter in proc.Parameters)
             {
+                // The `as` clause is NOT folded into the declared type: `f(n as num)` leaves n
+                // untyped as far as dm.exe is concerned (§8), so reporting `num` as a type would
+                // claim something the compiler does not hold.
                 items.TryAdd(parameter.Name, new CompletionItem(
                     parameter.Name, CompletionKind.Parameter, parameter.DeclaredType?.Text ?? string.Empty, false,
-                    rank: Rank.Parameter));
+                    rank: Rank.Parameter,
+                    declaredType: parameter.DeclaredType?.Text ?? string.Empty,
+                    initialValue: parameter.DefaultValue is { } given
+                        ? document.Text.ToString(given.Span)
+                        : string.Empty));
             }
 
             foreach (LocalVarStatementSyntax local in Locals(proc, offset))
             {
                 items[local.Name] = new CompletionItem(
                     local.Name, CompletionKind.Local, local.DeclaredType?.Text ?? string.Empty, false,
-                    rank: Rank.Local);
+                    rank: Rank.Local,
+                    declaredType: local.DeclaredType?.Text ?? string.Empty,
+                    initialValue: local.Initializer is { } value
+                        ? document.Text.ToString(value.Span)
+                        : string.Empty);
             }
         }
 

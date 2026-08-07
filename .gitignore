@@ -27,6 +27,10 @@ cmake_install.cmake
 Makefile
 build/
 
+# Per-RID smoke-test build directories: the 32-bit run needs its own, or the two
+# architectures overwrite each other's CMake cache. `build/` alone does not match these.
+build-*/
+
 # Test corpus is large and externally sourced; fetched by script
 tests/corpus/external/
 

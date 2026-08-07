@@ -4,7 +4,7 @@
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
 > Status: **M0–M7 complete · M8 passed over · M9 past its target · M10 done · M11 at zero
-> invented · ABI 0.18** · 1,084 tests · Last updated: 2026-08-06
+> invented · ABI 0.21** · 1,145 tests · Last updated: 2026-08-06
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -438,14 +438,14 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.00 MB, 20 exports) via NativeAOT, for six
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.08 MB, 36 exports) via NativeAOT, for six
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.18 and passing 184 checks. Reference
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.20 and passing 218 checks. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,084 today (1,026 core, 44 native,
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests`, 38 tests at M0 and 1,133 today (1,075 core, 44 native,
   14 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
@@ -458,6 +458,14 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   Both local gotchas are handled rather than rediscovered: `vswhere.exe` is put on PATH before the
   Windows publish, and a step asserts the binary still exists afterwards, because a Defender
   quarantine leaves the publish reporting success with the file gone.
+- ✅ A third job, `byond-fixtures`, runs the fixture suite against the **real compiler**. BYOND is
+  Windows-only and no runner ships it, so the job fetches the standalone zip for a pinned build
+  (`BYOND_BUILD` in the workflow, 516.1686 today), points `DM_BYOND_BIN` at it, and runs
+  `dotnet test` plus `run.ps1 -Probes`. Until it existed, every compiler-backed assertion in
+  `tests/fixtures` took its skip path in CI — the managed job runs on Linux — so CI was checking
+  that our parser still agreed with our parser, and the version tripwire that exists to announce a
+  BYOND change could only fire on a developer's machine. The build is pinned rather than floating
+  so the job goes red on a commit rather than on BYOND's release schedule.
 
 ### M1 — Text layer and lexer ✅
 
@@ -1229,9 +1237,36 @@ as of 2026-08-05:
 | project | dm.exe | ours | agreed | missed | invented |
 |---|---|---|---|---|---|
 | mlaas | 0 | 0 | 0 | 0 | **0** |
-| madridspy | 2 | 0 | 0 | 2 | **0** |
+| madridspy | 4 | 2 | **2** | 2 | **0** — the two are `list(1 = ...)`, which 1686 added and `DM0404` now reports |
+| warklan | 15 | 1 | **1** | 14 | **0** |
 | the binder control | 8 | 3 | **3** | 5 | **0** |
 | /tg/station `-DCBT` | 0 | 0 | 0 | 0 | **0** — dm.exe says nothing on 1.5M lines, and so do we |
+
+### The missed column is the other half of the scorecard, and nothing was reading it
+
+Found by the user on 2026-08-06, and the table above had been saying it since 2026-08-05: we miss
+**14 of 14** on warklan and **2 of 2** on madridspy. Zero invented was never the whole result, and
+the discipline that made "invented" impossible to ignore — a standing rule that any invented
+diagnostic anywhere is a regression — has no counterpart pointed at "missed".
+
+**These were mis-filed, and the category is the point.** "Working product first, error-message
+parity last" deprioritised matching `dm.exe`'s exact wording on **broken** code, which is fair:
+if a file does not compile, the compiler has already said so. But `unused_var` and the rest of the
+default-on warnings fire on code that **builds clean**. A warklan author gets 14 warnings from
+their build that the editor is silent about — that is a live diagnostic missing from a working
+product, which belongs at the front of the order rather than the back.
+
+Before deciding what it costs, **group the missed lines by warning name** (`dmc diagdiff <dme>
+--verbose`). The prior is that `unused_var` dominates, since it is the one default-on warning we
+know about and it is already written and backed out (§9 has both of its causes, one understood and
+one never diagnosed) — but this project has misread the aggregation axis three times, so the
+grouping comes before the estimate. Also worth confirming that `dm.exe` compiles warklan with zero
+*errors*: if it does not, some of the 14 may be downstream of a parse we fail differently.
+
+**The instrument that would stop this recurring** is the one the probe ratchet already proves:
+`BASELINE.txt` records agreement and fails when it drops. A per-project missed-count baseline —
+warklan 14, madridspy 2, mlaas 0 — would make the column impossible to skip past, which is what
+it needs, because reading it was nobody's job and so nobody did it.
 
 ### /tg/station, measured for the first time on 2026-08-05
 
@@ -1588,11 +1623,12 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.18, 28 exports: version, last error, free, workspace
-open/close/root, injected defines, buffer set/close, invalidate, the readiness pair
-(`dm_tree_ready`/`dm_build_tree`), classify plus its three
+`abi/dm_core.h` is the source of truth. ABI 0.21, 36 exports: version, last error, free, workspace
+open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
+pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
-inlay hints, workspace symbols and bulk queries — the last carrying the reference index
+inlay hints, the editor surfaces (type-definition, folding, document links, file-in-project), the
+`.dme` tickmark trio, workspace symbols and bulk queries — the last carrying the reference index
 (`references`) and the ancestor chain (`ancestorsOf`). Everything listed below is implemented, and
 `abi/schema/` freezes the bulk request and response shapes.
 
@@ -1600,6 +1636,8 @@ inlay hints, workspace symbols and bulk queries — the last carrying the refere
 ```c
 int32_t     dm_abi_version(void);
 dm_status   dm_workspace_open(const char* dme_path, dm_workspace* out_workspace);
+dm_status   dm_workspace_open_standalone(const char* root_dir,
+                                         dm_workspace* out_workspace);          /* 0.20 */
 void        dm_workspace_close(dm_workspace);
 dm_status   dm_workspace_root(dm_workspace, char** out_root);
 dm_status   dm_set_defines(dm_workspace, const char* const* defines, int32_t count);   /* 0.5 */
@@ -1630,6 +1668,16 @@ dm_status   dm_complete_brief(dm_workspace, const char* file, int32_t line,
 dm_status   dm_complete_resolve(dm_workspace, const char* file, int32_t line, int32_t character,
                                 const char* name, dm_position_encoding, char** out_json); /* 0.17 */
 dm_status   dm_set_completion_limit(dm_workspace, int32_t limit);                         /* 0.18 */
+dm_status   dm_type_definition_at(dm_workspace, const char* file, int32_t line,
+                                  int32_t character, dm_position_encoding,
+                                  char** out_json);                           /* 0.19 */
+dm_status   dm_folding_ranges(dm_workspace, const char* file, char** out_json);  /* 0.19 */
+dm_status   dm_document_links(dm_workspace, const char* file,
+                              dm_position_encoding, char** out_json);         /* 0.19 */
+int32_t     dm_file_in_project(dm_workspace, const char* file);               /* 0.19 */
+int32_t     dm_dme_is_ticked(dm_workspace, const char* file);                  /* 0.20 */
+dm_status   dm_dme_tick(dm_workspace, const char* file, char** out_json);      /* 0.20 */
+dm_status   dm_dme_untick(dm_workspace, const char* file, char** out_json);    /* 0.20 */
 dm_status   dm_invalidate(dm_workspace);                                      /* 0.14 */
 int32_t     dm_tree_ready(dm_workspace);                                      /* 0.15 */
 dm_status   dm_build_tree(dm_workspace);                                      /* 0.15 */
@@ -1948,6 +1996,10 @@ that the two candidate behaviours produce different compiler output.
 | **`locate(X) in container` is one grammatical unit, not the relational `in`.** | Inside a ternary's true branch, `c ? locate(X) in L : y` compiles and runs — the found object comes back — while `c ? 9 in L : y` is *"expected ':'"* in every position. So the idiom is not the loosest-binding operator wearing a hat: it binds to the locate. That also decides statement level, where `x = locate(y) in L` must assign the **found object**, not evaluate the assignment first and test afterwards — a misparse with no diagnostic either way. tgstation writes the ternary form three times. An earlier version of this row also called the **false** branch (`c ? y : 9 in L`) an error; that was the initializer rule below wearing a ternary costume — as a statement it compiles, parsing per §4c as `(x = c ? y : 9) in L`, runtime-verified: the var takes the branch value and the test is discarded. |
 | **A proc-local var's initializer rejects a top-level relational `in`.** | `var/r = y in L` is *"unexpected 'in' expression"* whatever the left side — bare, parenthesised, or a whole ternary — and whatever the right, `g()`, `typesof()`, `(L)` and `world` included. `var/r = (y in L)` parenthesised whole compiles, as do the same text as a statement, a global's initializer, and a type-level var's. Three exemptions, each its own grammar: the locate unit, `input(...) [as null\|anything] in choices` (mlaas ships eight), and a literal `list(...)` RHS — which is the declaration's **value-restriction clause**, not the operator: `var/r = 2 in list(4,5)` leaves `r` holding **2**, runtime-verified, so we match the compiler and warn (`DM0301`); tgstation ships one and its var holds the wrong thing. Fixture `errors/local_in` plus six runtime checks in `ok/parsing.dm`. |
 | **An `#include` is legal in expression position, splicing the file into the surrounding brackets.** | tgstation's `ApiVersion()` is `return new /datum/tgs_version(` + `#include "__interop_version.dm"` + `)`, where the included file is one string literal. Compiles clean and the value lands in the argument list — runtime-verified through the constructed object. The directive still ends at its own line even mid-expression. |
+| **`usr` is always a `/mob`, and does not take the enclosing type the way `src` does.** | `usr.key` compiles inside a proc on `/obj`, where `key` is a `/mob` var and `/obj` has no such member — so `usr` is not src-shaped. `usr.nonexistent_xyz` is *"undefined var"* in the same position, which is the control saying the compiler checks it at all rather than treating `usr` as untyped. `usr.density`, an `/atom` var, compiles too, consistent with `/mob` and its inheritance chain. **`world.mob` does not change it**, which is the obvious next question since nearly every real game sets one: with `world/mob = /mob/player`, `usr.player_only` is still *"undefined var"* — identical to the no-`world.mob` control — while a written `/mob/player` receiver reaches the same var clean and `usr.key` still resolves. So `world.mob` is a runtime default for what a connecting client gets, not a static retype of `usr`. 516.1686. |
+| **A member reached through a builtin var is type-checked, so builtin vars carry declared types the reference does not state.** | `src.client.nonexistent_xyz` is *"undefined var"* while `src.client.key` compiles, so `client` is known to be a `/client`. `info.html`'s `<h2>` gives only `<name> [list] var (<owner>)`, so the object types appear in prose alone — the same shape as the inheritance links, stated for four of fourteen. Swept all 380 by compiling: `o.VAR.type` compiles only for a var with a declared type (`.` on an untyped var rejects everything), and **only 43 of 380 are object-typed at all**, which is why the reference says so little. `builtins.txt` now records 39 of them; the other four are object-typed and not identifiable — `appearance` cannot be told from `/atom` or `/image` because their member sets are identical, and `pixloc` carries `x` but neither `contents` nor `override`, so it is an internal type with no name. |
+| **A number is no longer allowed as an associative list key.** | `list(1 = "a")` compiles on **516.1666** and is *"list: numbers are not allowed as associative list keys except in alist()"* on **516.1686** — a breaking change rather than a new warning, since code that built clean stops building. `list("k" = "a")` and `alist(1 = "a")` compile on both, which pins it to numbers rather than to associative keys or to `list()`. Found by moving the goldens to 1686 and re-running the corpus: madridspy goes 0 errors → 2 on unchanged source. **We report it as `DM0404`**, and the shape had to be probed too: dm.exe reports **once per list**, on the line the call opens, not once per key — reporting per key invented 12 on madridspy against its 2, caught by the zero-invented gate. A **variable** key is accepted (`list(v = "a")` compiles, since the compiler cannot know statically what it holds), so only a literal is reported, and the unary minus in `-1` has to be seen through. Fixture `errors/assoc_numeric_key`, both controls in `ok/parsing.dm`, nine unit tests. |
+| **A `for(x in L)` over a pre-declared variable nulls it on normal termination, and `break` does not.** | Runtime-verified on 516.1686 with three exits, because one data point cannot tell "nulled on the way out" from "nulled always": the list exhausting leaves `x` null, a `break` leaves it holding the element it stopped on (`"b"` of `list("a","b","c")`), and an **empty** list — where the body never runs at all — still turns a preset `"preset"` into null. So the null is the loop's termination rather than a consequence of having iterated, and reading a loop variable after its loop is a bug wherever the loop can finish normally. Found by writing the fixture for the `for(x in L)` misparse and predicting `"c"`; the compiler disagreed. Fixture `ok/parsing.dm`, four checks. |
 | **`TRUE` and `FALSE` are built-in macros since 515.** | With no define anywhere: `#if TRUE` is taken, `#if FALSE` is silently not taken (no error — contrast §8's rule that `#if` rejects undefined names), `#ifdef TRUE` is defined, and the runtime values are 1 and 0. tgstation defines neither and writes `#define MERGERS_DEBUG FALSE` + `#if MERGERS_DEBUG`, which is what exposed the missing seed. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -2059,6 +2111,13 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   expectation per compilation unit, since **a syntax error stops `dm.exe` before the semantic checks
   and two failing cases in one file mask each other**; and the harness uses none of the constructs it
   tests.
+
+  **It runs in CI against the real compiler** (`byond-fixtures`, see M0). That is what makes the
+  suite a tripwire rather than a document: a finding recorded as a runtime check fails a build the
+  day a BYOND release changes what DM means. The distinction worth keeping is the tier — a unit
+  test over our own AST catches *our* regressions and is structurally blind to the compiler
+  changing, because it encodes what we believe rather than what `dm.exe` does. Only a case that
+  `dm.exe` compiles, and preferably **runs** with its value asserted, can see that.
 
 - **Cross-codebase corpus.** `tests/corpus` must not contain only the team's game. Add open BYOND
   codebases including an SS13 fork such as /tg/station; it is the harshest available preprocessor
@@ -2795,3 +2854,78 @@ it.
   *exactly* the 1,444 documented items. Totals and conclusions were unaffected — which is the
   part worth keeping: a wrong instrument left the headline standing while every figure beneath
   it was off. Fourth time a harness here has been confidently wrong; §9 has it beside the table.
+- **2026-08-06** — Seven SpacemanDMM-parity surfaces, six of them over machinery that already
+  existed. **Go-to-implementation** is the reference index with one filter — an `override` hit
+  *is* a declaration overriding the target, so definition walks the chain up and this walks it
+  down. **Document links** resolve `#include` per file off the token stream, so a link works
+  before the project has been walked and a directive inside a comment is correctly not one; an
+  unresolved include yields no link, because navigation that dead-ends is worse than none.
+  **Go-to-type-definition** follows a *written* type only — sending a caret into an inferred one
+  would be navigation into a guess. **Workspace-symbol kind filters** use DM's own spelling
+  (`var/`, `proc/`, `verb/`, `#`). **Folding ranges** come from the AST, not indentation, because
+  DM's two block syntaxes nest freely and whitespace-based folding drops everything inside braces.
+  **The object-tree panel** closed the largest gap of all: `extension.js` was 105 lines making no
+  `dm/*` requests while the server had served `dm/objectTree` since M10 — so the headline parity
+  feature was a client that never asked. **The status bar** now names the `.dme` being analysed,
+  which decides every answer the server gives and was invisible until something resolved wrongly.
+  One process note worth keeping: the panel's first draft read `file` and `line` off the tree node,
+  fields `QueryJson` does not write — caught by checking the writer rather than trusting the
+  shape, and navigation went through the new `#` type filter instead of widening a frozen schema.
+  Twenty-nine tests. 1,104 total.
+- **2026-08-06** — ABI 0.19 closes the C ABI's editor-shaped gaps and answers the out-of-project
+  question. `dm_type_definition_at`, `dm_folding_ranges` and `dm_document_links` were left blank
+  a commit earlier on the reasoning that no in-process consumer had asked; the user asked, so the
+  matrix has no deliberate blank left and only M8's `.dmi` row remains. **`dm_file_in_project`
+  is the one that matters**: `dm_set_buffer` accepts any path and succeeds, but a buffer only
+  joins the tree if the walk asks for that path — so a file the `.dme` does not include analyses
+  fine per-file while its own declarations resolve nowhere, *and symbols from project files
+  resolve normally in the same buffer*. That asymmetry is indistinguishable from a broken push,
+  and it cost the patcher client a live debugging session. The answer is free once a tree exists,
+  because the walk already produced the list; searching for it beforehand would be the expensive
+  direction. Also on the LSP as `dm/fileInProject`. Verified on **both** architectures at 0.19 —
+  196 checks, x64 and x86 — since four new exports is exactly the change the 32-bit host has
+  historically been the only thing to catch. 32 exports.
+- **2026-08-06** — **Two self-inflicted doc faults in one session, same root cause.** The
+  capability matrix said "four rows are marked not exposed" when it was three, and the paragraph
+  saying so landed mid-table, orphaning the `.dmi` row outside it. Then a batch numeric update
+  run through a PowerShell `Get-Content`/`Set-Content` round-trip double-encoded every em-dash in
+  `PLAN.md` — 455 lines, a 1,198-line diff for two intended edits — because PowerShell 5.1 reads
+  as ANSI by default. Both were caught before landing, restored with `git checkout` and redone
+  through the editing tools. The standing rule already covers it — *write file content with the
+  editing tools, never through a shell* — and this is now the fifth correction it has cost. The
+  rule is not about heredocs specifically; it is about any shell round-trip over file content.
+- **2026-08-06** — An out-of-project `.dm` resolves as its own single-file project.
+  `Workspace.GetTreeFor` answers with the project tree when the include walk reaches the file and
+  a builtins-plus-itself compilation unit otherwise, so a scratch file, a snippet, or something
+  written but not yet `#include`d resolves its own procs instead of showing project symbols beside
+  nothing — the asymmetry that reads as a broken editor. It deliberately cannot see the project's
+  declarations, because the compiler could not either. Cached on the `ParseResult` instance, so an
+  edit rebuilds and an unchanged buffer does not.
+- **2026-08-06** — **The DME solver**, in `Dm.Core.Includes.DmeIncludeBlock`: read, tick and
+  untick DreamMaker's own `// BEGIN_INCLUDE` block. Returns a **span plus replacement** rather
+  than writing the file, because the `.dme` is usually open and often dirty in the editor that
+  asked; a tick is a zero-length insert, which applies cleanly to a buffer somebody else owns. It
+  refuses with a reason rather than guessing when the block holds a `#if` (a line inside a
+  conditional does not mean the file is in the build, so neither edit is correct), when there is
+  no block, and when nothing would change. Unparseable lines are skipped rather than sorted, or a
+  stray comment sends every insert to the top; library includes are skipped, since DreamMaker does
+  not list them.
+  **The sort order was verified twice over rather than reasoned about.** Three rules, each easy to
+  get wrong: files sort before directories, **extension before filename**, and comparison is
+  ordinal on the *lowercased* string. Four hand-picked orderings from real files pin them —
+  madridspy's `skiner.dmf` below `test_lighting.dm`, warklan's `Interface.dmf` above `Code\`,
+  warklan's `NPC's`/`NPC-Shop`/`NPCItemAdd` byte order, tgstation's `skin.dmf` below
+  `stylesheet.dm` — and a skippable theory then re-sorts **every** entry of mlaas, madridspy,
+  warklan and tgstation and asserts the file is unchanged. All four pass; tgstation is ~7,000
+  entries, so a single wrong rule would move hundreds of lines. 1,133 tests.
+- **2026-08-06** — ABI 0.20 exposes both: the tickmark trio (`dm_dme_is_ticked`, `dm_dme_tick`,
+  `dm_dme_untick`) and `dm_workspace_open_standalone`, plus LSP `dm/tickFile` / `dm/untickFile`
+  and a **DM: Toggle This File in the .dme** command in the VS Code client, applied as a
+  `WorkspaceEdit` so a `.dme` open with unsaved changes survives. A workspace with no `.dme` no
+  longer refuses to open — the LSP falls back to standalone automatically, so single-file mode
+  analyses each file against the builtins plus itself instead of returning nothing.
+  **The smoke test caught a real bug doing it**: every position-shaped export still called
+  `ws.GetObjectTree()`, which on a standalone workspace is builtins-only — so a lone file's own
+  members did not complete. Only the LSP had been wired to `GetTreeFor`. All of them now are, and
+  the check that found it is the one asserting a lone file resolves its own members. Verified on
+  both architectures: 218 checks, x64 and x86.

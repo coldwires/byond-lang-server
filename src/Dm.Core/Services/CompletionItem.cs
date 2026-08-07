@@ -67,7 +67,7 @@ public sealed class CompletionItem
 {
     public CompletionItem(
         string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "",
-        bool inferred = false, int rank = 0)
+        bool inferred = false, int rank = 0, string declaredType = "", string initialValue = "")
     {
         Name = name;
         Kind = kind;
@@ -76,6 +76,8 @@ public sealed class CompletionItem
         Documentation = documentation;
         Inferred = inferred;
         Rank = rank;
+        DeclaredType = declaredType;
+        InitialValue = initialValue;
     }
 
     /// <summary>
@@ -117,6 +119,36 @@ public sealed class CompletionItem
     /// Clients had been guessing this from the trigger context; the flag replaces the guess.
     /// </remarks>
     public bool Inferred { get; }
+
+    /// <summary>
+    /// The item's own declared type — <c>/mob</c> for <c>var/mob/M</c> — or empty when it has none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the type OF THE ITEM, not of the receiver the list came from, so it is what a client
+    /// renders beside the name. Empty is the honest answer for an untyped var and is not rare:
+    /// <c>var/fatigue = 6</c> has no declared type at all. DM has no <c>num</c> or <c>text</c> to
+    /// name — an initialiser does not type a variable (§8), so anything a client shows for those
+    /// comes from <see cref="InitialValue"/> rather than from here.
+    /// </para>
+    /// <para>
+    /// A parameter's <c>as</c> clause is deliberately not folded in. <c>f(n as num)</c> leaves `n`
+    /// untyped as far as <c>dm.exe</c> is concerned, so reporting <c>num</c> here would claim a
+    /// type the compiler does not hold; the clause is in <see cref="Detail"/>, where it reads as
+    /// what it is.
+    /// </para>
+    /// </remarks>
+    public string DeclaredType { get; }
+
+    /// <summary>
+    /// The initialiser as written — <c>6</c> for <c>var/fatigue = 6</c> — or empty when there is none.
+    /// </summary>
+    /// <remarks>
+    /// Source text, not an evaluated value: <c>5 + 1</c> stays <c>5 + 1</c>. A constant evaluator
+    /// would fold it, and until there is one this is the author's text rather than a claim about
+    /// what it comes to. For a <c>const</c> it is most of what a reader wants.
+    /// </remarks>
+    public string InitialValue { get; }
 
     public override string ToString() => $"{Kind} {Name}";
 }

@@ -4,8 +4,15 @@ Behaviours of the DreamMaker language that are surprising, undocumented, or docu
 Every claim here was established by compiling and — where the behaviour is observable at runtime —
 running a case built so that the two candidate answers produce *different* output.
 
-Tested against **DM compiler 516.1666**. Results may differ on other versions; the file at the end
-re-runs everything in about ten seconds.
+Originally established against **DM compiler 516.1666**, and the appendix has been re-run whole on
+**516.1686**, the current build — 0 errors, 0 warnings, and the output block below it is that run.
+Results may differ on other versions; the file at the end re-runs everything in about ten seconds.
+
+The compile-only sections are not in the appendix and so are not covered by that run. Several of
+them are pinned against 1686 by `tests/fixtures` instead — the keyword type names, the local-var
+`in` rule, undefined members through `.`, and duplicate definitions all have fixtures the CI job
+compiles with it. The rest still rest on their original 1666 testing, which is called out here
+rather than papered over: a version claim is only as good as the run behind it.
 
 Nothing here is taken from the DM Reference on trust. Where the reference and the compiler disagree,
 that disagreement is called out.
@@ -478,6 +485,42 @@ Two boundaries pin the rule down:
 
 So the tolerance is for a *separator run*, not for `else` anywhere: the keyword still needs a
 `;` or a line break in front of it, and it still needs its statement.
+
+## 20. A `for(x in L)` loop nulls `x` when it finishes, but not when you `break`
+
+Declare the loop variable before the loop and read it afterwards, and it is empty:
+
+```dm
+var/list/L = list("a", "b", "c")
+var/x
+for(x in L)
+	// ...
+// x is null here, NOT "c"
+```
+
+```
+normal exit : NULL      break exit : b      empty list : NULL
+```
+
+Three exits, because a single case cannot tell "nulled on the way out" apart from "nulled always":
+
+| Loop ends by | `x` afterwards |
+|---|---|
+| the list running out | **null** |
+| `break` | the element it stopped on — `"b"` |
+| the list being **empty**, body never entered | **null**, overwriting whatever `x` held |
+
+The last row is the one that pins it. With an empty list the body never runs, and a variable that
+went in holding `"preset"` still comes out null — so the nulling belongs to the loop's termination
+rather than to having iterated. The fetch that finds no next element is what writes null, and it
+happens whether or not there was ever a first one.
+
+The practical consequence: reading a loop variable after its loop is only safe when the loop cannot
+finish normally. `for(x in L)` then `if(x)` is a bug wherever the list can run out, which is
+usually. Code that wants the last element has to save it inside the body.
+
+This is also why the inline form is the better habit — `for(var/y in L)` scopes `y` to the loop, so
+there is no after-the-loop read to get wrong.
 
 ---
 
@@ -1243,6 +1286,28 @@ two"
 	try { r += N[1]; }; catch(var/exception/e) { caught = isnull(e) ? "null" : "yes"; };
 	return "r=[r] caught=[caught]"
 
+// ---- 20. for-in nulls its loop variable on normal termination -----------
+/proc/t_for_exit_value()
+	var/list/L = list("a", "b", "c")
+	var/x
+	for(x in L)
+		continue
+	var/after_normal = isnull(x) ? "NULL" : x
+
+	var/y
+	for(y in L)
+		if(y == "b")
+			break
+	var/after_break = isnull(y) ? "NULL" : y
+
+	var/list/E = list()
+	var/z = "preset"
+	for(z in E)
+		continue
+	var/after_empty = isnull(z) ? "NULL" : z
+
+	return "normal=[after_normal] break=[after_break] empty=[after_empty]"
+
 world/New()
 	var/datum/child/C = new
 	world.log << " 1 in-precedence   : [t_in_precedence()]"
@@ -1265,6 +1330,7 @@ world/New()
 	world.log << "17 null index      : [t_null_index()]"
 	world.log << "18 proc in var     : [t_proc_in_var()]"
 	world.log << "19 separator runs  : [t_separator_runs()]"
+	world.log << "20 for exit value  : [t_for_exit_value()]"
 	del src
 ```
 
@@ -1291,6 +1357,7 @@ world/New()
 17 null index      : L?[4] -> runtime: list index out of bounds   null-list?[1] -> null   long form -> null
 18 proc in var     : kept=this one survives  in vars=no  call -> runtime: undefined proc or verb /datum/swallowed/vanished().
 19 separator runs  : r=3 caught=yes
+20 for exit value  : normal=NULL break=b empty=NULL
 ```
 
 The file compiles with 0 errors and 0 warnings, and the run above is its actual output.
