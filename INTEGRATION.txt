@@ -19,8 +19,8 @@ WHAT THIS IS
   need .NET installed, and you do not need to know it is written in C#.
 
     Windows   dm_core.dll  + dm_core.lib
-    Linux     libdm_core.so
-    macOS     libdm_core.dylib
+    Linux     dm_core.so
+    macOS     dm_core.dylib
 
   Anything with a C FFI can call it. C++, C, Rust, Python, Go, Zig, C#.
 
@@ -179,10 +179,46 @@ WHAT YOU GET TODAY
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "path/to/publish/dm_core.dll" "$<TARGET_FILE_DIR:myapp>")
 
-  Linux:
+  Linux and macOS:
 
-    target_link_libraries(myapp PRIVATE "path/to/publish/libdm_core.so")
+    add_library(dm_core SHARED IMPORTED)
+    set_target_properties(dm_core PROPERTIES
+      IMPORTED_LOCATION "path/to/publish/dm_core.so")   # .dylib on macOS
+
+    target_link_libraries(myapp PRIVATE dm_core)
     set_target_properties(myapp PROPERTIES BUILD_RPATH "path/to/publish")
+
+  ** THE IMPORTED TARGET IS NOT CEREMONY, IT IS REQUIRED **
+  NativeAOT names these dm_core.so and dm_core.dylib, with NO `lib` prefix, and
+  CMake only treats a full path as a library FILE when the name matches the
+  platform convention (libfoo.so). Given dm_core.so it decides you meant a link
+  ITEM NAME instead and emits -ldm_core, so the link dies with
+
+    /usr/bin/ld: cannot find -ldm_core
+
+  while the file is sitting exactly where you pointed it. The obvious one-liner
+  target_link_libraries(myapp PRIVATE "path/to/publish/dm_core.so") is the form
+  that fails. This guide recommended it until CI first ran a Linux build.
+
+  BUILD_RPATH is separate and also required: it is how the loader finds the
+  library at RUN time, and the publish directory is on no default search path.
+
+  ** macOS NEEDS ONE MORE STEP, BEFORE YOU LINK **
+  NativeAOT bakes a RELATIVE install name into dm_core.dylib, something like
+  bin/Release/net9.0/osx-arm64/native/dm_core.dylib. macOS copies that string
+  into your executable AT LINK TIME as the dependency to load, so your program
+  builds and then dies at startup:
+
+    dyld: Library not loaded: bin/Release/net9.0/osx-arm64/native/dm_core.dylib
+
+  An rpath does not rescue it, because the recorded name is not @rpath/... .
+  Rewrite the install name first, then link:
+
+    install_name_tool -id "@rpath/dm_core.dylib" path/to/publish/dm_core.dylib
+
+  It has to happen BEFORE the link. Afterwards the old string is already inside
+  your executable and you would be fixing it there instead, one binary at a
+  time. tests/abi-smoke/CMakeLists.txt does this at configure time.
 
   The header already has extern "C" guards. Just #include it from C++.
 

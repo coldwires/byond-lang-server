@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# Runs the fixture suite before a push, so the one tier CI cannot cover - the ok/ world
+# actually RUNNING, with its values asserted - is checked before anything leaves the machine.
+# GitHub's runners kill DreamDaemon with STATUS_DLL_NOT_FOUND, so this is the only place it runs.
+#
+# Install:  git config core.hooksPath tools/hooks
+# Skip once: git push --no-verify
+#
+# Takes about 35 seconds. The 252-probe ratchet is NOT run here - it is minutes, and CI does it
+# on every push to main.
+
+set -e
+
+repo="$(git rev-parse --show-toplevel)"
+
+# BYOND must be the build the goldens were recorded against, or fixtures recorded on a newer
+# compiler fail for a reason that has nothing to do with the push. DM_BYOND_BIN wins, exactly as
+# it does for dotnet test and dmc.
+if [ -n "$DM_BYOND_BIN" ]; then
+    byond="$DM_BYOND_BIN"
+else
+    byond="C:\\Program Files (x86)\\BYOND\\bin"
+fi
+
+if [ ! -f "$byond/dm.exe" ]; then
+    echo "pre-push: no dm.exe at $byond - skipping the fixture suite" >&2
+    echo "          set DM_BYOND_BIN to a BYOND bin directory to enable it" >&2
+    exit 0
+fi
+
+# A WRONG VERSION is worse than none: the fixtures are data recorded from one compiler, so an
+# older one fails cases it never produced and diagdiff reports our newer checks as invented. That
+# is not a fact about the push. Say so and skip, rather than blocking every push with a failure
+# whose real cause is three steps removed.
+want="$(tr -d ' \r\n' < "$repo/tests/fixtures/BYOND_VERSION.txt")"
+have="$("$byond/dm.exe" 2>&1 | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | head -1)"
+
+if [ "$have" != "$want" ]; then
+    echo "pre-push: BYOND $have is installed but the fixtures are recorded against $want" >&2
+    echo "          skipping - install $want, or point DM_BYOND_BIN at it" >&2
+    exit 0
+fi
+
+echo "pre-push: running the fixture suite against BYOND $have"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass \
+    -File "$repo/tests/fixtures/run.ps1" -Byond "$byond" || {
+        echo "" >&2
+        echo "pre-push: the fixture suite FAILED - push blocked." >&2
+        echo "          fix it, or bypass deliberately with: git push --no-verify" >&2
+        exit 1
+    }
+
+exit 0

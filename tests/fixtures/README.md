@@ -201,6 +201,20 @@ That job is the only place the compiler-backed assertions execute. The `test`
 job runs on Linux, where every one of them takes its skip path, so before it
 existed CI was checking that our parser still agreed with our parser.
 
+**One tier does not run there: the runtime world.** A hosted runner cannot start
+DreamDaemon at all — it dies in about five seconds with `0xC0000135`,
+`STATUS_DLL_NOT_FOUND`, on an image lacking something the daemon links against,
+while `dm.exe` from the same directory compiles everything perfectly. CI
+therefore passes `-RuntimeOptional`, which downgrades that one step to a skip;
+everything else still gates. **Never pass it on a machine that can run the
+daemon.**
+
+The consequence, stated rather than left to be discovered: `ok/` compiles in CI
+but is not RUN there, so **the tier that catches a BYOND release changing what DM
+*means* rather than what it accepts is a local gate.** `run.ps1` prints the
+daemon's unresolved imports when this fires, so if that ever names an installable
+component the step can be turned back on.
+
 With no `dm.exe` the compiler-side checks still **skip** rather than fail, which
 is what keeps a Linux `dotnet test` and a machine without BYOND usable; a skip
 is reported as a skip, never as a pass.

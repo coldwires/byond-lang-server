@@ -191,9 +191,15 @@ public sealed class ServerTests : IDisposable
     /// <c>/c:/...</c>. The first real session failed on exactly this: no .dme found, workspace
     /// silently off, empty outline. This test speaks VS Code's spelling end to end.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void A_percent_encoded_drive_colon_still_opens_the_workspace()
     {
+        // A DRIVE LETTER is the whole subject, so there is nothing to assert where paths have no
+        // drive: on Linux RootUri() is file:///home/... and the spelling helper below has no colon
+        // to find. It skipped silently for months because CI never ran this job against a real
+        // remote; the first run on ubuntu failed with Expected ':' / Actual 'm', from /home.
+        Skip.IfNot(OperatingSystem.IsWindows(), "drive-letter URIs are a Windows spelling");
+
         string rootUri = RootUri();
         string fileUri = FileUri("code.dm");
 
