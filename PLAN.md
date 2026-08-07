@@ -4,7 +4,7 @@
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
 > Status: **M0–M7 complete · M8 passed over · M9 past its target · M10 done · M11 at zero
-> invented · ABI 0.21** · 1,145 tests · Last updated: 2026-08-06
+> invented · ABI 0.21** · 1,147 tests · Last updated: 2026-08-07
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -61,7 +61,7 @@ and workspace symbols, browsable object tree, `.dmi` icon-state enumeration, syn
       |
       +-- Dm.Native  (NativeAOT, [UnmanagedCallersOnly])   [v1]
       |       |
-      |       v  dm_core.dll / libdm_core.so  +  abi/dm_core.h
+      |       v  dm_core.dll / dm_core.so  +  abi/dm_core.h
       |       +-- Qt C++ IDE      (extern "C", or dm_core.hpp RAII wrapper)
       |       +-- IDE #3          (any language with C FFI)
       |

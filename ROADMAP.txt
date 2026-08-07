@@ -18,12 +18,17 @@ WHERE WE ARE
 
     dm_core.dll     2.08 MB, ABI 0.21, 36 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,145 green (1,087 core, 44 native, 14 lsp)
+    tests           1,147 green (1,089 core, 44 native, 14 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included
-    abi-smoke       220 checks from C++, x64 at 0.21 (x86 last run at 0.20);
-                    the four Unix RIDs are CI-only, since NativeAOT refuses
+    abi-smoke       220 checks from C++. FIVE of six RIDs green in CI at 0.21
+                    - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
+                    osx-x64 was UNVERIFIED until 2026-08-07: it asked for the
+                    retired macos-13 image, and a job whose label no longer
+                    exists queues forever rather than failing - it sat unstarted
+                    for an hour and read as slow. Now on macos-15-intel. The
+                    Unix RIDs are CI-only either way, since NativeAOT refuses
                     cross-OS native compilation
     mlaas           EXACT against dm.exe -o: 1493/1493 vars, 1153/1153 procs
     madridspy       exact both ways
