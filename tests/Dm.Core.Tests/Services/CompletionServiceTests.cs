@@ -160,12 +160,55 @@ public class CompletionServiceTests
 
     // -- paths and partial words -------------------------------------------
 
+    /// <summary>
+    /// A <c>.</c> after a WRITTEN PATH continues the path — it is not member access. Mid-path the
+    /// two separators are the same token, so <c>/obj/item.weight</c> names the type
+    /// <c>/obj/item/weight</c>: dm.exe reports "undefined type path" when no such child exists and
+    /// compiles clean when one does, both verified. This asserted <c>weight</c> until 2026-08-07,
+    /// which offered a completion that could not build.
+    /// </summary>
     [Fact]
-    public void A_written_path_resolves_to_its_type()
+    public void A_dot_after_a_written_path_offers_child_types_not_members()
     {
-        CompletionResult result = Complete("/obj/item\n\tvar/weight = 1\n/proc/f()\n\t/obj/item.|\n");
+        CompletionResult result = Complete(
+            "/obj/item\n\tvar/weight = 1\n/obj/item/sword\n/proc/f()\n\t/obj/item.|\n");
 
-        Assert.Contains("weight", Names(result));
+        Assert.Equal(CompletionContext.TypePath, result.Context);
+
+        string[] names = Names(result);
+        Assert.Contains("sword", names);      // a child TYPE, which is what may follow
+        Assert.DoesNotContain("weight", names); // a var - `/obj/item.weight` is undefined type path
+    }
+
+    /// <summary>
+    /// The same rule after <c>new</c>, where the path is still being written. With parentheses it
+    /// becomes member access on the constructed value instead, which is a different question.
+    /// </summary>
+    [Fact]
+    public void A_dot_after_a_new_path_offers_child_types()
+    {
+        CompletionResult result = Complete(
+            "/mob/test\n\tvar/hp = 1\n/mob/test/special\n/proc/f()\n\tvar/x = new /mob/test.|\n");
+
+        Assert.Equal(CompletionContext.TypePath, result.Context);
+        Assert.Contains("special", Names(result));
+        Assert.DoesNotContain("hp", Names(result));
+    }
+
+    /// <summary>
+    /// A bare type name is kept as PLAN §1's acceptance target and marked, because dm.exe does not
+    /// agree with it: <c>mob.loc</c>, <c>mob.hp</c> and <c>mob.sub</c> are all "undefined var",
+    /// since a bare <c>mob</c> is neither a variable nor a path. Unlike an untyped local there is
+    /// no edit that makes it legal, so the flag is the only honest part.
+    /// </summary>
+    [Fact]
+    public void A_bare_type_name_still_offers_members_but_is_marked()
+    {
+        CompletionResult result = Complete("/mob\n\tvar/hp = 1\n/proc/f()\n\tmob.|\n");
+
+        Assert.Contains("hp", Names(result));
+        Assert.All(result.Items, i => Assert.Equal(TypeSource.BareTypeName, i.TypeSource));
+        Assert.All(result.Items, i => Assert.True(i.Inferred));
     }
 
     /// <summary>A partly typed word is not the trigger; what precedes it is.</summary>
@@ -728,5 +771,64 @@ public class CompletionServiceTests
         Assert.Equal(string.Empty, amount.DeclaredType);
 
         Assert.Equal("0", Assert.Single(result.Items, i => i.Name == "silent").InitialValue);
+    }
+
+    // -- the `as` clause ----------------------------------------------------
+
+    /// <summary>
+    /// `as` takes a CLOSED vocabulary, so the list is exact rather than drawn from the tree.
+    /// Compiler-verified: `as datum`, `as list` and `as client` are rejected while `as movable`
+    /// and `as atom` are accepted, so this is not the type system and cannot be derived from it.
+    /// </summary>
+    [Fact]
+    public void After_as_the_input_filters_are_offered()
+    {
+        CompletionResult result = Complete("/mob\n\tverb/v(X as |\n");
+
+        Assert.Equal(CompletionContext.InputType, result.Context);
+
+        string[] names = Names(result);
+        Assert.Contains("anything", names);
+        Assert.Contains("command_text", names);
+        Assert.Contains("movable", names);
+        Assert.Contains("atom", names);
+
+        // Rejected by dm.exe, so offering them would send a user somewhere that does not compile.
+        Assert.DoesNotContain("datum", names);
+        Assert.DoesNotContain("list", names);
+        Assert.DoesNotContain("client", names);
+    }
+
+    /// <summary>A `|` continues the clause — `as null|anything` — so it offers the same list.</summary>
+    [Fact]
+    public void A_pipe_after_an_input_filter_continues_the_clause()
+    {
+        // NOT the Complete() helper: `|` is its caret marker, so `as null|` would have its pipe
+        // eaten as the caret and the test would silently ask about `null` instead. The position is
+        // given directly for that reason.
+        const string Source = "/mob\n\tverb/v(X as null|\n";
+
+        Document document = new("test.dm", SourceText.From(Source), fromBuffer: true);
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+
+        LinePosition position = document.Text.GetLinePosition(Source.IndexOf('|') + 1);
+        CompletionResult result = CompletionService.CompleteAt(
+            tree, document, position.Line, position.Character);
+
+        Assert.Equal(CompletionContext.InputType, result.Context);
+        Assert.Contains("anything", Names(result));
+    }
+
+    /// <summary>
+    /// A `|` that is NOT continuing an `as` clause stays bitwise-or, so it must not hijack the
+    /// list — without this the check would fire on every or-expression in the project.
+    /// </summary>
+    [Fact]
+    public void A_pipe_in_an_expression_is_not_an_input_filter()
+    {
+        CompletionResult result = Complete("/proc/f(a, b)\n\tvar/x = a | |\n");
+
+        Assert.NotEqual(CompletionContext.InputType, result.Context);
     }
 }

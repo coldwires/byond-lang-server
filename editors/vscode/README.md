@@ -66,6 +66,13 @@ Also: go-to-type-definition (`var/mob/test/M` → `/mob/test`, following only a
 this proc), folding ranges, clickable `#include` targets, and inlay hints showing
 the inferred type of untyped locals.
 
+Colour swatches sit beside every `"#rrggbb"` literal and `rgb()` call, and the
+picker writes back in the form that is already there — pick a shade next to an
+`rgb()` call and you get an `rgb()` call, not a hex string. A named colour like
+`"red"` gets no swatch yet, and neither does an `rgb()` carrying a `space`
+argument, because those are a different colour space and a swatch that guesses
+is worse than none.
+
 Workspace symbol search takes kind filters in DM's own spelling — `var/hp`,
 `proc/heal`, `verb/say`, and `#` for a type. A bare `var/` lists every variable.
 

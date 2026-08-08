@@ -12,13 +12,14 @@ namespace Dm.Core.Services;
 public sealed class DefinitionLocation
 {
     public DefinitionLocation(string file, TextSpan span, TextSpan nameSpan, string detail,
-        string signature = "")
+        string signature = "", string reference = "")
     {
         File = file;
         Span = span;
         NameSpan = nameSpan;
         Detail = detail;
         Signature = signature;
+        Reference = reference;
     }
 
     /// <summary>Empty for a builtin: nothing declares it, so there is no file to open.</summary>
@@ -38,6 +39,30 @@ public sealed class DefinitionLocation
     /// <c>Move(NewLoc,Dir=0)</c>. Empty for anything source-backed, where the file is the render.
     /// </summary>
     public string Signature { get; }
+
+    /// <summary>
+    /// The DM Reference section documenting this builtin, or empty.
+    /// </summary>
+    /// <remarks>
+    /// The reference's own anchors ARE DM paths — <c>&lt;a name=/mob/var/ckey&gt;</c> — so the URL is
+    /// derived from owner, kind and name rather than stored. Only emitted for entries the scrape
+    /// actually found an anchor for: 190 of 789 builtins come from <c>stddef.dm</c> and the
+    /// verified-members table and have no section, and a link that opens the index instead of the
+    /// symbol is worse than none.
+    /// </remarks>
+    public string Reference { get; }
+
+    /// <summary>Where the reference documents a builtin, or empty when it does not.</summary>
+    internal static string ReferenceUrl(TypeSymbol owner, string name, bool isProc, bool documented)
+    {
+        if (!documented)
+            return string.Empty;
+
+        string segment = isProc ? "proc" : "var";
+        string prefix = owner.Path.IsRoot ? string.Empty : owner.Path.Text;
+
+        return $"https://www.byond.com/docs/ref/info.html#{prefix}/{segment}/{name}";
+    }
 
     public override string ToString() => $"{Detail} at {File}{NameSpan}";
 }
@@ -368,7 +393,8 @@ public static class DefinitionService
                 {
                     locations.Add(new DefinitionLocation(
                         string.Empty, default, default, Describe(step, name) + "()",
-                        $"{name}({string.Join(", ", proc.Parameters)})"));
+                        $"{name}({string.Join(", ", proc.Parameters)})",
+                        DefinitionLocation.ReferenceUrl(step, name, isProc: true, proc.HasReference)));
                 }
             }
 
@@ -388,7 +414,8 @@ public static class DefinitionService
                         : $"var/{name}";
 
                     locations.Add(new DefinitionLocation(
-                        string.Empty, default, default, Describe(step, name), rendered));
+                        string.Empty, default, default, Describe(step, name), rendered,
+                        DefinitionLocation.ReferenceUrl(step, name, isProc: false, variable.HasReference)));
                 }
             }
         }

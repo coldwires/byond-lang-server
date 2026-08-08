@@ -548,6 +548,16 @@ public sealed class Workspace : IDisposable
     public bool HasBuffer(string path)
         => _documents.TryGetValue(NormalisePath(path), out Document? d) && d.IsFromBuffer;
 
+    /// <summary>
+    /// Resolves a caller's path against the project root, the same way every text call does.
+    /// </summary>
+    /// <remarks>
+    /// Public for the non-text assets — a <c>.dmi</c> is binary and must not become a
+    /// <see cref="Document"/>, but a client naming one relatively expects it resolved against the
+    /// project rather than against whatever directory the host process started in.
+    /// </remarks>
+    public string ResolvePath(string path) => NormalisePath(path);
+
     private string NormalisePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path))

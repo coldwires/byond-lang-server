@@ -246,6 +246,113 @@ public sealed class ServerTests : IDisposable
     }
 
     /// <summary>
+    /// The M8 method: icon states over the LSP, in the shape <c>dm_icon_states</c> answers, and a
+    /// file that is not an icon reported as an answer rather than an error.
+    /// </summary>
+    [Fact]
+    public void Dm_iconStates_reads_an_icon_and_reports_a_non_icon_as_one()
+    {
+        // A minimal .dmi: a PNG carrying the metadata in an uncompressed tEXt chunk, which the
+        // reader accepts alongside the deflated zTXt Dream Maker writes.
+        string metadata =
+            "# BEGIN DMI\nversion = 4.0\nwidth = 32\nheight = 32\n" +
+            "state = \"door\"\n\tdirs = 4\n\tframes = 1\n# END DMI\n";
+
+        List<byte> body = new(System.Text.Encoding.ASCII.GetBytes("Description"));
+        body.Add(0);
+        body.AddRange(System.Text.Encoding.Latin1.GetBytes(metadata));
+
+        List<byte> png = new(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+        Append(png, "tEXt", body);
+        Append(png, "IEND", new List<byte>());
+
+        File.WriteAllBytes(Path.Combine(_root, "icon.dmi"), png.ToArray());
+
+        Initialize();
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"dm/iconStates\",\"params\":{{\"uri\":\"{FileUri("icon.dmi")}\"}}}}");
+
+        JsonElement result = Frames()[^1].RootElement.GetProperty("result");
+
+        Assert.True(result.GetProperty("isDmi").GetBoolean());
+        Assert.Equal(32, result.GetProperty("width").GetInt32());
+        Assert.Equal("door", result.GetProperty("states")[0].GetProperty("name").GetString());
+        Assert.Equal(4, result.GetProperty("states")[0].GetProperty("dirs").GetInt32());
+
+        // code.dm is real and is not a PNG: an answer, not a failure.
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"dm/iconStates\",\"params\":{{\"uri\":\"{FileUri("code.dm")}\"}}}}");
+
+        JsonElement plain = Frames()[^1].RootElement.GetProperty("result");
+
+        Assert.False(plain.GetProperty("isDmi").GetBoolean());
+        Assert.Empty(plain.GetProperty("states").EnumerateArray());
+
+        static void Append(List<byte> png, string kind, List<byte> body)
+        {
+            int length = body.Count;
+
+            png.Add((byte)(length >> 24));
+            png.Add((byte)(length >> 16));
+            png.Add((byte)(length >> 8));
+            png.Add((byte)length);
+            png.AddRange(System.Text.Encoding.ASCII.GetBytes(kind));
+            png.AddRange(body);
+            png.AddRange(new byte[4]);
+        }
+    }
+
+    /// <summary>
+    /// Colours come back as LSP's 0-1 floats while the core speaks DM's 0-255, and the range
+    /// covers the whole literal including its quotes so a picker replaces the lot.
+    /// </summary>
+    [Fact]
+    public void Document_colors_are_reported_as_floats_over_the_whole_literal()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/obj/paint\\n\\tcolor = \\\"#ff0080\\\"\\n\"}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/documentColor\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}}}}}}");
+
+        JsonElement result = Frames()[^1].RootElement.GetProperty("result");
+        JsonElement color = result[0];
+
+        Assert.Equal(1.0, color.GetProperty("color").GetProperty("red").GetDouble(), 3);
+        Assert.Equal(0.0, color.GetProperty("color").GetProperty("green").GetDouble(), 3);
+        Assert.Equal(128 / 255.0, color.GetProperty("color").GetProperty("blue").GetDouble(), 3);
+        Assert.Equal(1.0, color.GetProperty("color").GetProperty("alpha").GetDouble(), 3);
+
+        // `\tcolor = "#ff0080"` — the opening quote is character 9, the closing one ends at 18.
+        Assert.Equal(1, color.GetProperty("range").GetProperty("start").GetProperty("line").GetInt32());
+        Assert.Equal(9, color.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32());
+        Assert.Equal(18, color.GetProperty("range").GetProperty("end").GetProperty("character").GetInt32());
+    }
+
+    /// <summary>
+    /// A presentation is what gets written when the user picks a colour, and the form already in
+    /// the file leads — picking a shade beside an rgb() call must not rewrite it as a literal.
+    /// </summary>
+    [Fact]
+    public void Color_presentations_keep_the_form_that_is_already_written()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/obj/paint\\n\\tvar/c = rgb(255, 0, 128)\\n\"}}}}}}");
+
+        // The range the client sends back is the one documentColor reported: `rgb(255, 0, 128)`
+        // starts at character 9 and ends at 25.
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/colorPresentation\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"color\":{{\"red\":1.0,\"green\":0.0,\"blue\":0.5019607843137255,\"alpha\":1.0}},\"range\":{{\"start\":{{\"line\":1,\"character\":9}},\"end\":{{\"line\":1,\"character\":25}}}}}}}}");
+
+        JsonElement result = Frames()[^1].RootElement.GetProperty("result");
+
+        Assert.Equal("rgb(255, 0, 128)", result[0].GetProperty("label").GetString());
+        Assert.Equal("\"#ff0080\"", result[1].GetProperty("label").GetString());
+    }
+
+    /// <summary>
     /// The legend is advertised and the data decodes: a keyword token where `var` sits, and a
     /// multi-line string split into one token per line, since VS Code renders only the first line
     /// of a semantic token that crosses lines.

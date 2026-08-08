@@ -12,10 +12,12 @@ namespace Dm.Core.Services;
 /// <summary>What to show when the pointer rests on a symbol.</summary>
 public sealed class HoverResult
 {
-    public HoverResult(string detail, string signature, string documentation, TextSpan span)
+    public HoverResult(string detail, string signature, string documentation, TextSpan span,
+        string reference = "")
     {
         Detail = detail;
         Signature = signature;
+        Reference = reference;
         Documentation = documentation;
         Span = span;
     }
@@ -31,6 +33,16 @@ public sealed class HoverResult
 
     /// <summary>The token hovered, so a client can highlight exactly what it answered about.</summary>
     public TextSpan Span { get; }
+
+    /// <summary>
+    /// A link to the DM Reference section for a builtin, or empty.
+    /// </summary>
+    /// <remarks>
+    /// Only for builtins the reference actually documents — see
+    /// <see cref="DefinitionLocation.Reference"/>. A project's own symbols have a declaration to
+    /// open instead, which is better than any link.
+    /// </remarks>
+    public string Reference { get; }
 }
 
 /// <summary>
@@ -74,7 +86,9 @@ public static class HoverService
         // A builtin match has no file to read a declaration from; its signature was rendered from
         // the symbol table instead, and nothing declares it so there is no doc comment.
         if (target.File.Length == 0)
-            return new HoverResult(target.Detail, target.Signature, string.Empty, TokenSpanAt(document, offset));
+            return new HoverResult(
+                target.Detail, target.Signature, string.Empty, TokenSpanAt(document, offset),
+                target.Reference);
 
         // The declaration lives in whatever file declared it, which is usually not this one.
         SourceText source = string.Equals(target.File, document.Path, StringComparison.OrdinalIgnoreCase)

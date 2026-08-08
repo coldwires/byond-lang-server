@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using Dm.Assets;
 using Dm.Core;
 using Dm.Core.Binding;
 using Dm.Core.Diagnostics;
@@ -465,6 +466,94 @@ internal static unsafe class Exports
 
             *outJson = NativeStrings.Allocate(EditorJson.WriteLinks(
                 DocumentLinkService.LinksFor(document, ws.LibraryRoot),
+                document.Text,
+                (PositionEncoding)encoding));
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The icon states in a <c>.dmi</c>. Added in ABI 0.24, and M8.
+    /// </summary>
+    /// <remarks>
+    /// Reads from disk rather than through a buffer: a <c>.dmi</c> is a PNG, and the pushed-buffer
+    /// rule is about text a client is editing. A file that is not an icon answers DM_OK with
+    /// <c>isDmi: false</c> rather than an error, because three of one real project's own
+    /// <c>.dmi</c> files are zero bytes and a client should be able to say so without a failure
+    /// path.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_icon_states")]
+    public static int IconStates(IntPtr workspace, byte* filePath, byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            string resolved = ws.ResolvePath(path);
+
+            if (!File.Exists(resolved))
+                return Fail(DmStatus.NotFound, $"no such file: {resolved}");
+
+            bool isDmi = DmiReader.TryRead(resolved, out DmiIcon icon);
+
+            *outJson = NativeStrings.Allocate(IconJson.Write(isDmi, icon));
+
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The colours written in a file, with the text to write for each. Added in ABI 0.23.
+    /// </summary>
+    /// <remarks>
+    /// Per file and off the token stream, like folding and links, so a swatch appears before the
+    /// project has been walked and a colour inside a comment is correctly not one. Components are
+    /// 0-255, which is what DM writes and reads; the presentations ride along because there are at
+    /// most two and computing them is arithmetic on a colour already in hand.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_document_colors")]
+    public static int DocumentColors(IntPtr workspace, byte* filePath, int encoding, byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            Document document = ws.GetDocument(path);
+
+            *outJson = NativeStrings.Allocate(EditorJson.WriteColors(
+                ColorService.ColorsIn(document),
                 document.Text,
                 (PositionEncoding)encoding));
 

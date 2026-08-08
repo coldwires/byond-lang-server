@@ -92,6 +92,12 @@ internal static class Program
         // A proc's parameter list — or, for a var, its declared type (`/world` for the global
         // `world`). Optional in both cases and empty nearly everywhere.
         public string Signature = string.Empty;
+
+        // Whether the DM Reference documents this entry, which is exactly "did the scrape find an
+        // anchor for it". 574 of 789 do; the rest come from stddef.dm and the verified-members
+        // table and have no anchor to link to. Recorded rather than derived at read time, because
+        // a link to a section that does not exist is worse than no link.
+        public bool Documented;
     }
 
     /// <summary>
@@ -141,6 +147,15 @@ internal static class Program
                 Owner = owner,
                 Name = name,
                 Signature = segments[keyword] == "var" ? string.Empty : ReadFormat(html, match.Index, name),
+
+                // It came from an anchor - but only mark it when the anchor we would DERIVE at
+                // read time (owner + var|proc + name) is the one it actually came from. 25 entries
+                // fail that: `/proc/var/args` and `/verb/set/category` both match their keyword at
+                // index 0, so they are scraped as global procs named `args` and `category`, and a
+                // link derived from that lands nowhere. Those are separately WRONG as entries -
+                // `args` is a proc-scope var, not a global proc - and are left alone here rather
+                // than half-fixed; this only refuses to link them.
+                Documented = path == DerivedAnchor(owner, name, segments[keyword] == "var"),
             };
 
             if (Add(entries, entry))
@@ -148,6 +163,17 @@ internal static class Program
         }
 
         return added;
+    }
+
+    /// <summary>
+    /// The anchor a reader reconstructs from owner, kind and name — the one a link would use.
+    /// </summary>
+    private static string DerivedAnchor(string owner, string name, bool isVar)
+    {
+        string segment = isVar ? "var" : "proc";
+        string prefix = owner == "/" ? string.Empty : owner;
+
+        return $"{prefix}/{segment}/{name}";
     }
 
     /// <summary>
@@ -572,7 +598,7 @@ internal static class Program
                     break;
 
                 case 'V':
-                    output.Append("V ").Append(entry.Owner).Append(' ').Append(entry.Name);
+                    output.Append(entry.Documented ? "V# " : "V ").Append(entry.Owner).Append(' ').Append(entry.Name);
 
                     if (entry.Signature.Length > 0)
                         output.Append(' ').Append(entry.Signature);
@@ -585,7 +611,7 @@ internal static class Program
                     break;
 
                 default:
-                    output.Append("P ").Append(entry.Owner).Append(' ').Append(entry.Name);
+                    output.Append(entry.Documented ? "P# " : "P ").Append(entry.Owner).Append(' ').Append(entry.Name);
 
                     if (entry.Signature.Length > 0)
                         output.Append(' ').Append(entry.Signature);

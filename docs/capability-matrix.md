@@ -26,6 +26,9 @@ work list.
 | Lazy completion documentation | `CompleteBriefAt` + `ResolveDocumentation` | `dm_complete_brief`, `dm_complete_resolve` (0.17) | `resolveProvider` + `completionItem/resolve` |
 | Completion ranking + opt-in cap | `CompletionResult.Truncated`, scope-distance order | `dm_set_completion_limit` (0.18), `truncated` | `isIncomplete` + `sortText` |
 | Per-item declared type + initial value | `CompletionItem.DeclaredType`, `.InitialValue` | `dm_complete_at` `type` / `value` (0.21) | `completion`, nonstandard `type` / `value` |
+| Which route typed a receiver | `CompletionItem.TypeSource` | `dm_complete_at` `typeFrom`, always (0.22) | `completion`, nonstandard `typeFrom` — sent only alongside `inferred`, so `written` never appears |
+| `as` input-filter vocabulary | `CompletionContext.InputType` | `dm_complete_at` `context: "InputType"` | `completion` — the items, but no context word: LSP has no field for it |
+| DM Reference links on builtins | `DefinitionLocation.Reference` | `dm_hover_at` `reference` | `hover` — a `[DM Reference](url)` line in the markdown, which needs no client code |
 | Go-to-type-definition | `DefinitionService.TypeDefinitionAt` | `dm_type_definition_at` (0.19) | `typeDefinition` |
 | What-overrides-this | `ReferenceService`, `kind: override` | `dm_query_json` `references` (0.14) | `implementation` |
 | Folding ranges | `FoldingService` | `dm_folding_ranges` (0.19) | `foldingRange` |
@@ -35,12 +38,17 @@ work list.
 | `.dme` tickmarks (tick/untick) | `DmeIncludeBlock`, `Workspace.TickFile`/`UntickFile` | `dm_dme_is_ticked`, `dm_dme_tick`, `dm_dme_untick` (0.20) | `dm/tickFile`, `dm/untickFile` + the client's toggle command |
 | Workspace-symbol kind filters | `WorkspaceSymbolService` (`var/`, `proc/`, `verb/`, `#`) | `dm_workspace_symbols` (0.8) — filters ride in the query string | `workspace/symbol` |
 | Object-tree panel | `TreeQueryService` | `dm_query_json` (0.11) | `dm/objectTree` + the client's Explorer view |
-| `.dmi` icon states | ⬜ M8, unscheduled | ⬜ | ⬜ |
+| Colour swatches (`rgb()`, `"#rrggbb"`) | `ColorService` | `dm_document_colors` (0.23) | `documentColor` + `colorPresentation`, components as 0-1 floats |
+| `.dmi` icon states | `Dm.Assets.DmiReader` | `dm_icon_states` (0.24) | `dm/iconStates` — served, and **no client asks yet**: the VS Code extension has no icon browser |
 
-**No ABI gaps remain.** The three editor-shaped rows — type-definition, folding, document links —
-were briefly blank on the reasoning that no in-process consumer had asked; the user asked, and
-they went in at 0.19 alongside `dm_file_in_project`. The one remaining blank is `.dmi`, which is
-M8 and is a gap on every surface rather than a deliberate omission on one.
+**No gaps remain on any surface** — M8 closed the last blank row on 2026-08-08. What the `.dmi`
+row records instead is a different kind of gap and the one this project has been caught by before:
+the server answers `dm/iconStates` and the VS Code client never asks, exactly as it never asked for
+`dm/objectTree` for two milestones. A row is not parity until something calls it.
+
+Before that, the three editor-shaped rows — type-definition, folding, document links — were briefly
+blank on the reasoning that no in-process consumer had asked; the user asked, and they went in at
+0.19 alongside `dm_file_in_project`.
 
 Positions: the ABI and CLI speak both encodings by parameter; LSP negotiates and uses UTF-16.
 CLI lines/columns are 1-based, ABI and LSP 0-based.

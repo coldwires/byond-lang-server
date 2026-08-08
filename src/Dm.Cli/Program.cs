@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using Dm.Assets;
 using Dm.Core.Diagnostics;
 using Dm.Core;
 using Dm.Core.Includes;
@@ -47,6 +48,8 @@ internal static class Program
                 "hover" => Hover(args),
                 "signature" => Signature(args),
                 "hints" => Hints(args),
+                "colors" => Colors(args),
+                "icons" => Icons(args),
                 "references" => References(args),
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
@@ -101,6 +104,9 @@ internal static class Program
         Console.Error.WriteLine("      --brief              omit documentation, as dm_complete_brief does");
         Console.Error.WriteLine("      --resolve <name>     one item's documentation, as dm_complete_resolve");
         Console.Error.WriteLine("  hints <dme> <file> [start end]       inferred-type inlay hints, 1-based lines");
+        Console.Error.WriteLine("  colors <file>            the colours written in it, and what a picker may write back");
+        Console.Error.WriteLine("  icons <file-or-dir>      icon states in a .dmi, or across a tree");
+        Console.Error.WriteLine("      --states             one line per state, for diffing");
         Console.Error.WriteLine("  references <dme> <file> <line> <col> every use of the symbol there");
         Console.Error.WriteLine("      --path <target>      query by canonical path instead: /mob/hp,");
         Console.Error.WriteLine("                           /mob/heal(), /heal() for a global, a type path");
@@ -742,6 +748,11 @@ internal static class Program
             Console.Out.WriteLine(hover.Documentation);
         }
 
+        // The CLI is the arbiter, so it shows every field the ABI carries - a value only the ABI
+        // renders is a value nobody can check from here.
+        if (hover.Reference.Length > 0)
+            Console.Out.WriteLine(hover.Reference);
+
         return 0;
     }
 
@@ -890,6 +901,133 @@ internal static class Program
     /// The inlay hints the ABI and the LSP serve, rendered per line — the CLI arbiter for the one
     /// call whose output is otherwise only visible inside an editor.
     /// </summary>
+    /// <summary>
+    /// The colours in a file, as <c>dm_document_colors</c> and the LSP's documentColor answer them.
+    /// </summary>
+    /// <remarks>
+    /// Needs no <c>.dme</c>: colours come off the token stream, so this arbitrates a swatch without
+    /// the project being walked. Positions print 1-based, as every other CLI command does.
+    /// </remarks>
+    private static int Colors(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: colors needs a file");
+            return 1;
+        }
+
+        PositionEncoding encoding = args.Contains("--utf8") ? PositionEncoding.Utf8 : PositionEncoding.Utf16;
+
+        SourceText text = SourceFileReader.Read(args[1]);
+        IReadOnlyList<ColorInformation> colors =
+            ColorService.ColorsIn(Document.FromText(args[1], text));
+
+        foreach (ColorInformation color in colors)
+        {
+            LinePosition at = text.GetLinePosition(color.Span.Start, encoding);
+            string swatch = $"#{color.Red:x2}{color.Green:x2}{color.Blue:x2}";
+            string alpha = color.Alpha >= 255 ? string.Empty : $" alpha {color.Alpha}";
+
+            string form = color.Form == ColorForm.RgbCall ? "rgb()" : "literal";
+
+            Console.Out.WriteLine($"{at.Line + 1}:{at.Character + 1}  {swatch}{alpha}  {form}");
+            Console.Out.WriteLine(
+                $"      as written  {text.ToString(color.Span)}");
+            Console.Out.WriteLine(
+                $"      write back  {string.Join("  |  ", ColorService.PresentationsFor(color))}");
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{colors.Count} colour(s)");
+        return 0;
+    }
+
+    /// <summary>
+    /// Icon states in a <c>.dmi</c>, or across a tree of them.
+    /// </summary>
+    /// <remarks>
+    /// A directory argument is what makes this the arbiter for a whole game's assets: totals across
+    /// a real project are the check that the reader agrees with the format, and a file that is not
+    /// an icon is reported rather than skipped, because three of one project's own <c>.dmi</c>
+    /// files are zero bytes.
+    /// </remarks>
+    private static int Icons(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: icons needs a .dmi file or a directory");
+            return 1;
+        }
+
+        bool perState = args.Contains("--states");
+        string target = args[1];
+
+        string[] files = Directory.Exists(target)
+            ? Directory.GetFiles(target, "*.dmi", SearchOption.AllDirectories)
+            : new[] { target };
+
+        Array.Sort(files, StringComparer.Ordinal);
+
+        int icons = 0;
+        int states = 0;
+        int notIcons = 0;
+
+        foreach (string file in files)
+        {
+            if (!DmiReader.TryRead(file, out DmiIcon icon))
+            {
+                notIcons++;
+
+                if (!perState)
+                    Console.Out.WriteLine($"{file}  NOT A DMI");
+
+                continue;
+            }
+
+            icons++;
+            states += icon.States.Count;
+
+            if (perState)
+            {
+                foreach (DmiState state in icon.States)
+                    Console.Out.WriteLine($"{Path.GetFileName(file)}\t{state.Name}\t{state.Dirs}\t{state.Frames}");
+
+                continue;
+            }
+
+            string size = icon.Width > 0 ? $"{icon.Width}x{icon.Height}" : "size not stated";
+            Console.Out.WriteLine($"{file}  {icon.States.Count} state(s), {size}");
+
+            if (files.Length > 1)
+                continue;
+
+            foreach (DmiState state in icon.States)
+            {
+                string name = state.Name.Length == 0 ? "(default)" : state.Name;
+                string movement = state.IsMovement ? "  movement" : string.Empty;
+                string delays = state.Delays.Count > 0
+                    ? "  delay " + string.Join(",", state.Delays)
+                    : string.Empty;
+                string looping = state.Loop > 0 ? $"  loop {state.Loop}" : string.Empty;
+                string rewind = state.Rewind ? "  rewind" : string.Empty;
+                string hotspot = state.Hotspot.Count > 0
+                    ? "  hotspot " + string.Join(",", state.Hotspot)
+                    : string.Empty;
+
+                Console.Out.WriteLine(
+                    $"  {name}  dirs {state.Dirs}  frames {state.Frames}{delays}{looping}{rewind}{movement}{hotspot}");
+            }
+        }
+
+        if (!perState)
+        {
+            Console.Out.WriteLine();
+            Console.Out.WriteLine($"{icons} icon(s), {states} state(s), {notIcons} not a .dmi");
+        }
+
+        return 0;
+    }
+
     private static int Hints(string[] args)
     {
         if (args.Length < 3)

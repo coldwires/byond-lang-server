@@ -141,6 +141,14 @@ public static class CompletionService
             case TokenKind.Dot when !HasValueBefore(tokens, index):
                 return new CompletionResult(CompletionContext.ReturnValue, Array.Empty<CompletionItem>());
 
+            // A `.` after a WRITTEN PATH continues the path; it is not member access. Mid-path the
+            // two separators are the same token, so `/obj/item.weight` is the type
+            // `/obj/item/weight` and dm.exe says "undefined type path" when no such child exists —
+            // verified, with the child-type case compiling clean as the control. Offering members
+            // here handed the user a completion that cannot build.
+            case TokenKind.Dot when PathBefore(tree, document, tokens, index) is { } written:
+                return ChildTypes(written);
+
             case TokenKind.Dot:
             case TokenKind.QuestionDot:
                 return Members(tree, document, tokens, index, offset, false, fileText, cancellationToken, documentOnly, limit);
@@ -152,9 +160,65 @@ public static class CompletionService
             case TokenKind.Slash:
                 return TypePaths(tree, tokens, index);
 
+            // `as ` takes a CLOSED vocabulary of input-type filters, so the list is exact rather
+            // than drawn from the tree. A `|` continues one — `as null|anything` — so the same
+            // list is offered after the pipe.
+            case TokenKind.KeywordAs:
+            case TokenKind.Pipe when FollowsAnInputType(document, tokens, index):
+                return InputTypes();
+
             default:
                 return Identifiers(tree, document, offset, macros, fileText, documentOnly, limit);
         }
+    }
+
+    /// <summary>
+    /// The input-type filters an <c>as</c> clause accepts, as a completion list.
+    /// </summary>
+    /// <remarks>
+    /// Marked builtin because BYOND defines the vocabulary and no project can add to it, and given
+    /// no rank of its own — the list is closed and short, so the order is the reference's rather
+    /// than a scope distance that means nothing here.
+    /// </remarks>
+    private static CompletionResult InputTypes()
+    {
+        List<CompletionItem> items = new(SyntaxFacts.InputTypes.Length);
+
+        foreach (string name in SyntaxFacts.InputTypes)
+        {
+            items.Add(new CompletionItem(
+                name, CompletionKind.Keyword, "input filter", isBuiltin: true));
+        }
+
+        return new CompletionResult(CompletionContext.InputType, items);
+    }
+
+    /// <summary>
+    /// Whether a <c>|</c> is continuing an <c>as</c> clause rather than being bitwise-or.
+    /// </summary>
+    /// <remarks>
+    /// Decided by the name immediately before it being one of the filters, which is what
+    /// <c>as null|anything</c> looks like. A bitwise <c>|</c> over a variable that happens to be
+    /// named <c>text</c> would be misread, and that is accepted: offering eighteen keywords is a
+    /// smaller error than missing the clause, and the alternative is tracking clause state through
+    /// the lexer for a list nobody is harmed by seeing.
+    /// </remarks>
+    private static bool FollowsAnInputType(Document document, IReadOnlyList<Token> tokens, int pipeIndex)
+    {
+        for (int i = pipeIndex - 1; i >= 0; i--)
+        {
+            if (tokens[i].Kind is TokenKind.Comment)
+                continue;
+
+            if (tokens[i].Kind is not (TokenKind.Identifier or TokenKind.KeywordNull))
+                return false;
+
+            string name = document.Text.ToString(tokens[i].Span);
+
+            return Array.IndexOf(SyntaxFacts.InputTypes, name) >= 0;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -298,7 +362,9 @@ public static class CompletionService
         int limit = 0)
     {
         TypeSymbol? receiver = ResolveReceiver(
-            tree, document, tokens, operatorIndex - 1, offset, out bool inferred);
+            tree, document, tokens, operatorIndex - 1, offset, out TypeSource typeSource);
+
+        bool inferred = typeSource is not (TypeSource.Written or TypeSource.None);
 
         CompletionContext context = widen ? CompletionContext.SubtypeMember : CompletionContext.Member;
 
@@ -312,7 +378,7 @@ public static class CompletionService
         foreach (TypeSymbol step in tree.InheritanceChain(receiver))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            AddMembers(items, step, fileText, inferred, documentOnly);
+            AddMembers(items, step, fileText, inferred, documentOnly, Rank.Member, typeSource);
         }
 
         // `:` also reaches members declared on subtypes, which is what makes it a wider check
@@ -342,7 +408,8 @@ public static class CompletionService
 
     private static void AddMembers(
         Dictionary<string, CompletionItem> items, TypeSymbol type, Func<string, SourceText?>? fileText,
-        bool inferred = false, string? documentOnly = null, int rank = Rank.Member)
+        bool inferred = false, string? documentOnly = null, int rank = Rank.Member,
+        TypeSource typeSource = TypeSource.None)
     {
         foreach (VarSymbol variable in type.Vars)
         {
@@ -357,7 +424,8 @@ public static class CompletionService
                 inferred,
                 variable.IsBuiltin ? Rank.Builtin : rank,
                 variable.DeclaredType?.Text ?? string.Empty,
-                variable.InitialValue));
+                variable.InitialValue,
+                typeSource));
         }
 
         foreach (ProcSymbol proc in type.Procs)
@@ -413,7 +481,7 @@ public static class CompletionService
     /// </remarks>
     internal static TypeSymbol? ResolveReceiver(
         ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset)
-        => ResolveReceiver(tree, document, tokens, index, offset, out _);
+        => ResolveReceiver(tree, document, tokens, index, offset, out TypeSource _);
 
     /// <summary>
     /// As above, also reporting whether the receiver's type was <b>inferred</b> rather than
@@ -424,19 +492,55 @@ public static class CompletionService
         ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset,
         out bool inferred)
     {
-        inferred = false;
+        TypeSymbol? found = ResolveReceiver(
+            tree, document, tokens, index, offset, out TypeSource source);
+
+        inferred = source is not (TypeSource.Written or TypeSource.None);
+        return found;
+    }
+
+    /// <summary>
+    /// As above, reporting WHICH route produced the receiver's type rather than only whether
+    /// <c>dm.exe</c> would refuse it.
+    /// </summary>
+    internal static TypeSymbol? ResolveReceiver(
+        ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset,
+        out TypeSource source)
+    {
+        source = TypeSource.None;
 
         if (index < 0)
             return null;
 
+        // `src` and `usr` are both WRITTEN in the sense that matters: dm.exe checks members
+        // through them, so nothing here rides on inference.
         if (tokens[index].Kind == TokenKind.KeywordSrc)
+        {
+            source = TypeSource.Written;
             return EnclosingType(tree, document, offset);
+        }
 
         // `usr` is always a /mob, and unlike `src` it does NOT take the enclosing type — verified
         // by compiling `usr.key` inside a proc on /obj, which resolves a /mob-only var, with
         // `usr.nonexistent_xyz` as the control that says the compiler is checking at all.
         if (tokens[index].Kind == TokenKind.KeywordUsr)
+        {
+            source = TypeSource.Written;
             return tree.Find(UsrType);
+        }
+
+        // `new /obj/item(args).` — the constructed object's type is WRITTEN two tokens back, so
+        // this resolves exactly. dm.exe does not check it (the receiver is `<expression>` to it,
+        // so any member existing anywhere compiles) and the runtime then RAISES: verified,
+        // `new /mob/test(1).elsewhere` is "undefined variable /mob/test/var/elsewhere". Offering
+        // /obj/item's members is therefore both more useful than nothing AND sound - it is the one
+        // member list that will not crash.
+        if (tokens[index].Kind == TokenKind.CloseParen
+            && NewExpressionPath(tree, document, tokens, index) is { } constructed)
+        {
+            source = TypeSource.Written;
+            return constructed;
+        }
 
         if (!IsName(tokens[index].Kind))
             return null;
@@ -466,7 +570,7 @@ public static class CompletionService
         // written in the project. A single receiver worked, so it read as a builtins problem.
         if (start < index && !sawSlash && !leadingSeparator)
         {
-            TypeSymbol? current = ResolveReceiver(tree, document, tokens, start, offset, out inferred);
+            TypeSymbol? current = ResolveReceiver(tree, document, tokens, start, offset, out source);
 
             for (int i = start + 2; i <= index && current is not null; i += 2)
             {
@@ -511,20 +615,35 @@ public static class CompletionService
         string name = document.Text.ToString(tokens[index].Span);
 
         // A local or parameter carries its declared type — or, failing that, an inferred one.
-        if (FindLocalType(document, offset, name, out inferred) is { } localType)
+        if (FindLocalType(document, offset, name, out source) is { } localType)
             return tree.Find(localType);
 
-        // No local answered; the flag must not leak onto the written-type branches below.
-        inferred = false;
+        // No local answered; the source must not leak onto the written-type branches below.
+        source = TypeSource.None;
 
-        // A var on the enclosing type, then a bare type name such as `mob`.
+        // A var on the enclosing type resolves normally: dm.exe checks members through it.
         if (EnclosingType(tree, document, offset) is { } enclosing
             && tree.ResolveVar(enclosing, name) is { DeclaredType: { } declared })
         {
+            source = TypeSource.Written;
             return tree.Find(declared);
         }
 
-        return tree.Find(TypePath.Root.Append(name));
+        // A BARE TYPE NAME — `mob.` — and this is PLAN §1's acceptance target rather than a
+        // resolution dm.exe agrees with. It does not: `mob.loc`, `mob.hp` and `mob.sub` are all
+        // "undefined var", because a bare `mob` is neither a variable nor a path (§4a context 3
+        // needs a LEADING separator for that). Unlike the untyped-local divergence there is no
+        // edit that makes the expression legal, so nothing offered here can compile as written.
+        //
+        // It is kept because exploring a type's members by name is genuinely useful and the target
+        // was set deliberately — but it is marked so a client can badge or drop it, which is the
+        // half that was missing. Removing it is a one-line change if the target ever moves.
+        TypeSymbol? bareType = tree.Find(TypePath.Root.Append(name));
+
+        if (bareType is not null)
+            source = TypeSource.BareTypeName;
+
+        return bareType;
     }
 
     /// <summary>
@@ -700,7 +819,25 @@ public static class CompletionService
     /// </remarks>
     internal static TypePath? FindLocalType(Document document, int offset, string name, out bool inferred)
     {
-        inferred = false;
+        TypePath? found = FindLocalType(document, offset, name, out TypeSource source);
+
+        inferred = source is not (TypeSource.Written or TypeSource.None);
+        return found;
+    }
+
+    /// <summary>
+    /// As above, reporting WHICH route produced the type rather than only whether dm.exe would
+    /// refuse it.
+    /// </summary>
+    /// <remarks>
+    /// The two answers differ on the <c>as</c> clause: it is written down by the author and is
+    /// still not a type the compiler checks members through, so a client that renders "inferred"
+    /// there is telling someone their own words were a guess.
+    /// </remarks>
+    internal static TypePath? FindLocalType(
+        Document document, int offset, string name, out TypeSource source)
+    {
+        source = TypeSource.None;
 
         if (FindEnclosingProc(document, offset) is not { } proc)
             return null;
@@ -711,18 +848,29 @@ public static class CompletionService
                 continue;
 
             if (local.DeclaredType is { } type)
+            {
+                source = TypeSource.Written;
                 return TypePath.FromSegments(type.Segments);
+            }
 
             // Everything past this line is inference the compiler does not do: dm.exe checks only
             // a written type, so an answer from here is offered knowing the build would refuse it.
-            inferred = true;
 
             // An untyped local. The most recent assignment before the cursor describes what the
             // name holds *here*, so it beats the initialiser rather than the other way round.
             if (LastAssignedType(document, proc, offset, name) is { } assigned)
+            {
+                source = TypeSource.Assignment;
                 return assigned;
+            }
 
-            return Infer(document, proc, offset, local.Initializer, name);
+            TypePath? fromInitializer = Infer(document, proc, offset, local.Initializer, name);
+
+            // Only claim a source when there is actually an answer - Infer returns null for a
+            // local nothing types, and reporting Initializer there would name a route that
+            // produced nothing.
+            source = fromInitializer is null ? TypeSource.None : TypeSource.Initializer;
+            return fromInitializer;
         }
 
         foreach (ParameterSyntax parameter in proc.Parameters)
@@ -731,12 +879,19 @@ public static class CompletionService
                 continue;
 
             if (parameter.DeclaredType is { } type)
+            {
+                source = TypeSource.Written;
                 return TypePath.FromSegments(type.Segments);
+            }
 
             // `f(M as mob)` says what M is without declaring a path — an input filter, not a type
-            // annotation, so this too is beyond what the compiler checks (language notes).
-            inferred = true;
-            return TypeInference.FromInputType(parameter.InputType);
+            // annotation, so this too is beyond what the compiler checks (language notes). It is
+            // the one route the author WROTE and dm.exe still refuses, which is why the source is
+            // reported separately from the flag.
+            TypePath? fromFilter = TypeInference.FromInputType(parameter.InputType);
+
+            source = fromFilter is null ? TypeSource.None : TypeSource.InputFilter;
+            return fromFilter;
         }
 
         return null;
@@ -754,7 +909,7 @@ public static class CompletionService
         => TypeInference.Infer(expression, referenced
             => string.Equals(referenced, origin, StringComparison.Ordinal)
                 ? null
-                : FindLocalType(document, offset, referenced, out _));
+                : FindLocalType(document, offset, referenced, out TypeSource _));
 
     /// <summary>
     /// The type last assigned to a name before the cursor, for <c>var/x</c> then <c>x = new /obj</c>.
@@ -887,6 +1042,128 @@ public static class CompletionService
     }
 
     // -- paths --------------------------------------------------------------
+
+    /// <summary>
+    /// The type constructed by a <c>new /path(...)</c> ending at <paramref name="closeIndex"/>.
+    /// </summary>
+    /// <remarks>
+    /// Matched by bracket depth rather than by scanning for the nearest <c>(</c>, so nested calls
+    /// and parenthesised arguments do not throw it off. Returns null unless the whole shape is
+    /// there: a balanced group, a path in front of it, and <c>new</c> in front of that.
+    /// </remarks>
+    private static TypeSymbol? NewExpressionPath(
+        ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int closeIndex)
+    {
+        int depth = 0;
+        int open = -1;
+
+        for (int i = closeIndex; i >= 0; i--)
+        {
+            if (tokens[i].Kind == TokenKind.CloseParen)
+            {
+                depth++;
+            }
+            else if (tokens[i].Kind == TokenKind.OpenParen)
+            {
+                depth--;
+
+                if (depth == 0)
+                {
+                    open = i;
+                    break;
+                }
+            }
+        }
+
+        if (open <= 0)
+            return null;
+
+        // The path sits between `new` and the `(`, written with either separator.
+        int end = open - 1;
+
+        if (end < 0 || !IsName(tokens[end].Kind))
+            return null;
+
+        int start = end;
+
+        while (start > 0 && tokens[start - 1].Kind is TokenKind.Slash or TokenKind.Dot
+               && start - 2 >= 0 && IsName(tokens[start - 2].Kind))
+        {
+            start -= 2;
+        }
+
+        // A leading separator is part of the path, and `new` must be what precedes it.
+        int beforePath = start - 1;
+
+        if (beforePath >= 0 && tokens[beforePath].Kind is TokenKind.Slash or TokenKind.Dot)
+            beforePath--;
+
+        if (beforePath < 0 || tokens[beforePath].Kind != TokenKind.KeywordNew)
+            return null;
+
+        List<string> segments = new();
+
+        for (int i = start; i <= end; i += 2)
+            segments.Add(document.Text.ToString(tokens[i].Span));
+
+        return tree.Find(TypePath.FromSegments(segments));
+    }
+
+    /// <summary>
+    /// The type a written path before a <c>.</c> names, or null when the run is not a path.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A path is a run with a LEADING separator (<c>/obj/item.</c>, and the relative <c>.item/x.</c>)
+    /// or one written with <c>/</c> somewhere in it. A bare dotted run is not a path at all —
+    /// §4a context 3 — so <c>m.friend.</c> stays member access and only genuine paths land here.
+    /// </para>
+    /// <para>
+    /// A BARE TYPE NAME is deliberately excluded even though <c>mob.hp</c> is equally
+    /// uncompilable ("undefined var" — bare <c>mob</c> is neither a variable nor a path). That is
+    /// PLAN §1's acceptance target and removing it is a product decision rather than a bug fix, so
+    /// it keeps offering members and is marked inferred instead — see <see cref="Members"/>.
+    /// </para>
+    /// </remarks>
+    private static TypeSymbol? PathBefore(
+        ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int dotIndex)
+    {
+        int index = dotIndex - 1;
+
+        if (index < 0 || !IsName(tokens[index].Kind))
+            return null;
+
+        int start = index;
+        bool sawSlash = false;
+
+        while (start > 0 && tokens[start - 1].Kind is TokenKind.Slash or TokenKind.Dot
+               && start - 2 >= 0 && IsName(tokens[start - 2].Kind))
+        {
+            sawSlash |= tokens[start - 1].Kind == TokenKind.Slash;
+            start -= 2;
+        }
+
+        bool leadingSeparator = start > 0
+            && tokens[start - 1].Kind is TokenKind.Slash or TokenKind.Dot
+            && (start - 2 < 0 || !IsName(tokens[start - 2].Kind));
+
+        if (!sawSlash && !leadingSeparator)
+            return null;
+
+        return ResolveReceiver(tree, document, tokens, index, tokens[index].Span.End, out TypeSource _);
+    }
+
+    /// <summary>The children of a type, as path segments rather than members.</summary>
+    private static CompletionResult ChildTypes(TypeSymbol type)
+    {
+        List<CompletionItem> items = new();
+
+        foreach (TypeSymbol child in type.Children)
+            items.Add(new CompletionItem(child.Name, CompletionKind.Type, child.Path.Text, child.IsBuiltin));
+
+        items.Sort(static (a, b) => string.CompareOrdinal(a.Name, b.Name));
+        return new CompletionResult(CompletionContext.TypePath, items);
+    }
 
     private static CompletionResult TypePaths(ObjectTree tree, IReadOnlyList<Token> tokens, int slashIndex)
     {

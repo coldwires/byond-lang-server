@@ -50,6 +50,16 @@ public sealed class VarSymbol
     public bool IsBuiltin { get; init; }
 
     /// <summary>
+    /// Whether the DM Reference documents this builtin, so a hover can link to it.
+    /// </summary>
+    /// <remarks>
+    /// Recorded rather than assumed: 574 of 789 builtins came from a reference anchor and the rest
+    /// from <c>stddef.dm</c> and the verified-members table, which have none. Linking to a section
+    /// that does not exist is worse than not linking.
+    /// </remarks>
+    public bool HasReference { get; init; }
+
+    /// <summary>
     /// The initialiser as the author wrote it, or empty when there is none.
     /// </summary>
     /// <remarks>
@@ -90,6 +100,9 @@ public sealed class ProcSymbol
 
     /// <summary>True for a BYOND builtin, which has no declaration site in any file.</summary>
     public bool IsBuiltin { get; internal set; }
+
+    /// <summary>Whether the DM Reference documents this builtin — see <see cref="VarSymbol.HasReference"/>.</summary>
+    public bool HasReference { get; internal set; }
 
     /// <summary>Parameter names from the first declaration that gave any.</summary>
     public IReadOnlyList<string> Parameters { get; private set; } = System.Array.Empty<string>();

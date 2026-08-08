@@ -22,6 +22,31 @@ internal static class SyntaxFacts
     /// A keyword is still not a variable NAME: <c>var/throw = 1</c> is dm.exe's "missing left-hand
     /// argument to =", so a local-var reader may take these only as non-final segments.
     /// </remarks>
+    /// <summary>
+    /// Every input type an <c>as</c> clause accepts, in the reference's own order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A CLOSED vocabulary, so a completion list after <c>as</c> is exact rather than a guess. The
+    /// reference documents that these exist and that <c>|</c> combines them, but never enumerates
+    /// them in one place, so the list was established by compiling one verb parameter per
+    /// candidate — <c>bogus_xyz</c> as the control that must fail.
+    /// </para>
+    /// <para>
+    /// <b>It is not the type system, and three results say so.</b> <c>as datum</c>, <c>as list</c>
+    /// and <c>as client</c> are all REJECTED, while <c>as movable</c> and <c>as atom</c> are
+    /// accepted. No rule about types predicts that split: these are the filters DreamSeeker knows
+    /// how to prompt for, which is a different question from what a value can be. Verified on
+    /// 516.1686.
+    /// </para>
+    /// </remarks>
+    internal static readonly string[] InputTypes =
+    {
+        "anything", "null", "text", "message", "num", "icon", "sound", "file",
+        "key", "color", "command_text", "password", "mob", "obj", "turf", "area",
+        "movable", "atom",
+    };
+
     internal static bool IsPathSegmentKeyword(TokenKind kind) => kind
         is TokenKind.KeywordThrow
         or TokenKind.KeywordSet

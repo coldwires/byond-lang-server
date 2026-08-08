@@ -522,6 +522,42 @@ usually. Code that wants the last element has to save it inside the body.
 This is also why the inline form is the better habit — `for(var/y in L)` scopes `y` to the loop, so
 there is no after-the-loop read to get wrong.
 
+## 21. A short colour duplicates its digits, and `rgb()` truncates
+
+Two rules, both of which produce a *wrong colour* rather than an error, so nothing complains.
+
+```dm
+rgb2num("#f08")     // [255, 0, 136]  - not 128
+rgb(1.4, 1.5, 1.6)  // "#010101"      - not #010202
+```
+
+```
+short form blue = 136    fractional components = #010101
+```
+
+**A short form repeats each digit.** `#f08` is `#ff0088`, so the blue channel is `0x88` = 136. The
+tempting implementation shifts the nibble left by four, which gives 128 — close enough to look
+right in a picker and wrong in every three-digit colour in the codebase. Four digits is `#RGBA`,
+and the alpha repeats with the rest: `rgb2num("#ff00")` is `[255,255,0,0]`, a fully transparent
+yellow rather than a malformed `#RRGG`.
+
+**`rgb()` truncates a fraction and clamps a range.** `1.5` becomes 1, not 2 — which is the one
+value most likely to be written, and the one where truncating and rounding disagree.
+`rgb(300,-20,0)` is `#ff0000` and `rgb(-1,-1,-1)` is `#000000`, so both ends clamp rather than
+wrapping.
+
+A named colour is real: `rgb2num("red")` is `[255,0,0]`, and `color = "red"` reads back
+`#ff0000`. So is a colour space — `rgb(0,100,50,space=COLORSPACE_HSL)` is `#ff0000`, as is the
+named-argument form `rgb(h=0,s=100,l=50,space=COLORSPACE_HSL)`, since only a component's first
+letter matters. The `COLORSPACE_*` values are `#define`s in `stddef.dm`: RGB 0, HSV 1, HSL 2,
+HCY 3.
+
+The practical consequence for a tool: an `rgb()` carrying a `space` argument is **not** an RGB
+triple, and reading its arguments as one draws a red swatch beside a colour that is not red.
+
+Runtime-verified on 516.1686. These live in `tests/fixtures/ok/colors.dm` rather than in the
+appendix below, so a BYOND release that changes any of them fails a build.
+
 ---
 
 ## Compile-only: braces and indentation nest freely
