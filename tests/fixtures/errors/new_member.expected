@@ -1,0 +1,2 @@
+# Compiles clean: dm.exe does not check a member reached through `new`.
+# Our DM0302 warning is a deliberate divergence, so diagdiff stays at zero invented.

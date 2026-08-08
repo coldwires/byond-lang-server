@@ -26,6 +26,10 @@ internal static class HoverJson
         SymbolJson.AppendString(json, hover.Detail);
         json.Append(",\"signature\":");
         SymbolJson.AppendString(json, hover.Signature);
+        // A DM Reference link, for builtins the reference documents. Empty for everything else:
+        // a project symbol has a declaration to open, which beats any link.
+        json.Append(",\"reference\":");
+        SymbolJson.AppendString(json, hover.Reference);
         json.Append(",\"documentation\":");
         SymbolJson.AppendString(json, hover.Documentation);
         json.Append(",\"startLine\":").Append(start.Line);

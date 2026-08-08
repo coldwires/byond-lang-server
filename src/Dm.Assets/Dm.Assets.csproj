@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Dm.Assets</RootNamespace>
+    <!--
+      Reached from Dm.Native, which is a NativeAOT target, so the same constraint that binds
+      Dm.Core binds here: no reflection, no dynamic codegen. Inflating a zTXt chunk uses
+      System.IO.Compression.ZLibStream, which is in the framework and AOT-clean, so this assembly
+      carries no package dependency of its own.
+    -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dm.Core.Tests" />
+  </ItemGroup>
+
+</Project>

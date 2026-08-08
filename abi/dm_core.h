@@ -325,12 +325,26 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  *   "Identifier"      a bare word: locals, parameters, src members, globals
  *   "Member"          after `.` - the declared type and what it inherits
  *   "SubtypeMember"   after `:` - the above PLUS members declared on subtypes
- *   "TypePath"        after `/` - type paths
+ *   "TypePath"        after `/`, and after a `.` that CONTINUES A WRITTEN PATH -
+ *                     child types, not members. Mid-path the two separators are
+ *                     the same token, so `/obj/item.weight` is the type
+ *                     `/obj/item/weight`; offering members there is a completion
+ *                     that cannot build. Same after `new /mob/test.`
+ *   "InputType"       after `as`, and after a `|` continuing one - the eighteen
+ *                     input filters a verb argument accepts, as a CLOSED
+ *                     vocabulary read off the compiler. It is not the type
+ *                     system: `as datum`, `as list` and `as client` are rejected
+ *                     while `as movable` and `as atom` are accepted, which no
+ *                     rule about types predicts
  *   "ReturnValue"     a bare leading `.` - DM's return-value variable, not member
  *                     access. The list is EMPTY; show nothing. Added in 0.14, and
  *                     it exists so you do not have to guess what a user who just
  *                     typed `.` on a fresh line meant.
  *   "None"            nothing useful here
+ *
+ * Treat an unknown context word as "Identifier" and show the list as given - more
+ * arrive as the parser learns positions, and a client switching exhaustively on
+ * this would break on a minor bump.
  *
  * `.` and `:` differ on purpose and both are checked. `:` widens the check to the
  * subtype tree rather than removing it, so neither list contains members of an
@@ -351,6 +365,29 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  * a member list off a written type carries false throughout, so deriving it from
  * the trigger character marks correct items as risky. Badge them, rank them lower
  * or drop them - the flag is the fact that decision needs.
+ *
+ * "typeFrom" (0.22) says WHICH route produced that type, as a word:
+ *
+ *   "written"      a declared type - the only one dm.exe checks
+ *   "initializer"  an untyped local's `= new /obj/item`
+ *   "assignment"   the nearest `x = ...` before the cursor
+ *   "as"           a parameter's `as` clause
+ *   "bareTypeName" a type's own name as the receiver, `mob.`
+ *   "none"         nothing resolved it
+ *
+ * "bareTypeName" is the one route where NO edit makes the expression legal.
+ * `mob.loc` is "undefined var" - a bare `mob` is neither a variable nor a path,
+ * since a path reading needs a leading separator - so unlike an untyped local,
+ * which compiles the moment a type is written, this cannot compile in any form.
+ * It is offered because exploring a type's members by name is useful; a client
+ * that wants only completions the build will accept should drop this one.
+ *
+ * ** "as" IS THE ONE THAT MAKES "inferred" A MISLEADING WORD ** and the reason this
+ * field exists. The author WROTE `f(n as num)`; nothing was guessed. dm.exe still
+ * refuses members through it, because an `as` clause is an input filter for verb
+ * prompts rather than a type - so the warning is right and the wording is not.
+ * Render that case as "you wrote this and the compiler will not enforce it", and
+ * keep "inferred" for initializer and assignment where we really did work it out.
  *
  * "type" and "value" (0.21) are the ITEM'S OWN declared type and its initialiser
  * as written - "/mob" and "" for var/mob/M, "" and "6" for var/fatigue = 6 - so
@@ -449,6 +486,7 @@ dm_status dm_workspace_symbols(dm_workspace workspace, const char *query, int32_
  *   {
  *     "detail": "/mob/guy/health",           the resolved path
  *     "signature": "var/health = 1",         the declaration as written
+ *     "reference": "",                       DM Reference URL, builtins only
  *     "documentation": "How much ...",       preceding /// lines, markers stripped
  *     "startLine": 9, "startChar": 3,        the token you hovered, to highlight
  *     "endLine": 9,   "endChar": 9
@@ -457,6 +495,12 @@ dm_status dm_workspace_symbols(dm_workspace workspace, const char *query, int32_
  * documentation is a run of `///` lines directly above the declaration, joined with
  * newlines. A blank line or a plain `//` comment ends the run, matching what a reader
  * takes to be attached to the declaration.
+ *
+ * "reference" is a link into BYOND's own DM Reference for a builtin the reference
+ * documents - `mob.Move()`, `atom.loc` - and is EMPTY for everything else. A project
+ * symbol has a declaration to open, which beats any link, and a builtin the scrape
+ * found no anchor for gets none rather than a guessed URL. Render it as "read more"
+ * beside the signature; an empty string means show nothing.
  */
 dm_status dm_hover_at(dm_workspace workspace, const char *file,
                       int32_t line, int32_t character,
@@ -638,6 +682,80 @@ dm_status dm_folding_ranges(dm_workspace workspace, const char* file, char** out
  */
 dm_status dm_document_links(dm_workspace workspace, const char* file,
                             dm_position_encoding encoding, char** out_json);
+
+/*
+ * The icon states in a .dmi. Added in ABI 0.24. YOU FREE IT with dm_free.
+ *
+ *   { "isDmi": true, "width": 32, "height": 32,
+ *     "states": [ { "name": "door_opening",   "" is the DEFAULT state, and is
+ *                                             ordinary - 226 of 352 real icons
+ *                                             have one
+ *                   "dirs": 4,                1, 4 or 8 facings
+ *                   "frames": 6,
+ *                   "delays": [2,2,2,2,2,2],  ticks per frame, empty if 1 frame
+ *                   "movement": false,        see below
+ *                   "rewind": false,          play forwards then backwards
+ *                   "loop": 1,                repeats; 0 means forever
+ *                   "hotspot": [13,1,1] } ] } x, y, frame - cursors only
+ *
+ * ** A NAME IS NOT A KEY. ** One name may appear TWICE, once still and once with
+ * "movement": true, and DM picks between them by whether the atom is moving. 34
+ * of 352 real icons do this, so a dictionary keyed by name silently drops half
+ * of those states. Key on (name, movement) or keep the array.
+ *
+ * "width" and "height" are the cell size, and are 0 when the file did not state
+ * them - 133 of 352 do not. BYOND's default is 32x32 and we do NOT fill it in,
+ * because a reader inventing it is indistinguishable from a file that said so.
+ *
+ * ** "isDmi": false IS NOT AN ERROR. ** The call returns DM_OK with an empty
+ * state list when the file exists but is not an icon: a zero-byte .dmi (three
+ * of one real project's 166) or a plain PNG saved under that extension. Tell
+ * your user the asset is broken rather than showing an empty icon browser.
+ * DM_ERR_NOT_FOUND means the file is not there at all.
+ *
+ * Read from disk, not from a pushed buffer: a .dmi is a PNG, and the
+ * pushed-buffer rule is about text a client is editing.
+ */
+dm_status dm_icon_states(dm_workspace workspace, const char* file, char** out_json);
+
+/*
+ * The colours written in a file, with the text to write if a picker changes one.
+ * Added in ABI 0.23. YOU FREE IT with dm_free.
+ *
+ *   { "colors": [ { "startLine": 1, "startChar": 9,
+ *                   "endLine": 1,   "endChar": 18,
+ *                   "red": 255, "green": 0, "blue": 128, "alpha": 255,
+ *                   "form": "literal",          "literal" or "rgb"
+ *                   "presentations": ["\"#ff0080\"", "rgb(255, 0, 128)"] } ] }
+ *
+ * Components are 0-255, which is what DM writes and reads - rgb() takes 0-255
+ * and returns #RRGGBB. Divide by 255 if your picker wants floats.
+ *
+ * The range covers the WHOLE colour as written, quotes included, so replacing
+ * it with a presentation leaves no stray quote. "presentations" is what to
+ * write, nearest spelling first: the form it was already in leads, so picking
+ * a colour does not silently rewrite an rgb() call into a literal.
+ *
+ * WHAT COUNTS AS A COLOUR, and the two rules that are not what you would guess
+ * - both read off the compiler rather than the reference:
+ *
+ *   - A hex literal, "#rgb" / "#rgba" / "#rrggbb" / "#rrggbbaa". A short form
+ *     expands by DUPLICATING each digit, so "#f08" is 255, 0, 136 - rgb2num
+ *     agrees - and shifting left by four gives 128 and a visibly wrong swatch.
+ *   - An rgb() call with plain numeric arguments. Components CLAMP to 0-255 and
+ *     a fraction TRUNCATES: rgb(300,-20,0) is #ff0000 and rgb(1.4,1.5,1.6) is
+ *     #010101, so 1.5 goes to 1 rather than 2.
+ *
+ * Deliberately NOT reported, each because answering would mean guessing: an
+ * interpolated string, an rgb() whose arguments are not plain numbers, any call
+ * carrying a `space` or named argument (another colour space entirely), and a
+ * named colour such as "red". All four are real DM; a wrong swatch reads as our
+ * bug and a missing one reads as unfinished.
+ *
+ * Needs no object tree, so it is cheap and answers before the project is walked.
+ */
+dm_status dm_document_colors(dm_workspace workspace, const char* file,
+                             dm_position_encoding encoding, char** out_json);
 
 /*
  * Whether the .dme's include walk actually reaches this file. Added in 0.19.

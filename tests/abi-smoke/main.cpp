@@ -371,6 +371,8 @@ static void test_completion(const fs::path &dir)
         out << "/proc/f()\n\tvar/mob/test/t = new\n\tt.\n";
         out << "/proc/g()\n\tvar/u = new /mob/test\n\tu.\n";
         out << "/proc/h()\n\t.\n";
+        // Line 15 is the signature, 16 is `\tM.` - a receiver typed by an `as` clause.
+        out << "/proc/i(M as mob)\n\tM.\n";
     }
 
     dm_workspace ws = nullptr;
@@ -397,13 +399,13 @@ static void test_completion(const fs::path &dir)
         // base_var is `var/base_var = 1`: no declared type, value 1. DM has no `num` to name, so
         // the empty type is the honest answer rather than a missing one.
         check(doc.find("\"name\":\"base_var\",\"detail\":\"/mob/test\",\"kind\":1,\"builtin\":false,"
-                       "\"inferred\":false,\"type\":\"\",\"value\":\"1\"") != std::string::npos,
+                       "\"inferred\":false,\"typeFrom\":\"written\",\"type\":\"\",\"value\":\"1\"") != std::string::npos,
               "complete: an untyped var carries its value and an empty type");
 
         // friend is `var/mob/test/friend`: a declared type and no initialiser - the other way
         // round, so neither field can be passing by accident.
         check(doc.find("\"name\":\"friend\",\"detail\":\"/mob/test\",\"kind\":1,\"builtin\":false,"
-                       "\"inferred\":false,\"type\":\"/mob/test\",\"value\":\"\"") != std::string::npos,
+                       "\"inferred\":false,\"typeFrom\":\"written\",\"type\":\"/mob/test\",\"value\":\"\"") != std::string::npos,
               "complete: a typed var carries its type and an empty value");
         dm_free(json);
     }
@@ -421,6 +423,28 @@ static void test_completion(const fs::path &dir)
               "complete: inference offers the members");
         check(doc.find("\"inferred\":true") != std::string::npos,
               "complete: inferred items carry the flag");
+
+        // `var/u = new /mob/test` - worked out from the initialiser, so "inferred" is the right
+        // word here and typeFrom says which route produced it.
+        check(doc.find("\"typeFrom\":\"initializer\"") != std::string::npos,
+              "complete: typeFrom names the route that produced the type");
+        dm_free(json);
+    }
+
+    // A parameter's `as` clause. The author WROTE it, so "inferred" is a misleading word even
+    // though the flag is correct - dm.exe still refuses members through an input filter. This is
+    // the case typeFrom exists to let a client word properly.
+    json = nullptr;
+    check(dm_complete_at(ws, "complete.dm", 16, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+          "complete: as-clause receiver call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"inferred\":true") != std::string::npos,
+              "complete: an as-clause receiver is still flagged");
+        check(doc.find("\"typeFrom\":\"as\"") != std::string::npos,
+              "complete: typeFrom distinguishes a written as clause from a guess");
         dm_free(json);
     }
 
@@ -736,6 +760,44 @@ static void test_references(const fs::path &dir)
         std::ofstream out(dir / "refs.dm");
         out << "/mob/guy\n\tvar/hp = 1\n\tproc/hurt()\n\t\thp = 2\n";
         out << "/proc/f()\n\tvar/mob/guy/g = new\n\treturn g.hp\n";
+
+        // Appended rather than inserted: the type-definition check below asks about line 5,
+        // and a colour written earlier in the file would move it.
+        out << "/obj/paint\n\tcolor = \"#ff0080\"\n\tvar/c = rgb(255, 0, 128)\n";
+    }
+    {
+        // A minimal .dmi. Dream Maker writes the metadata as a DEFLATED zTXt chunk; the reader
+        // also accepts an uncompressed tEXt one, which is what lets this file be built here
+        // without linking zlib into the smoke test.
+        const std::string meta =
+            "# BEGIN DMI\nversion = 4.0\nwidth = 32\nheight = 32\n"
+            "state = \"door\"\n\tdirs = 4\n\tframes = 1\n"
+            "# END DMI\n";
+
+        std::string body = "Description";
+        body.push_back('\0');
+        body += meta;
+
+        std::ofstream out(dir / "icon.dmi", std::ios::binary);
+
+        const unsigned char signature[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+        out.write(reinterpret_cast<const char *>(signature), sizeof(signature));
+
+        const auto chunk = [&out](const char *kind, const std::string &data) {
+            const uint32_t length = static_cast<uint32_t>(data.size());
+            const char header[4] = {
+                static_cast<char>((length >> 24) & 0xFF), static_cast<char>((length >> 16) & 0xFF),
+                static_cast<char>((length >> 8) & 0xFF), static_cast<char>(length & 0xFF),
+            };
+
+            out.write(header, 4);
+            out.write(kind, 4);
+            out.write(data.data(), static_cast<std::streamsize>(data.size()));
+            out.write("\0\0\0\0", 4);   // CRC, which the reader does not check
+        };
+
+        chunk("tEXt", body);
+        chunk("IEND", std::string());
     }
 
     std::printf("references\n");
@@ -789,6 +851,67 @@ static void test_references(const fs::path &dir)
     {
         check(std::string(json).find("refs.dm") != std::string::npos,
               "editor: the include resolves to a target");
+        dm_free(json);
+    }
+
+    // Icon states, added at 0.24 (M8). refs.dme's directory holds no .dmi, so these check the two
+    // answers a client must tell apart: a file that is not there, and a file that is not an icon.
+    json = nullptr;
+    check(dm_icon_states(ws, "nosuchicon.dmi", &json) == DM_ERR_NOT_FOUND,
+          "icons: a missing file is NOT_FOUND");
+    check(json == nullptr, "icons: out-param cleared when the file is missing");
+
+    // refs.dm is real and is emphatically not a PNG.
+    json = nullptr;
+    check(dm_icon_states(ws, "refs.dm", &json) == DM_OK,
+          "icons: a file that is not an icon still succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"isDmi\":false") != std::string::npos,
+              "icons: and reports isDmi false rather than failing");
+        check(doc.find("\"states\":[]") != std::string::npos, "icons: with no states");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_icon_states(ws, "icon.dmi", &json) == DM_OK, "icons: a real icon reads");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"isDmi\":true") != std::string::npos, "icons: reported as an icon");
+        check(doc.find("\"name\":\"door\"") != std::string::npos, "icons: the state name is read");
+        check(doc.find("\"dirs\":4") != std::string::npos, "icons: dirs is read");
+        check(doc.find("\"width\":32") != std::string::npos, "icons: the cell size is read");
+        dm_free(json);
+    }
+
+    // Colours, added at 0.23. No buffer is pushed and no tree is needed, so these sit here
+    // rather than at the end: the inlay-hint checks once dropped the tree a later check
+    // asserted, by closing a buffer they had opened.
+    json = nullptr;
+    check(dm_document_colors(ws, "refs.dm", DM_ENCODING_UTF16, &json) == DM_OK,
+          "colors: the call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+
+        check(doc.find("\"red\":255") != std::string::npos, "colors: components are 0-255");
+        check(doc.find("\"blue\":128") != std::string::npos, "colors: the literal is read");
+        check(doc.find("\"alpha\":255") != std::string::npos, "colors: a missing alpha is opaque");
+        check(doc.find("\"form\":\"literal\"") != std::string::npos, "colors: form is a word");
+        check(doc.find("\"form\":\"rgb\"") != std::string::npos, "colors: an rgb() call is found too");
+
+        // The form it was written in leads, so accepting a picker's colour does not rewrite
+        // an rgb() call into a literal or the reverse.
+        check(doc.find("\"presentations\":[\"\\\"#ff0080\\\"\",\"rgb(255, 0, 128)\"]") != std::string::npos,
+              "colors: a literal offers the hex spelling first");
+        check(doc.find("\"presentations\":[\"rgb(255, 0, 128)\",\"\\\"#ff0080\\\"\"]") != std::string::npos,
+              "colors: an rgb() call offers the call spelling first");
+
         dm_free(json);
     }
 

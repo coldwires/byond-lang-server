@@ -39,6 +39,18 @@ internal static class CompletionJson
             // The item's OWN declared type and initialiser, so a client renders `fatigue - num`
             // without re-parsing the file. Both empty is the ordinary case and is honest: DM has
             // no num or text to name, and most vars carry neither.
+            // WHY the receiver's type is what it is, for a client that wants to say more than
+            // "inferred". A word, not a number, so it cannot be decoded with the wrong table.
+            json.Append(",\"typeFrom\":\"").Append(item.TypeSource switch
+            {
+                TypeSource.Written => "written",
+                TypeSource.Initializer => "initializer",
+                TypeSource.Assignment => "assignment",
+                TypeSource.InputFilter => "as",
+                TypeSource.BareTypeName => "bareTypeName",
+                _ => "none",
+            }).Append('"');
+
             json.Append(",\"type\":");
             SymbolJson.AppendString(json, item.DeclaredType);
             json.Append(",\"value\":");

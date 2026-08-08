@@ -13,6 +13,10 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 24: added dm_icon_states — the icon states in a .dmi, which is M8.
+    /// 23: added dm_document_colors — the colours written in a file, with the text to write back.
+    /// 22: completion items carry "typeFrom" - which route produced the receiver's type, so a
+    ///     client can distinguish an `as` clause the author WROTE from a type we inferred.
     /// 21: completion items carry "type" and "value" — the item's own declared type and its
     ///     initialiser as written. Additive; no export changed.
     /// 20: added dm_workspace_open_standalone, and the .dme tickmark trio dm_dme_is_ticked /
@@ -39,7 +43,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 21;
+    public const int Minor = 24;
 
     public static int Packed => (Major << 16) | Minor;
 }

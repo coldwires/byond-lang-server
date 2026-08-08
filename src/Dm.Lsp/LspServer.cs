@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
+using Dm.Assets;
 using Dm.Core;
 using Dm.Core.Binding;
 using Dm.Core.Diagnostics;
@@ -155,6 +156,14 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteInlayHints(json, params_, cancel));
                     break;
 
+                case "textDocument/documentColor":
+                    RespondCancellable(id, (json, cancel) => WriteDocumentColors(json, params_, cancel));
+                    return;
+
+                case "textDocument/colorPresentation":
+                    RespondCancellable(id, (json, cancel) => WriteColorPresentations(json, params_, cancel));
+                    return;
+
                 case "textDocument/foldingRange":
                     RespondCancellable(id, (json, cancel) => WriteFoldingRanges(json, params_, cancel));
                     break;
@@ -221,6 +230,10 @@ internal sealed class LspServer
 
                 case "dm/members":
                     RespondCancellable(id, (json, cancel) => WriteMembers(json, params_, cancel));
+                    break;
+
+                case "dm/iconStates":
+                    RespondCancellable(id, (json, _) => WriteIconStates(json, params_));
                     break;
 
                 default:
@@ -452,6 +465,7 @@ internal sealed class LspServer
         json.WriteBoolean("typeDefinitionProvider", true);
         json.WriteBoolean("documentLinkProvider", true);
         json.WriteBoolean("foldingRangeProvider", true);
+        json.WriteBoolean("colorProvider", true);
         json.WriteBoolean("documentHighlightProvider", true);
         json.WriteBoolean("documentSymbolProvider", true);
         json.WriteBoolean("workspaceSymbolProvider", true);
@@ -655,7 +669,20 @@ internal sealed class LspServer
             // Not an LSP field. True when the item rides on inference dm.exe does not do, so a
             // client can badge or filter what the build would refuse; spec-only clients ignore it.
             if (item.Inferred)
+            {
                 json.WriteBoolean("inferred", true);
+
+                // WHY, so a client can say "you wrote `as num`, and dm.exe still will not check
+                // members through it" rather than telling an author their own words were a guess.
+                json.WriteString("typeFrom", item.TypeSource switch
+                {
+                    TypeSource.Initializer => "initializer",
+                    TypeSource.Assignment => "assignment",
+                    TypeSource.InputFilter => "as",
+                    TypeSource.BareTypeName => "bareTypeName",
+                    _ => "none",
+                });
+            }
 
             // Nor are these, and they are named as the C ABI names them so one client can serve
             // both. `detail` is left alone rather than having the type folded into it: a client
@@ -705,6 +732,12 @@ internal sealed class LspServer
 
         if (hover.Documentation.Length > 0)
             value += $"\n\n{hover.Documentation}";
+
+        // A builtin has no declaration to open, so the reference section is the closest thing to
+        // one. Markdown rather than a nonstandard field: hover contents are already markdown here,
+        // and a link in them works in every client without one line of client code.
+        if (hover.Reference.Length > 0)
+            value += $"\n\n[DM Reference]({hover.Reference})";
 
         json.WriteString("value", value);
         json.WriteEndObject();
@@ -984,6 +1017,177 @@ internal sealed class LspServer
 
         json.WriteEndArray();
     }
+
+    /// <summary>
+    /// The icon states in a <c>.dmi</c> — the LSP half of M8.
+    /// </summary>
+    /// <remarks>
+    /// Custom because LSP has no notion of a binary asset. Takes a <c>uri</c> like every other
+    /// document-shaped method, and answers the same shape <c>dm_icon_states</c> does so one client
+    /// can serve both. A file that is not an icon answers <c>isDmi: false</c> rather than an error.
+    /// </remarks>
+    private void WriteIconStates(Utf8JsonWriter json, JsonElement params_)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = ws.ResolvePath(UriToPath(params_.GetProperty("uri").GetString() ?? ""));
+
+        // The same -32803 a missing type path answers, through the same mechanism: a file that is
+        // not there is an error, while a file that is not an icon is an answer.
+        if (!File.Exists(path))
+            throw new NoSuchPathException();
+
+        bool isDmi = DmiReader.TryRead(path, out DmiIcon icon);
+
+        json.WriteStartObject();
+        json.WriteBoolean("isDmi", isDmi);
+        json.WriteNumber("width", icon.Width);
+        json.WriteNumber("height", icon.Height);
+        json.WriteStartArray("states");
+
+        foreach (DmiState state in icon.States)
+        {
+            json.WriteStartObject();
+            json.WriteString("name", state.Name);
+            json.WriteNumber("dirs", state.Dirs);
+            json.WriteNumber("frames", state.Frames);
+            json.WriteBoolean("movement", state.IsMovement);
+            json.WriteBoolean("rewind", state.Rewind);
+            json.WriteNumber("loop", state.Loop);
+
+            json.WriteStartArray("delays");
+
+            foreach (double delay in state.Delays)
+                json.WriteNumberValue(delay);
+
+            json.WriteEndArray();
+            json.WriteStartArray("hotspot");
+
+            foreach (int component in state.Hotspot)
+                json.WriteNumberValue(component);
+
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+
+    /// <summary>
+    /// The colours written in a file, for the swatch an editor draws in the gutter.
+    /// </summary>
+    /// <remarks>
+    /// LSP wants each component as a float from 0 to 1; DM writes 0-255, so the division happens
+    /// here at the boundary rather than in the service, which keeps the core speaking DM's units.
+    /// </remarks>
+    private void WriteDocumentColors(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+
+        json.WriteStartArray();
+
+        foreach (ColorInformation color in ColorService.ColorsIn(document, cancel))
+        {
+            json.WriteStartObject();
+            WriteRange(json, document.Text, color.Span);
+
+            json.WriteStartObject("color");
+            json.WriteNumber("red", color.Red / 255.0);
+            json.WriteNumber("green", color.Green / 255.0);
+            json.WriteNumber("blue", color.Blue / 255.0);
+            json.WriteNumber("alpha", color.Alpha / 255.0);
+            json.WriteEndObject();
+
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>
+    /// What to write when the user picks a colour from the swatch.
+    /// </summary>
+    /// <remarks>
+    /// The request carries the colour and the range, not the original text, so the form it was
+    /// written in has to be recovered by finding the colour our own scan reports at that range. A
+    /// miss means the buffer moved under the request, and offering both spellings is the right
+    /// answer there rather than none.
+    /// </remarks>
+    private void WriteColorPresentations(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+
+        JsonElement color = params_.GetProperty("color");
+
+        // Round rather than truncate on the way back IN: the picker hands us a float it computed
+        // from a 0-255 value, so 0.5 came from 128 and truncating would return 127 and drift a
+        // shade darker on every edit. Truncation is DM's rule for what an author WROTE, which is a
+        // different question - see ColorService.
+        int red = Component(color, "red");
+        int green = Component(color, "green");
+        int blue = Component(color, "blue");
+        int alpha = Component(color, "alpha");
+
+        JsonElement range = params_.GetProperty("range");
+        int start = OffsetOf(document, range.GetProperty("start"));
+        int end = OffsetOf(document, range.GetProperty("end"));
+
+        ColorForm form = ColorForm.Literal;
+
+        foreach (ColorInformation existing in ColorService.ColorsIn(document, cancel))
+        {
+            if (existing.Span.Start == start && existing.Span.End == end)
+            {
+                form = existing.Form;
+                break;
+            }
+        }
+
+        ColorInformation replacement =
+            new(TextSpan.FromBounds(start, end), red, green, blue, alpha, form);
+
+        json.WriteStartArray();
+
+        foreach (string presentation in ColorService.PresentationsFor(replacement))
+        {
+            json.WriteStartObject();
+            json.WriteString("label", presentation);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+
+        static int Component(JsonElement color, string name)
+        {
+            double value = color.TryGetProperty(name, out JsonElement part) ? part.GetDouble() : 1.0;
+            return Math.Clamp((int)Math.Round(value * 255.0), 0, 255);
+        }
+    }
+
+    private static int OffsetOf(Document document, JsonElement position)
+        => document.Text.GetOffset(
+            position.GetProperty("line").GetInt32(),
+            position.GetProperty("character").GetInt32(),
+            PositionEncoding.Utf16);
 
     /// <summary>Clickable <c>#include</c> targets — needs no object tree, only this file's tokens.</summary>
     private void WriteDocumentLinks(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)

@@ -5,8 +5,8 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.21  (36 exports, cdecl, six RIDs)
- Last updated: 2026-08-06
+ ABI version at last update: 0.24  (38 exports, cdecl, six RIDs)
+ Last updated: 2026-08-08
 ================================================================================
 
 
@@ -42,7 +42,10 @@ WHAT YOU GET TODAY
       inherited members and BYOND builtins, with the . / : distinction the
       compiler makes. A receiver resolves when its type is written down -
       src, a typed local, a typed parameter, a literal path - and otherwise
-      by inference from new / as / assignment. See the note in section 4.
+      by inference from new / as / assignment, with "typeFrom" naming which
+      route it was. After `as`, the eighteen input filters a verb argument
+      accepts; after a `.` that continues a written path, child types rather
+      than members. See the note in section 4.
     - Go to definition via dm_definition_at. Type paths, members through
       their receiver, bare names, and macros to their #define. Returns
       EVERY declaration - see section 4, this is the part most likely to
@@ -53,7 +56,8 @@ WHAT YOU GET TODAY
       and any doc comment above it - both /// runs and /** */ blocks.
       Macros hover as their #define line, doc comment included; builtins
       hover with a signature rendered from the symbol table, `world`
-      included.
+      included, plus a DM Reference link for the ones the reference
+      documents.
     - Signature help via dm_signature_at. Which proc an open argument list
       belongs to and which parameter the caret is in, exact mid-keystroke.
     - Semantic highlighting. Colour IDs 12-15 distinguish a type name, a
@@ -94,6 +98,9 @@ WHAT YOU GET TODAY
       drops everything inside braces) and dm_document_links (clickable
       #include targets, resolved off the token stream so they work before
       the project has been walked).
+    - COLOUR SWATCHES via dm_document_colors: every "#rrggbb" literal and
+      rgb() call in a file, with the text to write back if the user picks a
+      new shade. Needs no object tree, so it answers immediately.
     - dm_file_in_project: whether the include walk actually reaches a
       file. A buffer you push for a file the .dme never includes analyses
       fine per-file while its own declarations resolve nowhere, which is
@@ -107,8 +114,13 @@ WHAT YOU GET TODAY
       block, returned as a span plus replacement rather than written to
       disk - the .dme is usually open and dirty in the editor that asked.
 
+    - ICON STATES via dm_icon_states: every state in a .dmi, with its dirs,
+      frame count, delays and animation flags. This is what an icon browser
+      and an icon_state autocomplete run on.
+
   NOT YET - do not design around these being absent, they are coming
-    - .dmi icon states                (M8)
+    - .dmm map support, and a debug adapter. Both unscheduled; say so if
+      either would change your plans.
 
   Syntax errors arrive two ways: beside the outline in dm_document_symbols,
   and - together with the semantic set - from dm_diagnostics, which is the
@@ -155,8 +167,8 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.21 and
-  passing 220 checks on x64 AND x86. It covers version negotiation, string
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.24 and
+  passing 242 checks on x64 AND x86. It covers version negotiation, string
   ownership, handle lifetime including use-after-close, classification in both
   encodings, document symbols, completion, injected defines, go-to-definition,
   hover, signature help, diagnostics, the reference index, invalidation, the
@@ -496,12 +508,30 @@ WHAT YOU GET TODAY
         Identifier      a bare word: locals, params, src members, globals
         Member          after `.` - the declared type and what it inherits
         SubtypeMember   after `:` - the above PLUS members from subtypes
-        TypePath        after `/`
+        TypePath        after `/`, and after a `.` CONTINUING A WRITTEN PATH -
+                        child types, not members. Mid-path `.` and `/` are the
+                        same token, so `/obj/item.weight` is the type
+                        `/obj/item/weight` and dm.exe says "undefined type
+                        path" when no such child exists. We offered members
+                        there until 2026-08-07, which is a completion that
+                        cannot build. Same after `new /mob/test.`
+        InputType       after `as`, and after a `|` continuing one - the
+                        eighteen input filters a verb argument accepts. A
+                        CLOSED vocabulary, compiled one candidate at a time
+                        rather than derived: `as datum`, `as list` and
+                        `as client` are rejected by the compiler while
+                        `as movable` and `as atom` are accepted, which no rule
+                        about types predicts. Items are marked builtin and
+                        carry the detail "input filter"
         ReturnValue     a bare leading `.` - DM's return-value variable,
                         not member access. The list is empty; show nothing.
                         This is the context that saves you guessing what a
                         user who just typed `.` on a fresh line wanted.
         None            nothing useful here
+
+      Treat an unknown context word as Identifier and show the list as given.
+      More arrive as the parser learns positions, and a client that switches
+      exhaustively on this breaks on a minor bump.
 
       ** THE LIST IS RANKED, SO KEEP OUR ORDER **                NEW in 0.18
       Ordered by scope distance, nearest first: locals, parameters, the
@@ -556,6 +586,33 @@ WHAT YOU GET TODAY
 
       Everything else in the list agrees with the compiler. This is the one
       exception, and it is confined to completion.
+
+      ** "typeFrom" SAYS WHICH ROUTE PRODUCED THE TYPE **        NEW in 0.22
+      A word, beside "inferred", for clients that want to word the warning
+      accurately:
+
+        "written"       a declared type - the only one dm.exe checks
+        "initializer"   an untyped local's `= new /obj/item`
+        "assignment"    the nearest `x = ...` before the cursor
+        "as"            a parameter's `as` clause
+        "bareTypeName"  a type's own name as the receiver, `mob.`
+        "none"          nothing resolved it
+
+      "as" is why this field exists. The author WROTE `f(n as num)` and
+      nothing was guessed, yet dm.exe still refuses members through it,
+      because an `as` clause is an input filter for verb prompts rather than
+      a type. So "inferred" is right about the compiler and wrong about the
+      author, and a client rendering "we guessed this" over the author's own
+      words is telling them something false. Word that case as "you wrote
+      this and the compiler will not enforce it".
+
+      "bareTypeName" is the one route where NO edit makes the expression
+      legal: `mob.loc` is "undefined var", and a bare `mob` is neither a
+      variable nor a path. An untyped local becomes valid the moment a type
+      is written; this never does. It is offered because exploring a type by
+      name is useful. Drop these if you only want completions that build.
+
+      Handle an unknown word by treating it as "none".
 
       ** "type" AND "value" ARE THE ITEM'S OWN **               NEW in 0.21
       The declared type and the initialiser as written, per item, so you can
@@ -633,9 +690,17 @@ WHAT YOU GET TODAY
       status code.
 
       Keys: detail (the resolved path), signature (the declaration as
-      written), documentation (the doc comment above it, markers stripped,
-      joined with newlines), and the range of the token you hovered so you
-      can highlight it.
+      written), reference (a DM Reference URL, see below), documentation
+      (the doc comment above it, markers stripped, joined with newlines),
+      and the range of the token you hovered so you can highlight it.
+
+      "reference" is a link into BYOND's own DM Reference for a BUILTIN the
+      reference documents - https://www.byond.com/docs/ref/info.html#/mob/
+      var/client and the like - and is EMPTY for everything else. A project
+      symbol has a declaration to open, which beats any link, and a builtin
+      whose anchor the scrape never found gets nothing rather than a guessed
+      URL. Render it as a "read more" link beside the signature; an empty
+      string means show nothing.
 
       Both DM doc forms are read: a run of /// lines and a /** ... */ block.
       A blank line or a plain // comment ends the doc run, which matches
@@ -758,6 +823,82 @@ WHAT YOU GET TODAY
 
       Read off the token stream, so a directive inside a comment is
       correctly not one, and no object tree is needed.
+
+  dm_icon_states(ws, file, &json)                             NEW in 0.24
+      Every icon state in a .dmi. YOU FREE IT with dm_free.
+
+        { "isDmi": true, "width": 32, "height": 32,
+          "states": [ { "name": "door_opening",
+                        "dirs": 4, "frames": 6,
+                        "delays": [2,2,2,2,2,2],
+                        "movement": false, "rewind": false, "loop": 1,
+                        "hotspot": [] } ] }
+
+      ** A NAME IS NOT A KEY **
+      One name may appear TWICE - once still, once with "movement": true -
+      and DM picks between them by whether the atom is moving. 34 of 352 real
+      icons do this, so a dictionary keyed by name silently drops half of
+      those states. Key on (name, movement), or keep the array.
+
+      An empty name is the DEFAULT state and is completely ordinary: 226 of
+      those 352 icons have one. Render it as "(default)" rather than skipping
+      it.
+
+      "width" and "height" are 0 when the file did not state them, which 133
+      of 352 do not. BYOND's default is 32x32 and we do NOT fill it in - a
+      reader inventing it would be indistinguishable from a file that said so.
+
+      ** "isDmi": false IS AN ANSWER, NOT AN ERROR **
+      DM_OK with an empty state list means the file is there and is not an
+      icon: a zero-byte .dmi - three of one real project's 166 - or a plain
+      PNG saved under that extension. Tell your user the asset is broken.
+      DM_ERR_NOT_FOUND means the file itself is missing, which is a different
+      thing to say.
+
+      Read from disk, not from a buffer: a .dmi is a PNG, and dm_set_buffer is
+      for text you are editing. We do not decode the image - you want the
+      state list, and if you are drawing one you already have a PNG decoder.
+
+  dm_document_colors(ws, file, encoding, &json)               NEW in 0.23
+      The colours written in a file, with the text to write if your picker
+      changes one. YOU FREE IT with dm_free.
+
+        { "colors": [ { "startLine": 1, "startChar": 9,
+                        "endLine": 1,   "endChar": 18,
+                        "red": 255, "green": 0, "blue": 128, "alpha": 255,
+                        "form": "literal",
+                        "presentations": ["\"#ff0080\"",
+                                          "rgb(255, 0, 128)"] } ] }
+
+      Components are 0-255, which is what DM writes and reads - rgb() takes
+      0-255 and returns #RRGGBB. Divide by 255 if your picker wants floats.
+
+      The range covers the WHOLE colour as written, quotes included, so
+      replacing it with a presentation leaves no stray quote behind.
+      "presentations" is what to write, nearest spelling first: the form it
+      is already in leads, so accepting a colour does not silently rewrite an
+      rgb() call into a literal or the reverse. "form" is "literal" or "rgb".
+
+      ** TWO RULES THAT ARE NOT WHAT YOU WOULD GUESS ** and both were read off
+      the compiler rather than the reference:
+
+        - A short form DUPLICATES each digit. "#f08" is 255, 0, 136, which
+          rgb2num confirms. Shifting left by four gives 128 and a swatch
+          visibly darker than the colour the author wrote.
+        - rgb() CLAMPS out of range and TRUNCATES a fraction:
+          rgb(300,-20,0) is #ff0000 and rgb(1.4,1.5,1.6) is #010101, so 1.5
+          goes to 1 rather than 2.
+
+      Four things are deliberately NOT reported, because answering would mean
+      guessing: an interpolated string, an rgb() whose arguments are not plain
+      numbers, any call carrying a `space` or named argument (a different
+      colour space entirely), and a named colour such as "red". All four are
+      real DM. A wrong swatch reads as our bug; a missing one reads as
+      unfinished, which is the honest state.
+
+      ** COST ** None to speak of: this needs no object tree, so it answers
+      before the project has been walked and costs one pass over the file's
+      tokens.
 
   dm_file_in_project(ws, file)                                NEW in 0.19
       Whether the .dme's include walk actually reaches this file: 1 in
@@ -1221,9 +1362,20 @@ WHAT YOU GET TODAY
     dotnet run --project src/Dm.Cli -- definition <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- hover <dme> <file> <line> <col>
     dotnet run --project src/Dm.Cli -- signature <dme> <file> <line> <col>
+    dotnet run --project src/Dm.Cli -- icons <file-or-directory>
+        icon states, as dm_icon_states answers them. Point it at your whole
+        icons/ folder and it totals them, which is how the reader was checked
+        against 352 real files
+    dotnet run --project src/Dm.Cli -- colors <file>
+        the colours we find in it and what a picker may write back. No .dme
+        needed - colours come off the token stream
+    dotnet run --project src/Dm.Cli -- hints <dme> <file>
+    dotnet run --project src/Dm.Cli -- references <dme> <file> <line> <col>
+        --path /mob/hp   ask by symbol instead of by position
     dotnet run --project src/Dm.Cli -- wsymbols <dme> <query>
         the same answers dm_complete_at, dm_definition_at, dm_hover_at,
-        dm_signature_at and dm_workspace_symbols give you.
+        dm_signature_at, dm_inlay_hints, dm_query_json's references and
+        dm_workspace_symbols give you.
         ** LINES AND COLUMNS ARE 1-BASED IN THE CLI AND 0-BASED IN THE ABI **
         so add one when reproducing what your editor asked for.
 
@@ -1253,10 +1405,11 @@ WHAT YOU GET TODAY
          no API change. after an edit we re-read, re-walk and re-parse only
          the files whose text or macro state actually changed - 1 of 7,161
          on a project that size. see section 10 for what this means for you
-    M8   .dmi icon states                   (independent, unscheduled)
-         passed over so M9 could land before public users arrive with large
-         codebases. still an afternoon's work - say so if you are building
-         an icon browser and it moves back up
+    M8   .dmi icon states                                    DONE
+         dm_icon_states at 0.24, LSP dm/iconStates, dmc icons. Passed over
+         at the M8/M9 fork and picked up five milestones later; built
+         against 352 real icons, which is where the contract above comes
+         from - zero-byte .dmi files, repeated state names, empty names
     M10  LSP server, for editors that speak it              DONE
          Dm.Lsp serves diagnostics, completion, hover, signature help,
          definition, symbols, semantic tokens, inlay hints, folding,

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dm.Core\Dm.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dm.Assets\Dm.Assets.csproj" />
   </ItemGroup>
 
 </Project>

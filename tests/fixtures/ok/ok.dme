@@ -5,3 +5,4 @@
 #include "semantics.dm"
 #include "parsing.dm"
 #include "macros.dm"
+#include "colors.dm"

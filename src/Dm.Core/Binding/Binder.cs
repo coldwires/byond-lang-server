@@ -551,6 +551,22 @@ public sealed class Binder
         // compile clean. If a future project invents again, the cause is a third hole in what we
         // hold, and the fix is to close it here rather than to stop reporting.
 
+        // A `new /path(...)` receiver is OURS ALONE. dm.exe accepts the member if it exists on any
+        // type in the program, because it holds no type for the expression - and the runtime then
+        // raises "undefined variable" the moment the line is reached. So the file compiles, which
+        // makes this a DM03xx warning rather than a DM04xx error, and a deliberate divergence
+        // rather than an invented diagnostic.
+        if (member.Target is NewExpressionSyntax)
+        {
+            _diagnostics.Add(Diagnostic.Warning(
+                "DM0302",
+                member.NameSpan,
+                $"{member.Name} is not on {type.Path}, so this compiles and then fails at runtime"
+                + " — dm.exe does not check a member reached through `new`"));
+
+            return;
+        }
+
         _diagnostics.Add(invoked
             ? Diagnostic.Error(
                 "DM0401",
@@ -694,6 +710,14 @@ public sealed class Binder
         // A path written out as a value.
         PathExpressionSyntax { Path.Anchor: PathAnchor.Absolute } path
             => TypePath.FromSegments(path.Path.Segments),
+
+        // `new /obj/item(...)` constructs exactly that type, so the receiver's type is written
+        // down as plainly as a declared local's. dm.exe does NOT check it — the receiver is
+        // `<expression>` to it, so any member existing anywhere compiles — and the RUNTIME then
+        // raises "undefined variable /mob/test/var/elsewhere". Reported as DM0302, a warning,
+        // because the file does compile; see BindMemberAccess.
+        NewExpressionSyntax { Type: PathExpressionSyntax { Path.Anchor: PathAnchor.Absolute } created }
+            => TypePath.FromSegments(created.Path.Segments),
 
         _ => null,
     };

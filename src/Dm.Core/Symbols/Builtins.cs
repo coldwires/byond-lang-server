@@ -110,7 +110,8 @@ public static class Builtins
                     tree.GetOrAdd(TypePath.Parse(parts[1])).ParentType = TypePath.Parse(parts[2]);
                     break;
 
-                case "V" when parts.Length >= 3:
+                // `V#` / `P#` mark an entry the DM Reference documents, so its anchor exists.
+                case "V" or "V#" when parts.Length >= 3:
                 {
                     TypeSymbol owner = MarkBuiltin(tree.GetOrAdd(TypePath.Parse(parts[1])));
 
@@ -118,15 +119,20 @@ public static class Builtins
                     // which is what lets `world.` resolve through the var and hover say what it is.
                     TypePath? varType = parts.Length >= 4 ? TypePath.Parse(parts[3]) : null;
 
-                    owner.AddVar(new VarSymbol(parts[2], varType, Array.Empty<string>(), default) { IsBuiltin = true });
+                    owner.AddVar(new VarSymbol(parts[2], varType, Array.Empty<string>(), default)
+                    {
+                        IsBuiltin = true,
+                        HasReference = parts[0].Length > 1,
+                    });
                     break;
                 }
 
-                case "P" when parts.Length >= 3:
+                case "P" or "P#" when parts.Length >= 3:
                 {
                     TypeSymbol owner = MarkBuiltin(tree.GetOrAdd(TypePath.Parse(parts[1])));
                     ProcSymbol proc = owner.GetOrAddProc(parts[2], isVerb: false);
                     proc.IsBuiltin = true;
+                    proc.HasReference = parts[0].Length > 1;
 
                     if (parts.Length >= 4 && parts[3].Length > 0)
                         proc.SetBuiltinParameters(parts[3].Split(','));

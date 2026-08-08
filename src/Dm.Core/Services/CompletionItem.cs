@@ -52,6 +52,17 @@ public enum CompletionContext
     TypePath = 4,
 
     /// <summary>
+    /// After <c>as</c> — the input-type filters a verb argument accepts.
+    /// </summary>
+    /// <remarks>
+    /// A closed vocabulary rather than anything from the tree, so the list is exact. It is NOT the
+    /// type system: <c>as datum</c>, <c>as list</c> and <c>as client</c> are all rejected by the
+    /// compiler while <c>as movable</c> and <c>as atom</c> are accepted, which no rule about types
+    /// predicts. See <see cref="SyntaxFacts.InputTypes"/>.
+    /// </remarks>
+    InputType = 6,
+
+    /// <summary>
     /// A bare leading <c>.</c> — DM's return-value variable, not member access.
     /// </summary>
     /// <remarks>
@@ -62,12 +73,59 @@ public enum CompletionContext
     ReturnValue = 5,
 }
 
+/// <summary>
+/// How a receiver's type was arrived at, which is what <c>inferred</c> summarises.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <c>inferred</c> answers "would dm.exe refuse this", which is the fact a client needs to decide
+/// whether to badge an item. It does NOT answer "did the author say so", and the two come apart in
+/// exactly one place: an <c>as</c> clause is <b>written down</b> and still not a type the compiler
+/// checks members through. A client rendering "inferred" over `f(n as num)` is telling the author
+/// their own words were a guess.
+/// </para>
+/// <para>
+/// So the flag stays — renaming a field shipped at 0.14 would break a consumer for a wording
+/// problem — and this says which of the four routes produced the type.
+/// </para>
+/// </remarks>
+public enum TypeSource
+{
+    /// <summary>Nothing resolved the type.</summary>
+    None = 0,
+
+    /// <summary>A declared type: <c>var/mob/M</c>. The only one dm.exe checks.</summary>
+    Written = 1,
+
+    /// <summary>An untyped local's initialiser: <c>var/x = new /obj/item</c>.</summary>
+    Initializer = 2,
+
+    /// <summary>The nearest assignment before the cursor: <c>x = new /obj/item</c>.</summary>
+    Assignment = 3,
+
+    /// <summary>A parameter's <c>as</c> clause: <c>f(n as num)</c>. Written, and still unchecked.</summary>
+    InputFilter = 4,
+
+    /// <summary>
+    /// A bare type name used as a receiver: <c>mob.</c>.
+    /// </summary>
+    /// <remarks>
+    /// The one route where NO edit makes the expression legal. <c>mob.loc</c> is "undefined var" —
+    /// a bare <c>mob</c> is neither a variable nor a path, since §4a needs a leading separator for
+    /// that — so unlike an untyped local, which becomes valid the moment a type is written, this
+    /// cannot compile in any form. Offered anyway because exploring a type's members by name is
+    /// useful and PLAN §1 asks for it, and marked so a client can say so.
+    /// </remarks>
+    BareTypeName = 5,
+}
+
 /// <summary>One entry in a completion list.</summary>
 public sealed class CompletionItem
 {
     public CompletionItem(
         string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "",
-        bool inferred = false, int rank = 0, string declaredType = "", string initialValue = "")
+        bool inferred = false, int rank = 0, string declaredType = "", string initialValue = "",
+        TypeSource typeSource = TypeSource.None)
     {
         Name = name;
         Kind = kind;
@@ -78,6 +136,7 @@ public sealed class CompletionItem
         Rank = rank;
         DeclaredType = declaredType;
         InitialValue = initialValue;
+        TypeSource = typeSource;
     }
 
     /// <summary>
@@ -149,6 +208,17 @@ public sealed class CompletionItem
     /// what it comes to. For a <c>const</c> it is most of what a reader wants.
     /// </remarks>
     public string InitialValue { get; }
+
+    /// <summary>
+    /// Which route produced the RECEIVER's type, when this item came from a member list.
+    /// </summary>
+    /// <remarks>
+    /// The detail behind <see cref="Inferred"/>, for a client that wants to say why rather than
+    /// just that. The pair comes apart on <see cref="Services.TypeSource.InputFilter"/>: the author
+    /// WROTE <c>as num</c> and dm.exe still refuses members through it, so "inferred" is the right
+    /// warning and the wrong word.
+    /// </remarks>
+    public TypeSource TypeSource { get; }
 
     public override string ToString() => $"{Kind} {Name}";
 }

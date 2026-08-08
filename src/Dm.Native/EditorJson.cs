@@ -76,6 +76,64 @@ internal static class EditorJson
         return json.ToString();
     }
 
+    /// <summary>
+    /// The colours in a file, with the text to write for each if a picker changes one.
+    /// </summary>
+    /// <remarks>
+    /// Components are 0-255 rather than the 0-1 floats LSP uses, because that is what DM itself
+    /// writes and reads and this ABI serves clients that are not speaking LSP. The LSP shell
+    /// divides at its own boundary.
+    ///
+    /// The presentations ride along rather than waiting for a second call: there are at most two,
+    /// they are pure arithmetic on a colour already computed, and a round trip per swatch would
+    /// cost more than the bytes.
+    /// </remarks>
+    public static string WriteColors(
+        IReadOnlyList<ColorInformation> colors, SourceText text, PositionEncoding encoding)
+    {
+        StringBuilder json = new();
+        json.Append("{\"colors\":[");
+
+        for (int i = 0; i < colors.Count; i++)
+        {
+            if (i > 0)
+                json.Append(',');
+
+            ColorInformation color = colors[i];
+
+            LinePosition start = text.GetLinePosition(color.Span.Start, encoding);
+            LinePosition end = text.GetLinePosition(color.Span.End, encoding);
+
+            json.Append("{\"startLine\":").Append(start.Line);
+            json.Append(",\"startChar\":").Append(start.Character);
+            json.Append(",\"endLine\":").Append(end.Line);
+            json.Append(",\"endChar\":").Append(end.Character);
+            json.Append(",\"red\":").Append(color.Red);
+            json.Append(",\"green\":").Append(color.Green);
+            json.Append(",\"blue\":").Append(color.Blue);
+            json.Append(",\"alpha\":").Append(color.Alpha);
+
+            // A word, like every other kind on this boundary.
+            json.Append(",\"form\":\"").Append(color.Form == ColorForm.RgbCall ? "rgb" : "literal");
+            json.Append("\",\"presentations\":[");
+
+            IReadOnlyList<string> presentations = ColorService.PresentationsFor(color);
+
+            for (int p = 0; p < presentations.Count; p++)
+            {
+                if (p > 0)
+                    json.Append(',');
+
+                SymbolJson.AppendString(json, presentations[p]);
+            }
+
+            json.Append("]}");
+        }
+
+        json.Append("]}");
+        return json.ToString();
+    }
+
     public static string WriteLinks(
         IReadOnlyList<DocumentLink> links, SourceText text, PositionEncoding encoding)
     {

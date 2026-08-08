@@ -2,7 +2,7 @@
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-06
+ Last updated: 2026-08-08
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -13,16 +13,18 @@
 
 WHERE WE ARE
 --------------------------------------------------------------------------------
-  M0-M7 complete - that is TEAM V1, everything an IDE needs to draw its panels.
-  M8 passed over. M9 past its target. M10 DONE. M11 started.
+  M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
+  M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.08 MB, ABI 0.21, 36 exports, cdecl on every platform
+    dm_core.dll     2.23 MB, ABI 0.24, 38 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,147 green (1,089 core, 44 native, 14 lsp)
+    tests           1,194 green (1,133 core, 44 native, 17 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included
-    abi-smoke       220 checks from C++. FIVE of six RIDs green in CI at 0.21
+    abi-smoke       242 checks from C++, reporting 0.24 on win-x64 AND win-x86
+                    - both re-published and re-run locally 2026-08-08. FIVE of
+                    six RIDs were green in CI at 0.21
                     - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
                     osx-x64 was UNVERIFIED until 2026-08-07: it asked for the
                     retired macos-13 image, and a job whose label no longer
@@ -63,11 +65,44 @@ WHAT WE ARE BUILDING
   Dm.Cli      dmc, the dev driver. Fastest debug loop and the arbiter when an
               IDE reports a bug: if the CLI reproduces it, it is ours.
   Dm.Lsp      LSP server for VS Code / Neovim / everyone else.        [M10]
-  Dm.Assets   .dmi icon state reader.                                  [M8]
+  Dm.Assets   .dmi icon state reader. DONE at M8.
 
 
 WHAT'S NEXT
 --------------------------------------------------------------------------------
+  THE QUEUE, as of 2026-08-08. Detail for each is in PLAN's changelog and in
+  the section it belongs to; this is the order.
+
+    a. DONE 2026-08-08: the COLOUR PROVIDER, at ABI 0.23. rgb() calls and
+       hex literals, on all three surfaces plus `dmc colors`. Named colours
+       and the non-RGB colour spaces are deliberately out - see PLAN 8.
+    b. DONE 2026-08-08: M8, the .dmi icon states, at ABI 0.24.
+    c. dm.exe's DEFAULT-ON WARNINGS - the missed column, below. Gated on a
+       constant evaluator and a reachability walk, which pay twice. THIS IS
+       NOW THE FRONT OF THE QUEUE.
+    d. stddef.dm's 199 #define constants reach nothing we build (PLAN 8).
+       They are macros, so the fix is SeedPredefined rather than a
+       builtins.txt line, and it needs zero-invented re-verified after.
+
+  DONE since the last board: DM0404 (numeric assoc key), ABI 0.21 (per-item
+  type and value), the public repo and CI's first run, ABI 0.22 (typeFrom),
+  completion after "as", a "." after a written path offering child types,
+  DM0302, DM Reference links on builtins, the colour provider (0.23), and
+  M8's icon states (0.24).
+
+  CANDY, still unscheduled: .dmm maps, the rung-1 debugger.
+
+  TWO DEFECTS FOUND AND DELIBERATELY NOT FIXED, each written up where it
+  belongs rather than half-done during unrelated work:
+    - the scrape records ~25 non-members as global procs (args, src, usr,
+      caller, callee and the verb settings). state.md has it.
+    - "mob." completes what dm.exe never accepts. Kept as PLAN 1's
+      acceptance target, now marked typeFrom "bareTypeName" so a client can
+      drop it. Removing it is a product call.
+
+  STILL THE HIGHEST-RISK UNVERIFIED THING: nobody has watched the VS Code
+  client run in a real game. CI cannot cover it.
+
   1. M11, the live thread. THE BINDER IS IN, with its first two checks:
      DM0400 undefined var and DM0401 undefined proc, on a member reached
      through "." from a receiver whose type is WRITTEN DOWN. mlaas and
@@ -170,8 +205,8 @@ WHAT'S NEXT
        THEN the rest: the probe ratchet's remaining classes (PLAN 8a),
        var duplicate definitions (VarSymbol keeps one site),
        "." on an untyped local, ":" against the
-       subtype tree, M8 .dmi, incremental sync if a profile asks.
-       CANDY, unscheduled: M8 .dmi, .dmm maps, the rung-1 debugger.
+       subtype tree, incremental sync if a profile asks.
+       CANDY, unscheduled: .dmm maps, the rung-1 debugger.
        Contract (their do-not-change list): UTF-16 default honest,
        whole-document dm_set_buffer stays, additive ABI bumps minor.
        Parked M11 checks, for after the list above:
@@ -205,16 +240,20 @@ MILESTONES                                    (restructured 2026-08-02)
              declarations, expressions and statements all parse; proc bodies
              are real trees. reads the PREPROCESSED stream by default.
   [x] M5   Object tree + BYOND builtins
-             732 entries for 516.1666 bundled. "mob." resolves loc and Move().
+             841 entries for 516.1666 bundled. "mob." resolves loc and Move().
   [x] M6   Binder + completion
              "mob." and "t." work. type inference through new/as/assignment,
              which is the ONE place we knowingly disagree with dm.exe.
   [x] M7   Workspace symbols + navigation + bulk queries    <- TEAM V1
              definition (0.6), hover (0.7), wsymbols (0.8), query_json (0.11).
-  [ ] M8   .dmi icon states  (independent, unscheduled)
-             PASSED OVER at the M8/M9 fork - M10 brings public users with
-             tgstation-sized codebases, so incrementality had to land first.
-             Nothing blocks it, an afternoon's work, 166 .dmi files in mlaas.
+  [x] M8   .dmi icon states                          <- DONE 2026-08-08
+             Passed over at the M8/M9 fork and picked up five milestones
+             later. Dm.Assets + DmiReader, dm_icon_states at ABI 0.24, LSP
+             dm/iconStates, dmc icons. Built against 352 REAL icons from
+             three games, which is what set the contract: zero-byte .dmi
+             files exist, one name can appear twice (movement), and an
+             empty state name is the default rather than an error.
+             Python and dmc agree exactly on all 4,186 states.
   [x] M9   Incremental reparse + performance    <- TARGET MET, 13x/15x
              five levers, each measured before and after. 1 of 7,161 files is
              re-read, re-walked and re-parsed after a keystroke.

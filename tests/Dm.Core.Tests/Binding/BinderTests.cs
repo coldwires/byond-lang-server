@@ -334,4 +334,74 @@ public class BinderTests
         // vis_flags is on /atom/movable, not /image - it was the accidental control in the probe.
         Assert.Null(tree.ResolveVar(image, "vis_flags"));
     }
+
+    // -- DM Reference links -------------------------------------------------
+
+    /// <summary>
+    /// A builtin the reference documents carries a link; one it does not carries none. The second
+    /// half is the point: 190 builtins come from stddef.dm and the verified-members table with no
+    /// section to link to, and 25 more were scraped from an anchor whose shape a reader cannot
+    /// reconstruct, so a link for them would open the index instead of the symbol.
+    /// </summary>
+    [Fact]
+    public void A_documented_builtin_carries_a_reference_link()
+    {
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+
+        VarSymbol loc = tree.ResolveVar(tree.Find("/atom")!, "loc")!;
+        ProcSymbol move = tree.ResolveProc(tree.Find("/atom/movable")!, "Move")!;
+
+        Assert.True(loc.HasReference);
+        Assert.True(move.HasReference);
+
+        // From stddef.dm - real, and absent from the reference.
+        Assert.False(tree.ResolveVar(tree.Find("/")!, "world")!.HasReference);
+    }
+
+    // -- DM0302: a member reached through `new` -----------------------------
+
+    /// <summary>
+    /// <c>new /path(...)</c> constructs exactly that type, so a missing member is a certain
+    /// runtime error — verified: "undefined variable /mob/test/var/elsewhere". dm.exe accepts it
+    /// because it holds no type for the expression, so this is a WARNING on code that compiles,
+    /// and a deliberate divergence rather than an invented diagnostic.
+    /// </summary>
+    [Fact]
+    public void A_missing_member_on_a_new_expression_warns()
+    {
+        IReadOnlyList<Diagnostic> diagnostics = Bind(
+            "/mob/test\n\tvar/hp = 7\n/datum/other\n\tvar/elsewhere = 99\n"
+            + "/proc/f()\n\treturn new /mob/test(1).elsewhere\n");
+
+        Diagnostic found = Assert.Single(diagnostics, d => d.Id == "DM0302");
+
+        Assert.Equal(DiagnosticSeverity.Warning, found.Severity);
+        Assert.True(DeliberateDivergences.Contains("DM0302"));
+    }
+
+    /// <summary>The control: a member that IS on the constructed type says nothing.</summary>
+    [Fact]
+    public void A_real_member_on_a_new_expression_is_silent()
+    {
+        IReadOnlyList<Diagnostic> diagnostics = Bind(
+            "/mob/test\n\tvar/hp = 7\n/datum/other\n\tvar/elsewhere = 99\n"
+            + "/proc/f()\n\treturn new /mob/test(1).hp\n");
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "DM0302");
+    }
+
+    /// <summary>
+    /// A call result is genuinely unknowable, so it must NOT warn — that is the boundary between
+    /// this check and the degrade-to-<c>:</c> case dm.exe is right to leave alone.
+    /// </summary>
+    [Fact]
+    public void A_call_result_receiver_does_not_warn()
+    {
+        IReadOnlyList<Diagnostic> diagnostics = Bind(
+            "/mob/test\n\tvar/hp = 7\n/datum/other\n\tvar/elsewhere = 99\n"
+            + "/proc/mk()\n\treturn new /mob/test\n/proc/f()\n\treturn mk().elsewhere\n");
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "DM0302");
+    }
 }
