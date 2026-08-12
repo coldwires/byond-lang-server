@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -125,7 +125,124 @@ internal static class DiagnosticDiff
             Console.Out.WriteLine("  M11 work still to do; invented ones are M11 work done wrong.");
         }
 
+        if (Program.OptionValue(args, "--baseline") is { } baseline)
+            return Baseline(baseline, dme, theirs.Count - missed.Count, missed.Count, extra.Count, args);
+
         return 0;
+    }
+
+    /// <summary>
+    /// Checks the run against a recorded row, or rewrites it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same ratchet the mined probes carry, pointed at the <b>missed</b> column. Zero-invented
+    /// is a standing rule that gets read every time; nothing played that role for missed, so nobody
+    /// read it — including in a session where the number was printed, seen and reported as only the
+    /// invented column. A number that fails a run is read; a number in a report is not.
+    /// </para>
+    /// <para>
+    /// <b>This is a local gate and cannot be anything else.</b> The corpus projects are games on the
+    /// author's disk, not in this repo, so CI can never run it. That is also why the key is the
+    /// <c>.dme</c>'s file name rather than its path — paths differ per machine, names do not.
+    /// </para>
+    /// <para>
+    /// Missed going UP is a regression and fails. Missed going DOWN is the point, and fails too,
+    /// with a different message: it means a check landed and the row is now stale. Agreed going
+    /// down is a check that stopped firing.
+    /// </para>
+    /// </remarks>
+    private static int Baseline(
+        string path, string dme, int agreed, int missed, int invented, string[] args)
+    {
+        string key = Path.GetFileName(dme);
+        Dictionary<string, (int Agreed, int Missed, int Invented)> rows = new(StringComparer.OrdinalIgnoreCase);
+        List<string> header = new();
+
+        if (File.Exists(path))
+        {
+            foreach (string line in File.ReadAllLines(path))
+            {
+                if (line.StartsWith('#') || line.Trim().Length == 0)
+                {
+                    if (rows.Count == 0)
+                        header.Add(line);
+
+                    continue;
+                }
+
+                string[] parts = line.Split('\t');
+
+                if (parts.Length == 4
+                    && int.TryParse(parts[1], out int a)
+                    && int.TryParse(parts[2], out int m)
+                    && int.TryParse(parts[3], out int i))
+                {
+                    rows[parts[0]] = (a, m, i);
+                }
+            }
+        }
+
+        if (args.Contains("--update"))
+        {
+            rows[key] = (agreed, missed, invented);
+
+            if (header.Count == 0)
+            {
+                header.Add("# Per-project agreement with dm.exe. A RATCHET on the missed column.");
+                header.Add("#");
+                header.Add("# Local only: these are games on disk, not in this repo, so CI cannot run it.");
+                header.Add("# Keyed by .dme file name, since paths differ per machine and names do not.");
+                header.Add("#");
+                header.Add("# Update deliberately, after reading why a number moved:");
+                header.Add("#   dmc diagdiff <dme> --baseline <this file> --update");
+                header.Add("#");
+                header.Add("# dme\tagreed\tmissed\tinvented");
+            }
+
+            File.WriteAllLines(
+                path,
+                header.Concat(rows.OrderBy(r => r.Key, StringComparer.OrdinalIgnoreCase)
+                    .Select(r => $"{r.Key}\t{r.Value.Agreed}\t{r.Value.Missed}\t{r.Value.Invented}")));
+
+            Console.Out.WriteLine();
+            Console.Out.WriteLine($"  baseline updated: {key}  agreed {agreed}  missed {missed}  invented {invented}");
+            return 0;
+        }
+
+        if (!rows.TryGetValue(key, out (int Agreed, int Missed, int Invented) was))
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine($"  no baseline row for {key}. Record one with --baseline <file> --update");
+            return 1;
+        }
+
+        List<string> moved = new();
+
+        if (invented > was.Invented)
+            moved.Add($"invented {was.Invented} -> {invented} — a project that builds clean while we complain");
+
+        if (missed > was.Missed)
+            moved.Add($"missed {was.Missed} -> {missed} — a diagnostic we used to report and no longer do");
+
+        if (missed < was.Missed)
+            moved.Add($"missed {was.Missed} -> {missed} — a check landed; re-run with --update");
+
+        if (agreed < was.Agreed)
+            moved.Add($"agreed {was.Agreed} -> {agreed} — a check stopped firing");
+
+        Console.Out.WriteLine();
+
+        if (moved.Count == 0)
+        {
+            Console.Out.WriteLine($"  baseline holds: {key}  agreed {agreed}  missed {missed}  invented {invented}");
+            return 0;
+        }
+
+        foreach (string line in moved)
+            Console.Error.WriteLine($"  BASELINE MOVED: {line}");
+
+        return 1;
     }
 
     private static void Report(string label, List<(Entry Key, string Message)> entries, string[] args)
@@ -245,6 +362,10 @@ internal static class DiagnosticDiff
         List<(string File, TokenSource Source, ParseResult Parse)> files = new();
         ObjectTree tree = new();
         Builtins.Seed(tree);
+
+        // The walk's pragma levels, so `#pragma ignore <name>` silences here exactly as it does in
+        // the compiler. Without this the diff reports what the project asked us not to say.
+        tree.SuppressedWarnings = preprocessed.Graph.Warnings;
 
         foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed))
         {

@@ -1,0 +1,12 @@
+# Per-project agreement with dm.exe. A RATCHET on the missed column.
+#
+# Local only: these are games on disk, not in this repo, so CI cannot run it.
+# Keyed by .dme file name, since paths differ per machine and names do not.
+#
+# Update deliberately, after reading why a number moved:
+#   dmc diagdiff <dme> --baseline <this file> --update
+#
+# dme	agreed	missed	invented
+hell.dme	4	0	0
+Klan Wars.dme	12	3	0
+spies.dme	0	0	0

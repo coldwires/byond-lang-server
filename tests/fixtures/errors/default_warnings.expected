@@ -1,0 +1,4 @@
+11 warning lentext: lentext is being phased out; replace with length
+15 warning ..: ..() has no parent proc to call
+19 warning ..: ..() has no parent proc to call
+25 warning ..: ..() has no parent proc to call

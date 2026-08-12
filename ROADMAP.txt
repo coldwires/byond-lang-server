@@ -1,8 +1,8 @@
-================================================================================
+﻿================================================================================
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-08
+ Last updated: 2026-08-11
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.23 MB, ABI 0.24, 38 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,194 green (1,133 core, 44 native, 17 lsp)
+    tests           1,232 green (1,171 core, 44 native, 17 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included
@@ -77,12 +77,43 @@ WHAT'S NEXT
        hex literals, on all three surfaces plus `dmc colors`. Named colours
        and the non-RGB colour spaces are deliberately out - see PLAN 8.
     b. DONE 2026-08-08: M8, the .dmi icon states, at ABI 0.24.
-    c. dm.exe's DEFAULT-ON WARNINGS - the missed column, below. Gated on a
-       constant evaluator and a reachability walk, which pay twice. THIS IS
-       NOW THE FRONT OF THE QUEUE.
-    d. stddef.dm's 199 #define constants reach nothing we build (PLAN 8).
-       They are macros, so the fix is SeedPredefined rather than a
-       builtins.txt line, and it needs zero-invented re-verified after.
+    c. dm.exe's DEFAULT-ON WARNINGS - the missed column, below. The grouping
+       is DONE and TWO OF THE FOUR SHIPPED (2026-08-11). The prior was wrong:
+       unused_var is 2 of 16, not the bulk.
+         DONE  new_name (4005)  lentext deprecation, 9 lines
+         DONE  no_parent (3013) ..() with nothing above it, 4 lines
+         next  unused_var       ATTEMPT THREE, backed out again 2026-08-11 -
+                                but two of three causes are now FIXED and the
+                                rule is pinned (fixture errors/unused_var).
+                                Loop variables and var block headers are
+                                exempt; the "never diagnosed" cause was the
+                                loop variable, misattributed to if(!passed).
+                                mlaas/madridspy/warklan all clean; TGSTATION
+                                INVENTS 119 on locals that ARE read later, so
+                                a statement shape the walk does not descend
+                                into is dropping reads. Also needs #pragma
+                                ignore honoured - pragma/numeric goes red the
+                                moment the check emits, exactly as PLAN 8a
+                                predicted - THAT HALF IS NOW DONE (below), so
+                                attempt four is the missed reads alone.
+         DONE  #pragma ignore   honoured positionally 2026-08-11: ignore/warn/
+                                error by name AND by numeric id, push/pop
+                                scoped, flowing through include order. A
+                                project silencing a warning in source now
+                                silences it here.
+         defer #warn echo       1 line, and NOT trivial after all: the
+                                compiler reports it at the directive's line
+                                while our preprocessor diagnostics land at
+                                (.dme, line 0). Needs per-file attribution
+                                for walk-time diagnostics, which is worth
+                                doing for every preprocessor diagnostic.
+       madridspy is now at COMPLETE agreement with dm.exe; warklan 14 -> 3.
+       ConstantEvaluator does NOT gate any of this: it gates init_proc, which
+       is off by default and so can never be in a missed column.
+       Baselines ratchet in tests/fixtures/CORPUS-BASELINE.txt (local only -
+       the corpora are games on disk, so CI cannot run it).
+    d. DONE 2026-08-11: stddef.dm's 199 #define constants are seeded, and
+       the 25 reference-section entries that were never members are gone.
 
   DONE since the last board: DM0404 (numeric assoc key), ABI 0.21 (per-item
   type and value), the public repo and CI's first run, ABI 0.22 (typeFrom),
@@ -92,13 +123,11 @@ WHAT'S NEXT
 
   CANDY, still unscheduled: .dmm maps, the rung-1 debugger.
 
-  TWO DEFECTS FOUND AND DELIBERATELY NOT FIXED, each written up where it
-  belongs rather than half-done during unrelated work:
-    - the scrape records ~25 non-members as global procs (args, src, usr,
-      caller, callee and the verb settings). state.md has it.
+  ONE DEFECT FOUND AND DELIBERATELY NOT FIXED:
     - "mob." completes what dm.exe never accepts. Kept as PLAN 1's
       acceptance target, now marked typeFrom "bareTypeName" so a client can
       drop it. Removing it is a product call.
+    (the ~25 non-member scrape entries were fixed 2026-08-11)
 
   STILL THE HIGHEST-RISK UNVERIFIED THING: nobody has watched the VS Code
   client run in a real game. CI cannot cover it.
@@ -240,7 +269,8 @@ MILESTONES                                    (restructured 2026-08-02)
              declarations, expressions and statements all parse; proc bodies
              are real trees. reads the PREPROCESSED stream by default.
   [x] M5   Object tree + BYOND builtins
-             841 entries for 516.1666 bundled. "mob." resolves loc and Move().
+             1,017 entries for 516.1666 bundled, including stddef's 199
+             #define constants. "mob." resolves loc and Move().
   [x] M6   Binder + completion
              "mob." and "t." work. type inference through new/as/assignment,
              which is the ONE place we knowingly disagree with dm.exe.

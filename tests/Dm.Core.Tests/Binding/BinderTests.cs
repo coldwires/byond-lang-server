@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using Dm.Core.Binding;
 using Dm.Core.Diagnostics;
@@ -15,6 +15,53 @@ namespace Dm.Core.Tests.Binding;
 /// </summary>
 public class BinderTests
 {
+    /// <summary>
+    /// dm.exe's <c>new_name</c>, worth 9 of the 16 diagnostics the corpus said we were missing.
+    /// A name check: no tree walk, no evaluator.
+    /// </summary>
+    [Fact]
+    public void Calling_lentext_reports_the_deprecation()
+    {
+        Assert.Contains(
+            Bind("/proc/f(t)\n\treturn lentext(t)\n"),
+            d => d.Id == "new_name" && d.Message.Contains("phased out"));
+    }
+
+    /// <summary>A project declaring its own shadows the builtin, so there is nothing to deprecate.</summary>
+    [Fact]
+    public void A_project_lentext_is_not_the_deprecated_one()
+    {
+        Assert.DoesNotContain(
+            Bind("/proc/lentext(t)\n\treturn 1\n/proc/f(t)\n\treturn lentext(t)\n"),
+            d => d.Id == "new_name");
+    }
+
+    /// <summary>
+    /// <c>no_parent</c>: a <c>proc/</c> new declaration has nothing above it. Compiler-verified
+    /// one case per proc — the global and the fresh declaration warn, every override does not.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/global_orphan()\n\treturn ..()\n")]
+    [InlineData("/datum/a\n\tproc/fresh()\n\t\treturn ..()\n")]
+    [InlineData("/datum/b\n\tproc/Login()\n\t\treturn ..()\n")]
+    public void A_new_declaration_has_no_parent_to_call(string source)
+    {
+        Assert.Contains(Bind(source), d => d.Id == "no_parent");
+    }
+
+    /// <summary>
+    /// An override always reaches something: a project proc on a subtype, a builtin, or the same
+    /// type's own earlier declaration. Warning here would be inventing on working code.
+    /// </summary>
+    [Theory]
+    [InlineData("/datum/a\n\tproc/fresh()\n\t\treturn 1\n/datum/a/sub\n\tfresh()\n\t\treturn ..()\n")]
+    [InlineData("/mob/Login()\n\treturn ..()\n")]
+    [InlineData("/datum/c\n\tproc/twice()\n\t\treturn 1\n/datum/c/twice()\n\treturn ..()\n")]
+    public void An_override_does_not_report_no_parent(string source)
+    {
+        Assert.DoesNotContain(Bind(source), d => d.Id == "no_parent");
+    }
+
     /// <summary>Binds the last file against a tree built from all of them, as a real build does.</summary>
     private static IReadOnlyList<Diagnostic> Bind(params string[] files)
     {

@@ -39,6 +39,47 @@ public static class Builtins
     /// </remarks>
     public static string Version { get; private set; } = "unknown";
 
+    /// <summary>
+    /// The <c>#define</c> constants <c>stddef.dm</c> declares, as the text following
+    /// <c>#define</c> — <c>"NORTH 1"</c>, <c>"ASSERT(c) if(!(c)) {CRASH(...)}"</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The compiler includes <c>stddef.dm</c> implicitly, so every project ever compiled has these
+    /// defined. We replace that file with this table, which means seeding them ourselves or a bare
+    /// <c>NORTH</c> resolves to nothing.
+    /// </para>
+    /// <para>
+    /// Loaded independently of <see cref="Seed"/> rather than as a side effect of it. A static
+    /// filled in by whoever happened to seed first is exactly the shape that made
+    /// <see cref="Version"/> race between two tests, and this is read from the embedded resource
+    /// once, lazily, by whoever asks.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> Macros => LazyMacros.Value;
+
+    private static readonly Lazy<IReadOnlyList<string>> LazyMacros = new(ReadMacros);
+
+    private static IReadOnlyList<string> ReadMacros()
+    {
+        using Stream? stream = typeof(Builtins).GetTypeInfo().Assembly.GetManifestResourceStream(ResourceName);
+
+        if (stream is null)
+            return Array.Empty<string>();
+
+        using StreamReader reader = new(stream);
+
+        List<string> macros = new();
+
+        while (reader.ReadLine() is { } line)
+        {
+            if (line.StartsWith("M ", StringComparison.Ordinal))
+                macros.Add(line[2..]);
+        }
+
+        return macros;
+    }
+
     /// <summary>Builds a tree holding only the builtins.</summary>
     public static ObjectTree CreateTree()
     {

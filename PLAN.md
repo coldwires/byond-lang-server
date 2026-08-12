@@ -1,10 +1,10 @@
-# DM Analysis Library + Language Server — Design
+﻿# DM Analysis Library + Language Server — Design
 
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.24** · 1,194 tests ·
-> Last updated: 2026-08-08
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.24** · 1,232 tests ·
+> Last updated: 2026-08-11
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -447,7 +447,7 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,194 today (1,133
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,232 today (1,171
   core, 44 native, 17 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
@@ -751,12 +751,14 @@ declarations, so statement parsing slots in later without disturbing this.
   cycle-guarded because `parent_type` is an ordinary assignment that a project can point in a loop.
 - ✅ `TypeTreeBuilder`, driven off the include graph so files arrive in compile order.
 - ✅ `dmc tree`, with `--under` and `--members`.
-- ✅ `tools/builtins-gen` and `Resources/builtins.txt`, embedded in `Dm.Core`. **841 entries** built
-  from BYOND 516.1666's reference and `stddef.dm`: 35 types, 409 procs, 380 vars and 17 inheritance
-  links. 572 of them carry the reference anchor they were scraped from, which is what
-  `dm_hover_at`'s `reference` link is built from — a `V#` or `P#` line marks one. `Builtins.Seed`
-  puts them in a tree before the project's own files. The count has grown with every hole a check
-  exposed: `/image`'s appearance vars, `/callee`, `/alist`, the 39 object-typed vars, `world`.
+- ✅ `tools/builtins-gen` and `Resources/builtins.txt`, embedded in `Dm.Core`. **1,017 entries**
+  built from BYOND 516.1666's reference and `stddef.dm`: 35 types, 390 procs, 376 vars, 17
+  inheritance links and **199 `#define` constants**. 570 carry the reference anchor they were
+  scraped from, which is what `dm_hover_at`'s `reference` link is built from — a `V#` or `P#` line
+  marks one. `Builtins.Seed` puts the tree entries in before the project's own files;
+  `BuiltinMacros.Seed` defines the constants into the `MacroTable`, since a macro is not a member of
+  anything. The count has grown with every hole a check exposed: `/image`'s appearance vars,
+  `/callee`, `/alist`, the 39 object-typed vars, `world`, and the constants.
 - ✅ The acceptance target works. `mob.` resolves through `/mob` → `/atom/movable` → `/atom` →
   `/datum`, so it offers `loc`, `Move()` and `MouseMove()` — none of which appear in any file.
 
@@ -791,14 +793,16 @@ completion list after `mob.`.
   Parsing `stddef.dm` with our own parser doubles as a self-test: it is real BYOND-authored DM that
   exercises brace blocks, operator overloads, comma var lists, and stringification.
 
-  **Its 199 `#define` constants land nowhere, and this table claimed otherwise until 2026-08-08.**
-  `ReadStddef` runs `DeclarationParser`, which reads declarations and never a directive, so
-  `NORTH`, `SECONDS`, `ICON_ADD`, `ASSERT`, the `COLORSPACE_*` family and the rest are absent from
-  `builtins.txt`, and `MacroTable.SeedPredefined` carries only `DM_VERSION`, `DM_BUILD`, `TRUE` and
-  `FALSE`. The symptom is silent, which is why it survived: the binder checks members through a
-  written receiver and never a bare identifier, so nothing reports a missing constant — a bare
-  `NORTH` simply completes to nothing. Fixing it means seeding them as macros rather than as
-  builtins entries, since that is what they are, and then re-verifying zero invented. See §8.
+  **Its 199 `#define` constants are the third source, and they landed nowhere from M5 until
+  2026-08-11.** `ReadStddef` runs `DeclarationParser`, which reads declarations and never a
+  directive, so `NORTH`, `ICON_ADD`, `SOUND_STREAM`, `ASSERT` and the `COLORSPACE_*` family were
+  all missing while this table claimed they were its first contribution. The symptom is why it
+  survived six milestones: the binder checks members through a written receiver and never a bare
+  identifier, so nothing reported a missing constant — a bare `NORTH` simply completed to nothing,
+  and no gate in this project is pointed at that. `ReadStddefMacros` now emits them as `M` lines and
+  `BuiltinMacros.Seed` defines them into the `MacroTable` before any file and before the `-D` flags,
+  which is the compiler's own order: a project redefining one wins, because its `#define` comes
+  later. They are seeded rather than added to the tree, because a macro is not a member of anything.
 
   `stddef.dm` is version-stamped (the sample on hand reads `516.1666`) and is regenerated by
   creating a file named `stddef.dm` in a project and compiling. `builtins.txt` records the BYOND
@@ -1290,17 +1294,46 @@ default-on warnings fire on code that **builds clean**. A warklan author gets 14
 their build that the editor is silent about — that is a live diagnostic missing from a working
 product, which belongs at the front of the order rather than the back.
 
-Before deciding what it costs, **group the missed lines by warning name** (`dmc diagdiff <dme>
---verbose`). The prior is that `unused_var` dominates, since it is the one default-on warning we
-know about and it is already written and backed out (§9 has both of its causes, one understood and
-one never diagnosed) — but this project has misread the aggregation axis three times, so the
-grouping comes before the estimate. Also worth confirming that `dm.exe` compiles warklan with zero
-*errors*: if it does not, some of the 14 may be downstream of a parse we fail differently.
+**The grouping was run on 2026-08-11, and the prior was wrong — a fourth time for the aggregation
+axis.** The standing expectation, written into both roadmap docs, was that `unused_var` dominates,
+since it is the default-on warning we knew about and it is already written and backed out. Grouped
+by warning name across both projects, all 16 missed lines are:
 
-**The instrument that would stop this recurring** is the one the probe ratchet already proves:
-`BASELINE.txt` records agreement and fails when it drops. A per-project missed-count baseline —
-warklan 14, madridspy 2, mlaas 0 — would make the column impossible to skip past, which is what
-it needs, because reading it was nobody's job and so nobody did it.
+| warning | warklan | madridspy | what it costs |
+|---|---|---|---|
+| `lentext is being phased out; replace with length` | 8 | 1 | **A name check.** Using `lentext` at all warns. No tree, no evaluator, no walk |
+| `..() has no parent proc to call` | 3 | 1 | **Small.** `ProcSymbol` already keeps override chains; this is `..()` in a proc with nothing above it |
+| `variable defined but not used` (`unused_var`) | 2 | 0 | **The expensive one**, needing the reachability walk |
+| `#warning <the author's own text>` | 1 | 0 | **Trivial.** `#warn` bodies already parse as free text (§8); the compiler simply echoes them |
+
+So **13 of 16 are three cheap checks**, and `unused_var` — predicted as the bulk — is 2 of 16 and
+the costliest of the four. The order that fell out of the prior would have started with the hardest
+check and delivered the least.
+
+**Two of them shipped the same day.** `new_name` and `no_parent` carry the compiler's warning names
+rather than private `DM0xxx` ids, per §8a — the names are the `#pragma` vocabulary, and a project
+silencing `no_parent` in source expects it silenced here. **madridspy went 2 missed to 0**, which is
+complete agreement with `dm.exe`, and **warklan went 14 to 3**. Zero invented held everywhere,
+/tg/station included.
+
+The third, the `#warn` echo, turned out **not** to be trivial after all and is deferred. The
+compiler reports it at the directive's own line, and preprocessor diagnostics are currently
+attributed to `(the .dme, line 0)` — a span alone is ambiguous once the walk spans files, so the
+harness cannot match it. Giving walk-time diagnostics real per-file attribution is worth doing, and
+it improves every preprocessor diagnostic rather than this one line, but it is infrastructure rather
+than a name check. The grouping priced the *count* correctly and said nothing about the plumbing.
+
+**`ConstantEvaluator` is not a prerequisite here either**, which was also assumed. It gates
+`init_proc`, and `init_proc` ships **off by default** — so it can never appear in a missed column
+measured against a default build. It is worth building for its own sake, since constant values in
+hover and completion come free with it, but it does not block this work.
+
+**The instrument now exists.** `dmc diagdiff <dme> --baseline tests/fixtures/CORPUS-BASELINE.txt`
+records agreed/missed/invented per project and fails when any of them moves — the probe ratchet's
+shape, pointed at the column nobody was reading. Missed going *down* fails too, with a different
+message, because that means a check landed and the row is stale. It is deliberately a **local**
+gate: the corpora are games on the author's disk, so CI can never run it, and the key is the
+`.dme`'s file name because paths differ per machine and names do not.
 
 ### /tg/station, measured for the first time on 2026-08-05
 
@@ -1449,6 +1482,47 @@ collide", and it briefly went into these docs as a fact.
 With both closed, the interim guard — report only a name declared nowhere, or only on a subtype —
 was removed and re-measured at zero invented on both projects. It had been suppressing real errors:
 a typo that happens to name a member of an unrelated type is still a typo.
+
+**Attempt three, 2026-08-11: two of the three causes are now diagnosed and fixed, and it is still
+not shippable.** The rule itself was pinned first, one case per proc against 516.1686, and it is
+narrower than the name suggests: **proc locals only**. An unread local warns, a write-only local
+warns (a plain `x = 1` writes rather than reads), and a local with no initialiser warns. Silent: any
+read at all — through `!`, in an interpolation hole, as a call argument — a compound `x += 1`, which
+reads as well as writing, an unused **parameter**, and every type-level var. Recorded as fixture
+`errors/unused_var`, which compiles with 0 errors and 3 warnings.
+
+The two causes the previous attempt left behind:
+
+- **A `for` loop variable is exempt.** `for(var/i in 1 to 3)` whose body never mentions `i` is
+  silent in dm.exe, and warning there was worth **14 invented on mlaas alone**. This is the cause
+  the notes recorded as never diagnosed, and it had been *misattributed*: the write-up blamed a read
+  through `if(!passed)`, which works and always did — the site at `host.dm:953` is the `for` header
+  on the line after the `passed` declaration, not the declaration.
+- **A `var` block header is a type, not a variable**, in both forms mlaas ships:
+  `var/obj/small/clothing` with indented names under it, and a bare `var/mob` heading `who` and `M`.
+  Recognised by the whole path resolving to a declared type with no initialiser written.
+
+With both fixed, **mlaas, madridspy and warklan are all at zero invented** and warklan's missed count
+drops 3 → 1. Then the stress project answered: **/tg/station invents 119**, on sites such as
+`var/gcf = greatest_common_factor(values)` and `var/canSmoothWith = src.canSmoothWith` where the
+local plainly *is* read further down the proc. So reads are being missed in statement shapes the
+three smaller projects do not exercise — the standing suspicion is statement kinds `BindStatement`
+does not descend into, which is a bounded thing to check and was not checked.
+
+**And a second requirement surfaced that is not a bug at all.** The fixture `pragma/numeric` went
+red the moment the check emitted anything: it carries `#pragma ignore 3006`, which suppresses
+`unused_var` by number, and we honour no pragma. §8a predicted exactly this — *"a project can
+already write `#pragma ignore init_proc` to silence a diagnostic … we will report things the author
+has explicitly silenced in source"* — and it becomes load-bearing the moment a check carries the
+compiler's own warning name. Pragma level is sequential state that flows through include order with
+`push`/`pop`, so honouring it belongs with the preprocessor walk, and the cheap approximation
+(project-wide suppression) over-suppresses, which is at least the safe direction.
+
+So the check is backed out for the third time, and this time the remainder is two named pieces of
+work rather than a mystery: find the missed read shapes on /tg/station, and honour `#pragma
+ignore`. The probes, the pinned rule and the fixture are in the tree.
+
+**The earlier record, for the shape of the first two attempts:**
 
 **`unused_var` is written and backed out, not shipped.** It matched `dm.exe` exactly on a dedicated
 fixture — including the write-only case, since a plain `x = 1` writes rather than reads while `x +=
@@ -2046,7 +2120,7 @@ that the two candidate behaviours produce different compiler output.
 | **A short-form colour duplicates each digit; it does not shift.** | `rgb2num("#f08")` is `[255,0,136]`, not `[255,0,128]` — the nibble is repeated, so `8` becomes `0x88`. Four digits is `#RGBA` and the alpha duplicates with the rest: `rgb2num("#ff00")` is `[255,255,0,0]`, a fully transparent yellow rather than a malformed `#RRGG`. Both spellings are accepted anywhere a colour is, and `rgb2num("#ff008040")` is `[255,0,128,64]`. An implementation shifting left by four is wrong by a visible shade on every three-digit colour in a codebase, with nothing failing to say so. Runtime-verified 516.1686; fixture `ok/colors.dm`. |
 | **`rgb()` clamps out-of-range components and truncates fractional ones.** | `rgb(300,-20,0)` is `#ff0000` and `rgb(-1,-1,-1)` is `#000000`, so both ends clamp rather than wrapping. `rgb(1.4,1.5,1.6)` is `#010101`: 1.5 goes to **1**, so it truncates rather than rounding — the one value where the two rules disagree, and the one most likely to be written. Runtime-verified 516.1686; fixture `ok/colors.dm`. |
 | **A named colour is a real colour, and `rgb()` has three other colour spaces.** | `rgb2num("red")` is `[255,0,0]`, and `color = "red"` reads back `#ff0000`. `rgb(0,100,50,space=COLORSPACE_HSL)`, `rgb(0,100,100,space=COLORSPACE_HSV)` and the named-argument form `rgb(h=0,s=100,l=50,space=…)` are all `#ff0000` — the reference's rule that only the first letter of a component name matters holds, `space` excepted. The four `COLORSPACE_*` values are `#define`s in `stddef.dm` (RGB 0, HSV 1, HSL 2, HCY 3), which is why **nothing in our tree resolves them** — see the `#define` gap below. `ColorService` reports neither a named colour nor a spaced call, because reading a spaced call's arguments as RGB would draw a red swatch beside a colour that is not red. |
-| **`stddef.dm`'s 199 `#define` constants reach nothing we build.** | `NORTH`, `EAST`, `SECONDS`, `ICON_ADD`, `COLORSPACE_HSL` and the rest are preprocessor macros in `stddef.dm`, which the compiler includes implicitly and we replace with `builtins.txt`. `tools/builtins-gen` parses that file with `DeclarationParser`, which sees declarations and never reads a directive — so the wrapper datums land and **not one constant does**. `MacroTable.SeedPredefined` carries only `DM_VERSION`, `DM_BUILD`, `TRUE` and `FALSE`. Nothing has caught it because the binder checks members through a written receiver and never a bare identifier, so the cost is silent: completion on a bare name offers no BYOND constant. Found 2026-08-08 while scoping the colour provider, and not fixed in that pass. |
+| **`stddef.dm` declares 199 `#define` constants**, and they are compiled ahead of every project. | `NORTH`, `EAST`, `ICON_ADD`, `SOUND_STREAM`, `ASSERT` and the `COLORSPACE_*` family are preprocessor macros in `stddef.dm`, which the compiler includes implicitly and we replace with `builtins.txt`. `tools/builtins-gen` parses that file with `DeclarationParser`, which reads declarations and never a directive — so the wrapper datums landed and **not one constant did**, from M5 until 2026-08-11. The cost was silent: the binder checks members through a written receiver and never a bare identifier, so nothing reported a missing constant and bare-name completion simply offered no BYOND constant. They are now emitted as `M` lines and seeded into the `MacroTable` before any file, which is the compiler's own order. |
 | **`TRUE` and `FALSE` are built-in macros since 515.** | With no define anywhere: `#if TRUE` is taken, `#if FALSE` is silently not taken (no error — contrast §8's rule that `#if` rejects undefined names), `#ifdef TRUE` is defined, and the runtime values are 1 and 0. tgstation defines neither and writes `#define MERGERS_DEBUG FALSE` + `#if MERGERS_DEBUG`, which is what exposed the missing seed. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -3080,11 +3154,68 @@ it.
   18 unit tests. 1,179 tests, 37 exports.
 - **2026-08-08** — **`stddef.dm`'s `#define` constants reach nothing we build** (§8), found while
   scoping the above and **not fixed there**. `builtins-gen` parses `stddef.dm` with
-  `DeclarationParser`, which never reads a directive, so all 199 constants — `NORTH`, `SECONDS`,
-  `ICON_ADD`, the `COLORSPACE_*` family — are absent from `builtins.txt`, while this document's M5
+  `DeclarationParser`, which never reads a directive, so all 199 constants — `NORTH`, `ICON_ADD`,
+  `SOUND_STREAM`, the `COLORSPACE_*` family — are absent from `builtins.txt`, while this document's M5
   table claimed they were its first source. Nothing caught it because the binder never checks a
   bare identifier, so the only symptom is a completion list quietly missing every BYOND constant.
   The M5 bullet now states what the file actually holds.
+- **2026-08-11** — **`#pragma ignore` is honoured, positionally.** §8a predicted this would be
+  needed the moment a check carried a compiler warning name, and `new_name`/`no_parent` shipped
+  without it — safe only because no corpus project silences them.
+  **The level is positional, and a cheaper model is wrong in both directions.** Compiler-verified in
+  one file: `ignore`, then `warn`, then a `push`/`ignore`/`pop` around a third site, gives silenced,
+  silenced-by-number, **reported**, silenced, **reported**. A project-wide union of everything ever
+  ignored misses two of those; a last-one-wins map invents two. `PragmaLevels` records each change
+  in walk order with its position and replays them, starting from the map the file was *entered*
+  with — because §8 verified the state flows through include order, and swapping two `#include`
+  lines changes the answer.
+  The `pop` had to be learned twice: restoring the map is not enough, because unless the restore is
+  also recorded as a positional change the replay never sees it and everything after the pop keeps
+  the pushed level. The probe caught it as exactly one missed site.
+  The levels ride on `ObjectTree` rather than through `Binder.Bind`'s signature — every caller
+  already holds the tree the same walk produced, so one property reaches the ABI, the LSP, the CLI
+  and the reference index without four signature changes. Fixture `pragma/suppression`; all four
+  baselines hold, /tg/station at 0/0/0.
+- **2026-08-11** — **`new_name` and `no_parent`, the first two of `dm.exe`'s default-on warnings.**
+  Both carry the compiler's own warning name rather than a `DM0xxx` id, per §8a. **madridspy reached
+  complete agreement with `dm.exe` — 2 missed to 0 — and warklan went 14 to 3**, with zero invented
+  held on all four projects.
+  `new_name` (4005) is the deprecation class, and the vocabulary was measured rather than assumed:
+  sixteen candidate renames compiled against 516.1686, and only `lentext` warns — `text2list` and
+  `list2text` are removed outright rather than deprecated. The lab catalogue lists two further
+  messages under the name, an output-operator `message()` and a `rand` **statement**, neither
+  present in any corpus project and both a different construct, so they wait for a consumer.
+  `no_parent` (3013) needed its rule pinned, because three readings of "has a parent" differ. One
+  case per proc in one file settles it: a `proc/` **new declaration** warns — a global `/proc/f()`,
+  and `/datum/a/proc/fresh()` — while **every** override stays silent, including of a builtin
+  (`/mob/Login()`) and of the same type's own earlier declaration. And `/datum/b/proc/Login()` warns
+  despite `Login` being a builtin name, because `/datum/b` is unrelated to `/mob` — so the question
+  is the enclosing type's ancestry, never the name in the abstract. The ancestor walk is kept rather
+  than trusting `IsNewDeclaration` alone: in valid code an ancestor with the same name would already
+  be `DM0403`, but a buffer mid-edit is not valid code.
+  Fixture `errors/default_warnings`, seven binder tests, and the corpus baseline moved deliberately.
+- **2026-08-11** — **The builtins table's two silent defects, both fixed in one pass**, since both
+  live in `builtins-gen` and both needed the same zero-invented re-verification.
+  **`stddef.dm`'s 199 `#define` constants are seeded** (§8). They are macros, so they ride as `M`
+  lines and `BuiltinMacros.Seed` defines them through the same lex → directive-scan →
+  `MacroDefinition.Parse` path a real `#define` takes — which is what makes the four function-like
+  ones work without a special case. Seeded before any file and before `-D`, the compiler's own
+  order, so a project redefining `NORTH` still wins.
+  **And 25 entries that were never members are gone.** The reference organises proc-scope vars and
+  verb settings under leading keyword segments — `/proc/var/args`, `/verb/set/category`,
+  `/proc/turn/vector` — and reading those as owners produced global procs named `args`, `src`,
+  `usr`, `caller`, `callee`, `category`, `waitfor`, plus vars named `const`, `final` and `tmp`.
+  None is a proc; several are not global. The discriminator was measured rather than guessed:
+  `/proc/<name>` at exactly two segments is a real global proc and there are **204** of those,
+  while every other leading-keyword anchor is a section heading.
+  **The cleanup found a live bug underneath it.** `/proc/for/list` and `/proc/turn/vector` claimed
+  the names `list` and `vector` before the real entries arrived, and the generator's dedupe keeps
+  the first — so `list()` and `vector()` sat in the table **with no parameters**, and signature
+  help on the most-typed call in DM answered with nothing. Both now carry their signatures.
+  Zero invented held on mlaas, madridspy, warklan and /tg/station with all of it live. One
+  correction on the way: `SECONDS` was cited in these docs as a BYOND constant and is /tg/station's
+  own `*10` — `Lexer.cs` already said so in a comment, which is the reminder that a claim being
+  written down here is not the same as it being checked.
 - **2026-08-08** — **M8 is done**, five milestones after it was passed over: `Dm.Assets` with
   `DmiReader`, `dm_icon_states` at ABI 0.24, LSP `dm/iconStates`, and `dmc icons` over a file or a
   whole tree. The `.dmi` row was the last blank on the capability matrix.

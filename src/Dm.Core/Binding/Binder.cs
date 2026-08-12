@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Dm.Core.Diagnostics;
 using Dm.Core.Services;
@@ -41,6 +41,22 @@ public sealed class Binder
     private readonly Action<Services.Reference>? _sink;
     private readonly string? _referenceName;
     private string _inside = "/";
+
+    /// <summary>Whether the proc being walked has nothing for <c>..()</c> to reach.</summary>
+    private bool _parentless;
+
+    /// <summary>
+    /// Whether <c>#pragma ignore</c> silences this warning at this point in the file.
+    /// </summary>
+    /// <remarks>
+    /// Only warnings carrying the compiler's own NAME can be silenced, which is the point of using
+    /// those names: <c>#pragma ignore no_parent</c> is the project telling us, in the compiler's own
+    /// vocabulary, not to say it. Our private <c>DM0xxx</c> ids have no pragma and are never
+    /// suppressed here — they are the things dm.exe has no name for.
+    /// </remarks>
+    private bool Silenced(string id, TextSpan span)
+        => _tree.SuppressedWarnings is { IsEmpty: false } levels
+            && levels.IsIgnored(_file, span.Start, id);
 
     private Binder(ObjectTree tree, string? file, Action<Services.Reference>? sink, string? referenceName)
     {
@@ -120,6 +136,7 @@ public sealed class Binder
             EmitOverrideReference(proc, owner);
 
         _inside = owner.IsRoot ? $"/{proc.Name}()" : $"{owner.Text}/{proc.Name}()";
+        _parentless = HasNoParentProc(proc, owner);
 
         Scope scope = new(owner);
 
@@ -246,6 +263,97 @@ public sealed class Binder
     /// `proc`/`verb` segment are proc references, judged by a different rule, so they are skipped
     /// too. Both are misses to close later rather than risks to take now.
     /// </remarks>
+    /// <summary>
+    /// Whether <c>..()</c> inside this proc has nothing to reach — dm.exe's <c>no_parent</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Compiler-verified on 516.1686, one case per proc in a single file, because three plausible
+    /// readings of "has a parent" differ. It warns for a <b>new declaration</b> — a <c>proc/</c>
+    /// marker — with no ancestor declaring the name: a global <c>/proc/f()</c>, and
+    /// <c>/datum/a/proc/fresh()</c>. It stays silent for every override: of a project proc on a
+    /// subtype, of a <b>builtin</b> such as <c>/mob/Login()</c>, and of the same type's own earlier
+    /// declaration. And <c>/datum/b/proc/Login()</c> <b>does</b> warn even though <c>Login</c> is a
+    /// builtin name, because <c>/datum/b</c> is unrelated to <c>/mob</c> — so the question is the
+    /// enclosing type's ancestry, never the name in the abstract.
+    /// </para>
+    /// <para>
+    /// The ancestor walk is kept rather than short-circuiting on <c>IsNewDeclaration</c> alone. In
+    /// valid code an ancestor declaring the same name would already be <c>DM0403</c>, so the two
+    /// agree — but a buffer mid-edit is not valid code, and warning about a missing parent that is
+    /// sitting right there would read as our bug.
+    /// </para>
+    /// <para>
+    /// Carries the compiler's warning name rather than a <c>DM0xxx</c> id, per §8a. Id 3013, on by
+    /// default.
+    /// </para>
+    /// </remarks>
+    private bool HasNoParentProc(ProcDeclarationSyntax proc, TypePath owner)
+    {
+        if (!proc.IsNewDeclaration)
+            return false;
+
+        if (owner.IsRoot)
+            return true;
+
+        if (_tree.Find(owner) is not TypeSymbol type)
+            return false;
+
+        foreach (TypeSymbol ancestor in _tree.InheritanceChain(type))
+        {
+            if (ancestor.Path == type.Path)
+                continue;
+
+            foreach (ProcSymbol candidate in ancestor.Procs)
+            {
+                if (candidate.Name == proc.Name)
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// BYOND's own deprecation warning, <c>new_name</c>, for a builtin that has been renamed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Carries the compiler's warning NAME rather than a private <c>DM0xxx</c> id, per §8a: the
+    /// names taken by <c>#pragma warn|ignore|error</c> are a shared vocabulary, and a project that
+    /// silences <c>new_name</c> in source expects it silenced here too. Id 4005, on by default.
+    /// </para>
+    /// <para>
+    /// <b>One entry, because one is what the compiler has.</b> Sixteen candidate renames were
+    /// compiled against 516.1686 and only <c>lentext</c> warns — <c>text2list</c> and
+    /// <c>list2text</c> are removed outright rather than deprecated, and everything else is
+    /// current. The lab catalogue lists two more messages under this name, an output-operator
+    /// <c>message()</c> and a <c>rand</c> STATEMENT, both different constructs and neither present
+    /// in any corpus project, so they are left until something asks for them.
+    /// </para>
+    /// <para>
+    /// A project declaring its own <c>lentext</c> shadows the builtin, and warning there would be
+    /// reporting against a proc BYOND never named.
+    /// </para>
+    /// </remarks>
+    private void ReportDeprecatedCall(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Target is not IdentifierExpressionSyntax { Name: "lentext" } callee)
+            return;
+
+        foreach (ProcSymbol declared in _tree.Root.Procs)
+        {
+            if (declared.Name == "lentext" && !declared.IsBuiltin)
+                return;
+        }
+
+        if (Silenced("new_name", callee.Span))
+            return;
+
+        _diagnostics.Add(Diagnostic.Warning(
+            "new_name", callee.Span, "lentext: lentext is being phased out; replace with length"));
+    }
+
     private void BindPath(PathExpressionSyntax path)
     {
         if (path.Path.Anchor != PathAnchor.Absolute || path.Path.Segments.Count == 0)
@@ -437,6 +545,7 @@ public sealed class Binder
                 // The callee is being called, which decides whether a miss is an undefined proc or
                 // an undefined var — dm.exe reports them differently.
                 BindExpression(invocation.Target, scope, invoked: true);
+                ReportDeprecatedCall(invocation);
 
                 foreach (ArgumentSyntax argument in invocation.Arguments)
                     BindExpression(argument.Value, scope, invoked: false);
@@ -489,6 +598,12 @@ public sealed class Binder
                 break;
 
             case ParentCallExpressionSyntax parent:
+                if (_parentless && !Silenced("no_parent", parent.Span))
+                {
+                    _diagnostics.Add(Diagnostic.Warning(
+                        "no_parent", parent.Span, "..: ..() has no parent proc to call"));
+                }
+
                 foreach (ArgumentSyntax argument in parent.Arguments)
                     BindExpression(argument.Value, scope, invoked: false);
 

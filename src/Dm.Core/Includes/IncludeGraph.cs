@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using Dm.Core.Diagnostics;
@@ -150,12 +150,14 @@ public sealed class IncludeGraph
         string dmePath,
         IReadOnlyList<IncludedFile> files,
         IReadOnlyList<Diagnostic> diagnostics,
-        MacroTable macros)
+        MacroTable macros,
+        PragmaLevels warnings)
     {
         DmePath = dmePath;
         Files = files;
         Diagnostics = diagnostics;
         Macros = macros;
+        Warnings = warnings;
     }
 
     public string DmePath { get; }
@@ -175,6 +177,15 @@ public sealed class IncludeGraph
     /// what the M3 boundary snapshots are for.
     /// </remarks>
     public MacroTable Macros { get; }
+
+    /// <summary>
+    /// Which warnings <c>#pragma ignore</c> silenced, and where.
+    /// </summary>
+    /// <remarks>
+    /// Positional, unlike <see cref="Macros"/>: the level at a point is what decides whether a
+    /// diagnostic there is reported, and the same name is legitimately on and off in one file.
+    /// </remarks>
+    public PragmaLevels Warnings { get; }
 
     /// <summary>Walks the graph without expanding macros.</summary>
     public static IncludeGraph Build(string dmePath, IncludeOptions? options = null)
@@ -233,7 +244,7 @@ public sealed class IncludeGraph
 
         builder.Walk(root, includedFrom: null, depth: 0, fromLibrary: false);
 
-        return (new IncludeGraph(root, builder.Files, builder.Diagnostics, builder.Macros), runs);
+        return (new IncludeGraph(root, builder.Files, builder.Diagnostics, builder.Macros, builder.Warnings), runs);
     }
 
     /// <summary>
@@ -265,6 +276,11 @@ public sealed class IncludeGraph
 
             Macros.SeedPredefined();
 
+            // stddef.dm's constants, which dm.exe compiles ahead of all source. Before the -D flags
+            // and before any file, so a project redefining one of them wins — the compiler's own
+            // order, since its stddef is simply the first thing included.
+            BuiltinMacros.Seed(Macros);
+
             // After the predefined ones and before any file, which is where dm.exe puts them: a
             // -D flag is visible to the very first line of the .dme, including its conditionals.
             foreach (MacroDefinition macro in CommandLineDefine.ParseAll(options.Defines, Diagnostics))
@@ -277,6 +293,12 @@ public sealed class IncludeGraph
 
         /// <summary>Macro state, carried across the whole traversal in include order.</summary>
         public MacroTable Macros { get; } = new();
+
+        /// <summary>
+        /// Which warnings <c>#pragma</c> has silenced, and where. Sequential state like
+        /// <see cref="Macros"/>, because §8 verified the level flows through include order.
+        /// </summary>
+        public PragmaLevels Warnings { get; } = new();
 
         /// <summary>
         /// Preprocessed output in compile order, or null when only the file list is wanted.
@@ -427,6 +449,10 @@ public sealed class IncludeGraph
             IReadOnlyList<Directive> directives = DirectiveScanner.Scan(lex);
             ConditionalStack conditionals = new();
 
+            // The level map this file is walked with, so a query inside it starts from what an
+            // earlier file left rather than from the default.
+            Warnings.EnterFile(path);
+
             // Directives are interleaved with code, and each one can change macro state or pull in
             // another file. Walking token-by-token keeps the emitted stream in true compile order:
             // a run of code is expanded with the macro state that applied at that point, before the
@@ -555,6 +581,7 @@ public sealed class IncludeGraph
                             _recording?.Add(EffectStep.ForReincludable(path));
                         }
 
+                        ReadWarningPragma(path, lex, directive);
                         KeepIfGrammarPragma(text, lex, directive);
                         break;
 
@@ -728,6 +755,59 @@ public sealed class IncludeGraph
         /// the directive's words stop.
         /// </para>
         /// </remarks>
+        /// <summary>
+        /// Records <c>#pragma warn|ignore|error &lt;names&gt;</c> and <c>#pragma push|pop</c>.
+        /// </summary>
+        /// <remarks>
+        /// The names take a comma-separated list and are the same vocabulary as the compiler's
+        /// <c>-ignore</c>/<c>-warn</c>/<c>-error</c> flags, so a project silencing one in source
+        /// expects it silenced here. <c>push</c>/<c>pop</c> scope the level to a region, and the
+        /// state carries across files in include order — both compiler-verified, see
+        /// <see cref="PragmaLevels"/>.
+        /// </remarks>
+        private void ReadWarningPragma(string path, LexResult lex, Directive directive)
+        {
+            if (!directive.HasArguments)
+                return;
+
+            string first = lex.GetText(lex.Tokens[directive.ArgumentStart]);
+
+            if (first == "push")
+            {
+                Warnings.Push();
+                return;
+            }
+
+            if (first == "pop")
+            {
+                Warnings.Pop(path, lex.Tokens[directive.HashIndex].Span.Start);
+                return;
+            }
+
+            PragmaLevel level = first switch
+            {
+                "ignore" => PragmaLevel.Ignore,
+                "warn" => PragmaLevel.Warn,
+                "error" => PragmaLevel.Error,
+                _ => (PragmaLevel)(-1),
+            };
+
+            if (level == (PragmaLevel)(-1))
+                return;
+
+            int offset = lex.Tokens[directive.HashIndex].Span.Start;
+
+            // The list is comma-separated and the lexer gives each name its own token, so anything
+            // that is not a separator is a name or an id.
+            for (int i = directive.ArgumentStart + 1; i <= directive.ArgumentEnd && i < lex.Tokens.Count; i++)
+            {
+                if (lex.Tokens[i].Kind is TokenKind.Comma or TokenKind.Newline)
+                    continue;
+
+                Warnings.Set(path, offset, lex.GetText(lex.Tokens[i]), level);
+            }
+        }
+
         private void KeepIfGrammarPragma(SourceText text, LexResult lex, Directive directive)
         {
             if (Runs is null || !directive.HasArguments)

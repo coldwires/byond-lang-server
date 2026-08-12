@@ -29,6 +29,7 @@ public sealed class Workspace : IDisposable
     private ObjectTree? _tree;
     private IReadOnlyList<(string File, ParseResult Parse)>? _parses;
     private MacroTable? _macros;
+    private Preprocessing.PragmaLevels? _suppressedWarnings;
 
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParseResult, TreeContribution>
         _contributions = new();
@@ -264,6 +265,7 @@ public sealed class Workspace : IDisposable
 
         PreprocessResult preprocessed = Preprocessor.Run(DmePath, options);
         _macros = preprocessed.Macros;
+        _suppressedWarnings = preprocessed.Graph.Warnings;
 
         // Reuses the token source and the parse of every file whose run came out identical, which
         // after an edit is nearly all of them.
@@ -289,6 +291,11 @@ public sealed class Workspace : IDisposable
         }
 
         _parses = parses;
+
+        // The walk's pragma levels ride on the tree, so every binder caller gets them without a
+        // signature change - see ObjectTree.SuppressedWarnings.
+        tree.SuppressedWarnings = _suppressedWarnings;
+
         _tree = tree;
         return tree;
     }
