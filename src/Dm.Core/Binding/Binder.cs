@@ -58,6 +58,18 @@ public sealed class Binder
         => _tree.SuppressedWarnings is { IsEmpty: false } levels
             && levels.IsIgnored(_file, span.Start, id);
 
+    /// <summary>Every local declared in the proc being bound, in declaration order.</summary>
+    private readonly List<LocalRecord> _procLocals = new();
+
+    /// <summary>Labels declared in the proc being bound, with the span to report at.</summary>
+    private readonly List<(string Name, TextSpan Span)> _procLabels = new();
+
+    /// <summary>Label names some `break`, `continue` or `goto` NAMES. A bare `break` is not one.</summary>
+    private readonly HashSet<string> _labelUses = new(StringComparer.Ordinal);
+
+    /// <summary>Set while binding a `for` header, so its variable is recorded as exempt.</summary>
+    private bool _declaringLoopVariable;
+
     private Binder(ObjectTree tree, string? file, Action<Services.Reference>? sink, string? referenceName)
     {
         _tree = tree;
@@ -116,6 +128,7 @@ public sealed class Binder
                 case VarDeclarationSyntax variable:
                     // A type-level initialiser runs with the enclosing type as `src`.
                     _inside = enclosing.IsRoot ? "/" : enclosing.Text;
+                    CheckDuplicateVar(variable, enclosing);
                     BindExpression(variable.Initializer, new Scope(enclosing), invoked: false);
                     break;
 
@@ -139,14 +152,21 @@ public sealed class Binder
         _parentless = HasNoParentProc(proc, owner);
 
         Scope scope = new(owner);
+        _procLocals.Clear();
+        _procLabels.Clear();
+        _labelUses.Clear();
 
         foreach (ParameterSyntax parameter in proc.Parameters)
         {
-            scope.Declare(
+            scope.Declare(new LocalRecord(
                 parameter.Name,
                 parameter.DeclaredType is { } declared
                     ? TypePath.FromSegments(declared.Segments)
-                    : TypeInference.FromInputType(parameter.InputType));
+                    : TypeInference.FromInputType(parameter.InputType),
+                // ParameterSyntax carries no span, and needs none: a parameter is exempt, so this
+                // record is only ever consulted for shadowing and for the read flag.
+                default,
+                LocalKind.Parameter));
 
             BindExpression(parameter.DefaultValue, scope, invoked: false);
         }
@@ -155,6 +175,52 @@ public sealed class Binder
             return;
 
         BindStatement(proc.Body, scope);
+        ReportUnusedLocals();
+        ReportUnusedLabels();
+    }
+
+    /// <summary>
+    /// dm.exe's `unused_label`: a label nothing names. Compiler-verified one case per proc —
+    /// `break used`, `continue looped` and `goto target` each count, while a BARE `break` inside a
+    /// labelled block does not, and a label sitting before a loop nothing names warns like any
+    /// other. Labels live on their own line; `looped: for(...)` is a syntax error.
+    /// </summary>
+    private void ReportUnusedLabels()
+    {
+        foreach ((string name, TextSpan span) in _procLabels)
+        {
+            if (_labelUses.Contains(name) || Silenced("unused_label", span))
+                continue;
+
+            _diagnostics.Add(Diagnostic.Warning("unused_label", span, $"{name}: unused label"));
+        }
+
+        _procLabels.Clear();
+        _labelUses.Clear();
+    }
+
+    /// <summary>
+    /// dm.exe's `unused_var`, on the narrow set it actually covers: PROC LOCALS ONLY. A local
+    /// never read warns, and so does a write-only one — a plain `x = 1` writes without reading.
+    /// Silent: any read at all, a compound `x += 1`, an unused parameter, a `for` loop variable,
+    /// a catch variable, and every type-level var. Pinned one case per proc against 516.1686 and
+    /// recorded as fixture `errors/unused_var`.
+    /// </summary>
+    private void ReportUnusedLocals()
+    {
+        foreach (LocalRecord local in _procLocals)
+        {
+            if (local.Read || local.Kind != LocalKind.Local)
+                continue;
+
+            if (Silenced("unused_var", local.NameSpan))
+                continue;
+
+            _diagnostics.Add(Diagnostic.Warning(
+                "unused_var", local.NameSpan, $"{local.Name}: variable defined but not used"));
+        }
+
+        _procLocals.Clear();
     }
 
     /// <summary>
@@ -170,6 +236,87 @@ public sealed class Binder
     /// reported — finding it from here would mean scanning every descendant type on every bind.
     /// A builtin has no line at all, and dm.exe accordingly reports a single error there.
     /// </remarks>
+    /// <summary>
+    /// The var half of <c>DM0403</c>: a name declared twice on one type, or redeclared over an
+    /// ancestor's or a builtin's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A BARE OVERRIDE IS NOT A DECLARATION. <c>/obj/item/hp = 3</c> re-assigns an inherited var
+    /// and is ordinary DM, so only sites that wrote <c>var/</c> count — <see
+    /// cref="VarSymbol.IsDeclaration"/>. Getting that wrong would fire on most of a real game.
+    /// </para>
+    /// <para>
+    /// THE PAIR'S LINES ARE INVERTED for the same-type case, which is the opposite of the proc
+    /// half and was probed rather than assumed: dm.exe puts "duplicate definition" on the FIRST
+    /// declaration and "previous definition" on the second. The ancestor case is the normal way
+    /// round, with the child reported as the duplicate.
+    /// </para>
+    /// </remarks>
+    private void CheckDuplicateVar(VarDeclarationSyntax variable, TypePath enclosing)
+    {
+        if (!variable.InVarContext)
+            return;
+
+        TypePath owner = TypeTreeBuilder.VarOwner(enclosing, variable.Path);
+
+        if (_tree.Find(owner) is not { } type)
+            return;
+
+        IReadOnlyList<DeclarationSite> sites = type.VarDeclaringSites(variable.Name);
+
+        if (sites.Count > 1)
+        {
+            int index = -1;
+
+            for (int i = 0; i < sites.Count; i++)
+            {
+                if (sites[i].Span == variable.Span && sites[i].NameSpan == variable.NameSpan)
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            // Inverted against the proc half: the FIRST site is the one dm.exe calls the duplicate.
+            if (index == 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", variable.NameSpan, $"{variable.Name}: duplicate definition"));
+            }
+            else if (index > 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", variable.NameSpan, $"{variable.Name}: previous definition"));
+            }
+
+            return;
+        }
+
+        // Redeclaring what an ancestor declares, at any depth. An ancestor that merely overrides is
+        // not a declarer, so the walk continues past it to whoever is.
+        foreach (TypeSymbol ancestor in _tree.InheritanceChain(type))
+        {
+            if (ReferenceEquals(ancestor, type) || ancestor.FindVar(variable.Name) is not { } above)
+                continue;
+
+            if (above.IsBuiltin)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", variable.NameSpan,
+                    $"{variable.Name}: duplicate definition (conflicts with built-in variable)"));
+                return;
+            }
+
+            if (ancestor.VarDeclaringSites(variable.Name).Count > 0)
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0403", variable.NameSpan, $"{variable.Name}: duplicate definition"));
+                return;
+            }
+        }
+    }
+
     private void CheckDuplicateProc(ProcDeclarationSyntax proc, TypePath owner)
     {
         if (_tree.Find(owner) is not TypeSymbol type)
@@ -414,8 +561,10 @@ public sealed class Binder
 
                 break;
 
+            // The only position where an assignment's value goes nowhere, which is what makes a
+            // bare `x = 1` a write and not a use. See the assignment case.
             case ExpressionStatementSyntax expression:
-                BindExpression(expression.Expression, scope, invoked: false);
+                BindExpression(expression.Expression, scope, invoked: false, discarded: true);
                 break;
 
             // Declared as encountered, not gathered up front. A proc routinely reuses one name for
@@ -424,16 +573,29 @@ public sealed class Binder
             // invented errors on working code. A use above its declaration simply finds nothing and
             // is skipped, which is the safe direction.
             case LocalVarStatementSyntax local:
+            {
+                // A `for` header's own variable is exempt from unused_var: dm.exe leaves
+                // `for(var/i in 1 to 3)` silent when the body never mentions `i`, and warning
+                // there was worth 14 invented on mlaas alone.
+                LocalKind kind =
+                    _declaringLoopVariable ? LocalKind.LoopVariable
+                    : IsVarBlockHeader(local) ? LocalKind.BlockHeader
+                    : IsPersistent(local) ? LocalKind.Persistent
+                    : LocalKind.Local;
+
+                BindDimensions(local, scope);
                 BindExpression(local.Initializer, scope, invoked: false);
-                Declare(local, scope);
+                Declare(local, scope, kind);
 
                 foreach (LocalVarStatementSyntax sibling in local.Siblings)
                 {
+                    BindDimensions(sibling, scope);
                     BindExpression(sibling.Initializer, scope, invoked: false);
-                    Declare(sibling, scope);
+                    Declare(sibling, scope, kind);
                 }
 
                 break;
+            }
 
             case IfStatementSyntax branch:
                 BindExpression(branch.Condition, scope, invoked: false);
@@ -457,11 +619,23 @@ public sealed class Binder
             {
                 Scope inner = scope.Nest();
 
+                bool wasDeclaringLoopVariable = _declaringLoopVariable;
+                _declaringLoopVariable = true;
+
                 foreach (StatementSyntax initializer in loop.Initializers)
                     BindStatement(initializer, inner);
 
+                _declaringLoopVariable = wasDeclaringLoopVariable;
+
                 BindExpression(loop.Condition, inner, invoked: false);
                 BindExpression(loop.Sequence, inner, invoked: false);
+
+                // `for(var/i in 1 to end step by)` — the bound and the step are expressions like
+                // any other and were bound by nothing until 2026-08-12, so a name used only there
+                // was invisible to this walk AND to the reference index. tgstation writes
+                // `for(var/i in 1 to value / gcf)`, which is what exposed it.
+                BindExpression(loop.RangeEnd, inner, invoked: false);
+                BindExpression(loop.Step, inner, invoked: false);
 
                 foreach (StatementSyntax increment in loop.Increments)
                     BindStatement(increment, inner);
@@ -504,23 +678,50 @@ public sealed class Binder
                 Scope handler = scope.Nest();
 
                 if (guarded.Exception is { } caught)
-                    Declare(caught, handler);
+                    Declare(caught, handler, LocalKind.Caught);
 
                 BindStatement(guarded.CatchBody, handler);
                 break;
             }
 
-            // `set` names are a fixed vocabulary rather than members of anything, and a label is
-            // not a name lookup at all.
+            // A label is not a name lookup, but it CARRIES A BODY: `set_adj_in_dir: { ... }` is
+            // the label-plus-brace-block form that was worth 754 diagnostics when the parser
+            // learned it, and every statement inside one was invisible here until 2026-08-12.
+            // A `\`-continued macro body has no lines to indent, so tgstation writes whole
+            // algorithms this way.
+            case LabelStatementSyntax label:
+                _procLabels.Add((label.Name, label.Span));
+                BindStatement(label.Body, scope);
+                break;
+
+            // A label is USED only when something NAMES it. Compiler-verified: `break used`,
+            // `continue looped` and `goto target` are all uses, while a BARE `break` inside a
+            // labelled block leaves it unused — dm.exe warns there, which is the case an
+            // implementation would most likely get wrong.
+            case BreakStatementSyntax { Label: { } broken }:
+                _labelUses.Add(broken);
+                break;
+
+            case GotoStatementSyntax { Label: { } jumped }:
+                _labelUses.Add(jumped);
+                break;
+
+            // `set` names are a fixed vocabulary rather than members of anything, and an unlabelled
+            // break names nothing.
             case SetStatementSyntax:
-            case LabelStatementSyntax:
             case GotoStatementSyntax:
             case BreakStatementSyntax:
                 break;
         }
     }
 
-    private void BindExpression(ExpressionSyntax? expression, Scope scope, bool invoked, bool written = false)
+    /// <remarks>
+    /// <c>discarded</c> is true only for the expression of an expression-statement, where the value
+    /// goes nowhere. It never propagates into subexpressions: in <c>x = (y = 1)</c> the outer value
+    /// is discarded and the inner one is consumed.
+    /// </remarks>
+    private void BindExpression(
+        ExpressionSyntax? expression, Scope scope, bool invoked, bool written = false, bool discarded = false)
     {
         switch (expression)
         {
@@ -548,7 +749,7 @@ public sealed class Binder
                 ReportDeprecatedCall(invocation);
 
                 foreach (ArgumentSyntax argument in invocation.Arguments)
-                    BindExpression(argument.Value, scope, invoked: false);
+                    BindArgument(argument, scope);
 
                 break;
 
@@ -569,8 +770,34 @@ public sealed class Binder
             case AssignmentExpressionSyntax assignment:
                 // The target is a WRITE for the reference index; compound operators both read and
                 // write, and report as writes — "where is hp assigned" is the question they answer.
+                //
+                // unused_var needs the other half of that fact, and it is compiler-verified: a
+                // plain `x = 1` is a write alone and warns, while `x += 1` reads as well and is
+                // silent. The index still calls both writes; only the local's read flag differs.
+                // A compound `x += 1` reads as well as writing. So does a plain `x = 1` whose
+                // VALUE IS CONSUMED — tgstation's `return screentip_change = TRUE` is the shape,
+                // and dm.exe stays silent on it while warning on the same write as a bare
+                // statement. Both come down to whether anything looks at the result.
+                if ((assignment.OperatorToken != TokenKind.Assign || !discarded)
+                    && assignment.Target is IdentifierExpressionSyntax compound
+                    && scope.Find(compound.Name) is { } target)
+                {
+                    target.Read = true;
+                }
+
                 BindExpression(assignment.Target, scope, invoked: false, written: true);
                 BindExpression(assignment.Value, scope, invoked: false);
+                break;
+
+            // `path {a = 1; b = x}` — the braces are mandatory here and the entries are ordinary
+            // expressions, so a local read inside one is a read. Missing from this switch until
+            // 2026-08-12, which made every such read invisible to the walk and to the index.
+            case ModifiedTypeExpressionSyntax modified:
+                BindExpression(modified.Type, scope, invoked: false);
+
+                foreach (ExpressionSyntax entry in modified.Assignments)
+                    BindExpression(entry, scope, invoked: false);
+
                 break;
 
             case ConditionalExpressionSyntax conditional:
@@ -583,7 +810,7 @@ public sealed class Binder
                 BindExpression(created.Type, scope, invoked: false);
 
                 foreach (ArgumentSyntax argument in created.Arguments)
-                    BindExpression(argument.Value, scope, invoked: false);
+                    BindArgument(argument, scope);
 
                 break;
 
@@ -605,10 +832,35 @@ public sealed class Binder
                 }
 
                 foreach (ArgumentSyntax argument in parent.Arguments)
-                    BindExpression(argument.Value, scope, invoked: false);
+                    BindArgument(argument, scope);
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// An argument is up to three expressions, and only the value was bound until 2026-08-12.
+    /// `list(key = 5)` carries a reader in <see cref="ArgumentSyntax.Name"/> — tgstation writes
+    /// `list((toxin_to_get) = 5)` and `list(get_material(material_used) = ...)` — and
+    /// `pick(20;"brown")` carries one in the weight. Both were invisible to this walk and to the
+    /// reference index.
+    /// </summary>
+    /// <summary>
+    /// A bracket declaration's sizes — `var/list/tier_list[max_tier]`. Bound BEFORE the name is
+    /// declared, because the size is evaluated where the declaration sits and cannot refer to the
+    /// variable it is sizing.
+    /// </summary>
+    private void BindDimensions(LocalVarStatementSyntax local, Scope scope)
+    {
+        foreach (ExpressionSyntax dimension in local.Dimensions)
+            BindExpression(dimension, scope, invoked: false);
+    }
+
+    private void BindArgument(ArgumentSyntax argument, Scope scope)
+    {
+        BindExpression(argument.Name, scope, invoked: false);
+        BindExpression(argument.Weight, scope, invoked: false);
+        BindExpression(argument.Value, scope, invoked: false);
     }
 
     /// <summary>
@@ -778,15 +1030,25 @@ public sealed class Binder
     /// </summary>
     private void BindIdentifier(IdentifierExpressionSyntax identifier, Scope scope, bool invoked, bool written)
     {
+        // A local shadows a member whatever its type, so it settles the name before anything else
+        // asks about it. Marking the read here — ahead of the sink gate rather than behind it — is
+        // what makes unused_var possible at all: the sink is null on the diagnostics path, so
+        // every bare-name read of a local was invisible to this walk, and a check hung off it saw
+        // a proc's locals as never read. That is the shape attempt three could not account for.
+        if (scope.Find(identifier.Name) is { } local)
+        {
+            if (!written)
+                local.Read = true;
+
+            // Locals and parameters are not index symbols.
+            return;
+        }
+
         if (!SinkWants(identifier.Name)
             || identifier.Name is "src" or "usr" or "world" or "global" or "args")
         {
             return;
         }
-
-        // Locals and parameters shadow members and are not index symbols.
-        if (scope.Contains(identifier.Name))
-            return;
 
         TypeSymbol? declaring = _tree.Find(scope.EnclosingType) is { } enclosing
             ? DeclaringOwner(enclosing, identifier.Name, invoked)
@@ -834,6 +1096,22 @@ public sealed class Binder
         NewExpressionSyntax { Type: PathExpressionSyntax { Path.Anchor: PathAnchor.Absolute } created }
             => TypePath.FromSegments(created.Path.Segments),
 
+        // A CHAIN — `t.weapon.ammo`, where the receiver is itself a member access. Resolved one
+        // step at a time: the target's type, then the member's DECLARED type on it. Written types
+        // only, exactly as everywhere else here, so a member with no declared type ends the chain
+        // rather than guessing.
+        //
+        // Absent until 2026-08-12, which meant a chained receiver resolved to nothing and
+        // BindMemberAccess returned before it could either check the member or record it — so
+        // `t.weapon.ammo` was missing from find-references while completion, definition and hover
+        // all answered at that exact position. They share `ResolveReceiver`; this is a third copy,
+        // and the divergence is the drift this project has been bitten by before.
+        MemberAccessExpressionSyntax { Kind: MemberAccessKind.Dot } chain
+            when ReceiverType(chain.Target, scope) is { } owner
+                && _tree.Find(owner) is { } ownerType
+                && _tree.ResolveVar(ownerType, chain.Name) is { DeclaredType: { } declared }
+            => declared,
+
         _ => null,
     };
 
@@ -842,17 +1120,122 @@ public sealed class Binder
             ? TypePath.FromSegments(path.Segments)
             : enclosing.Append(path.Segments);
 
-    private static void Declare(LocalVarStatementSyntax local, Scope scope)
-        => scope.Declare(
+    /// <summary>
+    /// A local that outlives the call. Corpus-verified rather than assumed: tgstation's
+    /// `var/static/mob/jeremy = new()` is read nowhere and dm.exe compiles the project silent.
+    /// </summary>
+    private static bool IsPersistent(LocalVarStatementSyntax local)
+    {
+        foreach (string modifier in local.Modifiers)
+        {
+            if (modifier is "static" or "global" or "const")
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a local declaration is really a `var` block header naming a type. The discriminator
+    /// is the whole path resolving to a declared type with NO initialiser written: `var/mob` heads
+    /// a block, while `var/mob/M` declares `M` because `/mob/M` is no type, and `var/never = 1`
+    /// declares a variable because a header carries no value. Both forms this recognises ship in
+    /// mlaas, and warning on them is one of the two causes that backed this check out before.
+    /// </summary>
+    private bool IsVarBlockHeader(LocalVarStatementSyntax local)
+    {
+        if (local.Initializer is not null)
+            return false;
+
+        List<string> segments = new();
+
+        if (local.DeclaredType is { } declared)
+            segments.AddRange(declared.Segments);
+
+        segments.Add(local.Name);
+
+        return _tree.Find(TypePath.FromSegments(segments)) is not null;
+    }
+
+    private void Declare(LocalVarStatementSyntax local, Scope scope, LocalKind kind)
+    {
+        LocalRecord record = new(
             local.Name,
             local.DeclaredType is { Segments.Count: > 0 } declared
                 ? TypePath.FromSegments(declared.Segments)
-                : null);
+                : null,
+            local.NameSpan,
+            kind);
+
+        scope.Declare(record);
+
+        // Held flat for the whole proc rather than reported as each scope dies, because a nested
+        // scope's names are still the proc's locals and dm.exe reports them all together.
+        _procLocals.Add(record);
+    }
+
+    /// <summary>Why a name is in scope. Only <see cref="LocalKind.Local"/> can be unused_var.</summary>
+    private enum LocalKind
+    {
+        /// <summary>A proc parameter. dm.exe never warns about an unused one.</summary>
+        Parameter,
+
+        /// <summary>A `var/x` written in a proc body — the only kind this check reports.</summary>
+        Local,
+
+        /// <summary>A `for` loop variable, which dm.exe leaves silent even when the body ignores it.</summary>
+        LoopVariable,
+
+        /// <summary>`catch(var/exception/e)`, exempt for the same reason as a parameter.</summary>
+        Caught,
+
+        /// <summary>
+        /// A `var` block header — `var/obj/small/clothing` heading indented names, or a bare
+        /// `var/mob`. It names the TYPE its children carry rather than declaring a variable, and
+        /// mlaas ships both forms. Kept in scope so nothing about name resolution moves; it is
+        /// simply never reported.
+        /// </summary>
+        BlockHeader,
+
+        /// <summary>
+        /// A `var/static/`, `var/global/` or `var/const/` local — one the compiler does not treat
+        /// as an ordinary slot. Corpus-verified: tgstation's `var/static/mob/jeremy = new()` and
+        /// its `var/const/viewtext` are each read nowhere and dm.exe compiles the project silent.
+        /// </summary>
+        Persistent,
+    }
+
+    /// <summary>
+    /// One name in scope. Carries what unused_var needs and the object identity that lets a read
+    /// found deep in an expression reach the declaration that a nested scope may have shadowed.
+    /// </summary>
+    private sealed class LocalRecord
+    {
+        public LocalRecord(string name, TypePath? declaredType, TextSpan nameSpan, LocalKind kind)
+        {
+            Name = name;
+            DeclaredType = declaredType;
+            NameSpan = nameSpan;
+            Kind = kind;
+        }
+
+        public string Name { get; }
+
+        public TypePath? DeclaredType { get; }
+
+        public TextSpan NameSpan { get; }
+
+        public LocalKind Kind { get; }
+
+        /// <summary>Set by any read of the name. A write alone does not set it — `x = 1` on a
+        /// variable nothing ever reads is exactly what dm.exe warns about.</summary>
+        public bool Read { get; set; }
+    }
 
     /// <summary>Names visible at one point in a proc, with the type each was declared as.</summary>
     private sealed class Scope
     {
-        private readonly Dictionary<string, TypePath?> _names = new();
+        private readonly Dictionary<string, LocalRecord> _names = new();
         private readonly Scope? _parent;
 
         public Scope(TypePath enclosingType) => EnclosingType = enclosingType;
@@ -869,38 +1252,36 @@ public sealed class Binder
         /// <summary>A scope for a loop or a catch handler, whose names do not outlive it.</summary>
         public Scope Nest() => new(this);
 
-        public void Declare(string name, TypePath? declaredType) => _names[name] = declaredType;
+        public void Declare(LocalRecord record) => _names[record.Name] = record;
+
+        /// <summary>
+        /// The nearest declaration of a name, or null when it is not in scope. Nearest matters:
+        /// an inner scope shadows an outer one, and a read has to mark the declaration it can
+        /// actually see.
+        /// </summary>
+        public LocalRecord? Find(string name)
+        {
+            for (Scope? scope = this; scope is not null; scope = scope._parent)
+            {
+                if (scope._names.TryGetValue(name, out LocalRecord? record))
+                    return record;
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// Whether the name is a local or parameter at all, typed or not — the distinction
         /// <see cref="Lookup"/> deliberately erases, and the one the reference index needs: a
         /// local shadows a member whatever its type.
         /// </summary>
-        public bool Contains(string name)
-        {
-            for (Scope? scope = this; scope is not null; scope = scope._parent)
-            {
-                if (scope._names.ContainsKey(name))
-                    return true;
-            }
-
-            return false;
-        }
+        public bool Contains(string name) => Find(name) is not null;
 
         /// <summary>
         /// The declared type of a name, or null when it is untyped, shadowed by an untyped
         /// declaration, or not in scope at all. All three mean "do not check", which is why they
         /// share an answer.
         /// </summary>
-        public TypePath? Lookup(string name)
-        {
-            for (Scope? scope = this; scope is not null; scope = scope._parent)
-            {
-                if (scope._names.TryGetValue(name, out TypePath? declared))
-                    return declared;
-            }
-
-            return null;
-        }
+        public TypePath? Lookup(string name) => Find(name)?.DeclaredType;
     }
 }

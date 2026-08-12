@@ -131,6 +131,12 @@ public static class CompletionService
         if (tokens[index].Kind == TokenKind.Identifier && tokens[index].Span.End >= offset)
             index--;
 
+        // Inside an `icon_state = "…"`, the useful list is the states of the icon THIS TYPE uses,
+        // which nothing else in the editor can tell the author. Checked before the trigger switch
+        // because the caret is inside a string, where every other context is meaningless.
+        if (IconStateCompletion(tree, document, tokens, index, offset) is { } states)
+            return states;
+
         TokenKind trigger = index >= 0 ? tokens[index].Kind : TokenKind.EndOfFile;
 
         switch (trigger)
@@ -253,7 +259,7 @@ public static class CompletionService
     /// The completion list with no documentation attached, for a client that resolves lazily.
     /// </summary>
     /// <remarks>
-    /// Identical to <see cref="CompleteAt(ObjectTree, Document, int, int, IReadOnlyCollection{string}?, Func{string, SourceText?}?, PositionEncoding, CancellationToken)"/>
+    /// Identical to <c>CompleteAt</c>
     /// except that no item carries a doc comment. Pair it with
     /// <see cref="ResolveDocumentation"/> when the user highlights one.
     /// </remarks>
@@ -952,6 +958,111 @@ public static class CompletionService
     }
 
     /// <summary>The type whose members <c>src</c> reaches at this position.</summary>
+    /// <summary>
+    /// The states of the icon the enclosing type uses, when the caret sits inside an
+    /// <c>icon_state = "…"</c> string. Null when that is not where we are.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three things have to line up, and each is checked rather than assumed: the caret is inside a
+    /// STRING, that string is the right-hand side of an assignment to <c>icon_state</c>, and the
+    /// enclosing type resolves an <c>icon</c> var to a resource literal. Any of them missing means
+    /// this is not the context and the ordinary completion runs.
+    /// </para>
+    /// <para>
+    /// The icon is read through <see cref="ObjectTree.IconStates"/>, which a shell supplies —
+    /// <c>Dm.Core</c> cannot read a <c>.dmi</c>. With no reader the context is still REPORTED with
+    /// an empty list, so a client can tell "no states" from "not an icon_state", exactly as the
+    /// bare-`.` ReturnValue context does.
+    /// </para>
+    /// <para>
+    /// The var is looked up through the inheritance chain, so a subtype that sets only
+    /// <c>icon_state</c> still finds the <c>icon</c> its parent declared — which is how DM is
+    /// actually written.
+    /// </para>
+    /// </remarks>
+    private static CompletionResult? IconStateCompletion(
+        ObjectTree tree, Document document, IReadOnlyList<Token> tokens, int index, int offset)
+    {
+        // A string is a RUN of tokens — StringStart, StringText, StringEnd — so the caret inside
+        // one sits after the start or after some text. Walk back to the opening quote.
+        if (index < 0 || tokens[index].Kind is not (TokenKind.StringStart or TokenKind.StringText))
+            return null;
+
+        int start = index;
+
+        while (start >= 0 && tokens[start].Kind == TokenKind.StringText)
+            start--;
+
+        if (start < 0 || tokens[start].Kind != TokenKind.StringStart)
+            return null;
+
+        int assign = start - 1;
+
+        while (assign >= 0 && tokens[assign].Kind is TokenKind.Newline or TokenKind.Comment)
+            assign--;
+
+        if (assign < 0 || tokens[assign].Kind != TokenKind.Assign)
+            return null;
+
+        int name = assign - 1;
+
+        while (name >= 0 && tokens[name].Kind is TokenKind.Newline or TokenKind.Comment)
+            name--;
+
+        if (name < 0
+            || tokens[name].Kind != TokenKind.Identifier
+            || !string.Equals(document.Text.ToString(tokens[name].Span), "icon_state", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (EnclosingType(tree, document, offset) is not { } enclosing)
+            return new CompletionResult(CompletionContext.IconState, Array.Empty<CompletionItem>());
+
+        string? resource = null;
+
+        foreach (TypeSymbol step in tree.InheritanceChain(enclosing))
+        {
+            if (step.FindVar("icon") is { InitialValue.Length: > 0 } icon)
+            {
+                resource = ResourcePath(icon.InitialValue);
+                break;
+            }
+        }
+
+        if (resource is null || tree.IconStates is not { } read)
+            return new CompletionResult(CompletionContext.IconState, Array.Empty<CompletionItem>());
+
+        List<CompletionItem> items = new();
+
+        foreach (string state in read(resource))
+        {
+            // The empty name is the DEFAULT state and is completely ordinary — 226 of 352 real
+            // icons carry one. It completes to the empty string, which is what the author types.
+            items.Add(new CompletionItem(
+                state,
+                CompletionKind.Value,
+                state.Length == 0 ? $"(default state) {resource}" : resource,
+                isBuiltin: false));
+        }
+
+        return new CompletionResult(CompletionContext.IconState, items);
+    }
+
+    /// <summary>
+    /// The path out of a resource literal — <c>'icons/mob.dmi'</c> gives <c>icons/mob.dmi</c>.
+    /// Null for anything that is not one, such as a var assigned from another var.
+    /// </summary>
+    private static string? ResourcePath(string initialValue)
+    {
+        string text = initialValue.Trim();
+
+        return text.Length >= 2 && text[0] == '\'' && text[^1] == '\''
+            ? text[1..^1]
+            : null;
+    }
+
     internal static TypeSymbol? EnclosingType(ObjectTree tree, Document document, int offset)
     {
         TypePath path = TypePath.Root;

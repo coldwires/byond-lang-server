@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.24** · 1,232 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.25** · 1,232 tests ·
 > Last updated: 2026-08-11
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -375,7 +375,7 @@ Not overloadable: `=` `!` `&&` `||` `&&=` `||=` `?` `==` `!=` `.` `:` `?[]`.
 
 ## 5. Repository layout
 
-The target layout. A milestone in brackets marks something that does not exist yet.
+What is on disk. One line is marked as not built; everything else exists.
 
 ```
 byond-lang-server/
@@ -387,45 +387,66 @@ byond-lang-server/
       Text/        SourceText, SourceFileReader, LinePosition, TextSpan
       Syntax/      Lexer, DeclarationParser, ExpressionParser, StatementParser, TokenKind
       Preprocessing/  Preprocessor, MacroTable, MacroExpander, ConditionalEvaluator
-      Includes/    IncludeGraph, IncludeDirective
+      Includes/    IncludeGraph, IncludeDirective, DmeIncludeBlock, FileEffectCache
       Symbols/     ObjectTree, TypeTreeBuilder, TypePath, RelativePath, Builtins,
                    Symbols (TypeSymbol / ProcSymbol / VarSymbol)
-      Binding/     TypeInference
-      Services/    ClassificationService, CompletionService, DocumentSymbolService,
-                   DefinitionService, HoverService, WorkspaceSymbolService,
-                   TreeQueryService, SemanticContext, DocComments,
-                   DiagnosticService [M11]
+      Binding/     Binder, TypeInference
+      Services/    Classification, Completion, DocumentSymbol, Definition, Hover,
+                   WorkspaceSymbol, TreeQuery, SignatureHelp, Reference, InlayHint,
+                   Folding, DocumentLink, Color, SemanticContext, DocComments
       Resources/   builtins.txt   (BYOND stdlib type tree)
     Dm.Assets/     DmiReader (PNG zTXt -> icon states)
     Dm.Native/     Exports.cs, HandleTable.cs, marshal helpers -> dm_core.dll
-    Dm.Lsp/        JSON-RPC server over Dm.Core                              [M10]
+    Dm.Lsp/        JSON-RPC server over Dm.Core
     Dm.Cli/        dev driver: scan / dump-tokens / classify / includes / preprocess /
                    outline / symbols / tree / complete / definition / hover / signature /
                    hints / references / colors / icons / wsymbols / query / bench / diagdiff
   abi/
     dm_core.h      hand-written C header, source of truth for the ABI
-    dm_core.hpp    optional C++ RAII wrapper for the Qt client               [M7]
+    dm_core.hpp    optional C++ RAII wrapper for the Qt client        <- NOT BUILT
     schema/        JSON schemas for the bulk query requests and responses
   editors/
-    vscode/        extension + TextMate grammar                              [M10]
+    vscode/        extension + TextMate grammar
   tools/
     builtins-gen/  builds builtins.txt from stddef.dm + reference HTML
   tests/
-    Dm.Core.Tests/    unit + snapshot tests
+    Dm.Core.Tests/    unit + snapshot tests, and the fixture discovery
     Dm.Native.Tests/  handle table, marshalling
-    corpus/           real .dme projects used as snapshot fixtures           [M9]
+    Dm.Lsp.Tests/     protocol frames in, frames out
+    fixtures/         the regression net — ok/ errors/ services/ probes/
     abi-smoke/        CMake C++ program that links dm_core
   docs/
     dm-language-notes.md   compiler-verified DM edge cases
-    api.md                 the in-process C# surface                         [M7]
-    lsp.md                 LSP methods and custom dm/* extensions            [M10]
-    capability-matrix.md   in-process vs ABI vs LSP parity                   [M10]
+    lsp.md                 the LSP server, for clients that are not VS Code
+    capability-matrix.md   in-process vs ABI vs LSP parity
     internal/              working notes, gitignored
 ```
 
-There is no `docs/abi.md`: `INTEGRATION.txt` is that document, and `abi/dm_core.h` is the contract
-it describes. The capability matrix is worth writing only once a second shell exists to fall out of
-sync with, so it lands with `Dm.Lsp`.
+**Three planned entries were dropped rather than built, and saying which is the point of this
+section.** `docs/abi.md` is `INTEGRATION.txt`, with `abi/dm_core.h` as the contract it describes.
+`docs/api.md` stays dropped on a measurement rather than on the duplication argument first given
+here, which was the wrong test: `Dm.Core` exposes **155 public types and 884 public members against
+12 internal**, so `public` is a default rather than a decision and "the in-process surface" is not
+yet a documentable object — prose over it would drift on the first commit. What is genuinely owed
+there is structural and is in `state.md`: decide the supported surface, ship the XML doc file (746
+comments exist and reach no assembly consumer today), and fix the ~16 broken crefs that turns up.
+`tests/corpus/` never appeared because the corpus is games on
+disk that this repo cannot vendor, and what fills that role is `tests/fixtures` plus the corpus list
+in `ROADMAP.txt`. And there is no `DiagnosticService`: the semantic set comes from `Binder.Bind` and
+the syntax set from `ParseResult.Diagnostics`, joined at the boundary by `dm_diagnostics`.
+
+**`docs/lsp.md` was in that list until 2026-08-12 on the same reasoning, and the reasoning was
+wrong** — which is worth keeping, because the test it failed is the one the rule actually asks.
+Duplication was never the question; *where a fact lives* was. The capability matrix is a parity
+grid, and the things an integrator cannot start without — `initializationOptions.environmentFile`
+and `.defines`, which decide every answer the server gives — were stated **once**, in
+`editors/vscode/README.md`, a file addressed to users of one client. So a Neovim or Helix
+integrator had nowhere to find them. That is the shape §4b already had: it claimed the line-ending
+guidance was in `INTEGRATION.txt` while `ROADMAP.txt` held the only copy. `lsp.md` is the protocol
+and the wiring; it points at `INTEGRATION.txt` §4 for what an answer means, since both shells call
+the same services.
+
+`abi/dm_core.hpp` is the one entry still genuinely owed.
 
 ---
 
@@ -1231,7 +1252,7 @@ because nothing else in a DM toolchain reports them. The parser has to model the
 |---|---|---|
 | `proc` block indented inside a `var` block (§8) | accepts it, declares nothing; calling it is a runtime error | **shipped as `DM0300`** — the parser declares nothing there and warns instead |
 | A var name colliding with a builtin (`x`/`y` on an atom) | duplicate-definition **error** | already fatal; surface it early |
-| `proc/` declared twice on one type | duplicate-definition error | **shipped as `DM0403`** — on one type, on an ancestor at any depth, and against a builtin (probes dup1–dup9). dm.exe reports a pair, "duplicate definition" on the later line and "previous definition" on the first; each file reports its own half, so a same-file pair matches line for line and a cross-file first declaration's "previous" line is the one documented miss. Overrides and var/proc name sharing stay clean. The var half (dup4/dup5 probed: also a pair, lines inverted) is not yet modelled — `VarSymbol` keeps one site. |
+| `proc/` declared twice on one type | duplicate-definition error | **shipped as `DM0403`** — on one type, on an ancestor at any depth, and against a builtin (probes dup1–dup9). dm.exe reports a pair, "duplicate definition" on the later line and "previous definition" on the first; each file reports its own half, so a same-file pair matches line for line and a cross-file first declaration's "previous" line is the one documented miss. Overrides and var/proc name sharing stay clean. The var half SHIPPED 2026-08-12: the pair is inverted (first line called the duplicate), a BARE OVERRIDE is not a declaration, and the sites live on `TypeSymbol` because a `VarSymbol` is cached in a `TreeContribution` and replayed. Fixture `errors/dup_var`. |
 | A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
 | `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | *"`x` is untyped, so `.` cannot compile here — write `var/obj/item/x`"*. This is the warning half of the M6 completion trade, and the fix is a quick-edit rather than prose. |
 
@@ -1303,8 +1324,26 @@ by warning name across both projects, all 16 missed lines are:
 |---|---|---|---|
 | `lentext is being phased out; replace with length` | 8 | 1 | **A name check.** Using `lentext` at all warns. No tree, no evaluator, no walk |
 | `..() has no parent proc to call` | 3 | 1 | **Small.** `ProcSymbol` already keeps override chains; this is `..()` in a proc with nothing above it |
-| `variable defined but not used` (`unused_var`) | 2 | 0 | **The expensive one**, needing the reachability walk |
-| `#warning <the author's own text>` | 1 | 0 | **Trivial.** `#warn` bodies already parse as free text (§8); the compiler simply echoes them |
+| `variable defined but not used` (`unused_var`) | 2 | 0 | **SHIPPED 2026-08-12** on attempt four. Not the reachability walk after all — six expression holes, five of which also hid uses from the reference index |
+| `#warning <the author's own text>` | 1 | 0 | **SHIPPED 2026-08-12**, and not trivial: it needed per-file attribution for walk-time diagnostics, plus `#warning` as a second directive spelling |
+
+**`unused_label` is a fifth default-on warning name, found 2026-08-12 and SHIPPED the same day.**
+Found by accident — a tier-2 fixture written to exercise the label-body binding compiled with one
+warning. It appears in none of the four corpus projects, so **the missed column could never have
+surfaced it**: with every project at zero the corpus has stopped being a source of work, and this
+is the first check found by writing DM rather than by measuring a game.
+
+The rule, pinned one case per proc: a label warns unless something **names** it. `break used`,
+`continue looped` and `goto target` are each a use; a **bare `break` inside a labelled block is
+not**, which is the case an implementation is most likely to get wrong since the break sits right
+there. A label before a loop that nothing names warns like any other. Fixture
+`errors/unused_label`, id 3005 in the pragma table, zero invented held on all four projects —
+tgstation matters most here, since it writes labelled blocks throughout its macros and breaks to
+them by name.
+
+One thing the probe taught before any code: **labels sit on their own line.** `looped: for(...)` on
+one line is a syntax error — dm.exe answers *"var/i: undefined var"* — and the first draft of the
+probe wrote it that way.
 
 So **13 of 16 are three cheap checks**, and `unused_var` — predicted as the bulk — is 2 of 16 and
 the costliest of the four. The order that fell out of the prior would have started with the hardest
@@ -1316,12 +1355,24 @@ silencing `no_parent` in source expects it silenced here. **madridspy went 2 mis
 complete agreement with `dm.exe`, and **warklan went 14 to 3**. Zero invented held everywhere,
 /tg/station included.
 
-The third, the `#warn` echo, turned out **not** to be trivial after all and is deferred. The
-compiler reports it at the directive's own line, and preprocessor diagnostics are currently
-attributed to `(the .dme, line 0)` — a span alone is ambiguous once the walk spans files, so the
-harness cannot match it. Giving walk-time diagnostics real per-file attribution is worth doing, and
-it improves every preprocessor diagnostic rather than this one line, but it is infrastructure rather
-than a name check. The grouping priced the *count* correctly and said nothing about the plumbing.
+The third, the `#warn` echo, turned out **not** to be trivial and was deferred — the compiler
+reports it at the directive's own line while preprocessor diagnostics were attributed to
+`(the .dme, line 0)`, so the harness could never match it. **Both halves shipped 2026-08-12.**
+`Diagnostic` gained a `File`, and `IncludeGraph` backfills it at the file boundary rather than at
+each of the 21 emission sites — two thirds of those live in `Preprocessing` helpers that receive
+the list and know nothing about the walk, and a nested file finishes before its includer resumes,
+so anything still unattributed belongs to the file being closed.
+
+**`#warning` is a second spelling and we had only `warn`.** Compiler-verified: warklan writes
+`#warning` and dm.exe echoes it rather than rejecting an unknown directive, so that whole family
+fell through as `Unknown` and could not have been reported however the attribution worked. Both
+spellings map now, both are in fixture `errors/warn_echo`, and the echoed message is the directive
+line as written — `#warn ...` and `#warning ...` echo differently.
+
+**With it, warklan reaches complete agreement with `dm.exe`: 15 agreed, 0 missed, 0 invented.**
+That puts **all four corpus projects at zero on both columns** — the first time the scorecard has
+been clean end to end. The grouping priced the *count* correctly and said nothing about the
+plumbing, which is the lesson that survives.
 
 **`ConstantEvaluator` is not a prerequisite here either**, which was also assumed. It gates
 `init_proc`, and `init_proc` ships **off by default** — so it can never appear in a missed column
@@ -1459,6 +1510,13 @@ it: a spurious error that still resolves to the right paths leaves recall untouc
 type and a scope of parameters and locals, and checks members reached through `.` on a receiver
 whose type is **written down**. `DM0400` is an undefined var, `DM0401` an undefined proc.
 
+A **chained** receiver resolves too, one step at a time — `t.weapon.ammo` takes `t`'s declared
+type, then `weapon`'s declared type on it — and a member with no declared type ends the chain
+rather than being guessed at. That case was absent until 2026-08-12, so a chained receiver resolved
+to nothing and the walk returned before it could either check the member or record the use, which
+is why `t.weapon.ammo` was missing from find-references while completion, definition and hover all
+answered at that exact position.
+
 **It deliberately does not use `TypeInference`.** Inference exists so completion can serve a
 half-written declaration and knowingly goes further than the compiler; diagnostics are the opposite
 job. Checking an inferred type would report errors on code that compiles.
@@ -1483,8 +1541,44 @@ With both closed, the interim guard — report only a name declared nowhere, or 
 was removed and re-measured at zero invented on both projects. It had been suppressing real errors:
 a typo that happens to name a member of an unrelated type is still a typo.
 
-**Attempt three, 2026-08-11: two of the three causes are now diagnosed and fixed, and it is still
-not shippable.** The rule itself was pinned first, one case per proc against 516.1686, and it is
+**SHIPPED 2026-08-12, on attempt four, at zero invented on all four projects.** The account below
+is kept because the diagnosis is the useful part and the first three attempts each blamed the wrong
+thing. What actually held it up was **not** a missed statement shape: `BindStatement` handles all
+sixteen statement kinds and always did. The walk had no notion of a local being READ. `BindIdentifier`
+returns early when `_sink is null` — which is every diagnostics run — and again, with a sink
+attached, exactly when `scope.Contains(name)`, since the reference index deliberately excludes
+locals. So a bare-name read of a local was invisible to the binder, and any check hanging off it
+saw a proc's locals as never read. `Scope` also stored only name → type: no span, no read flag, no
+way to tell a parameter from a local.
+
+Attempt four therefore reads locals through the same walk (`Scope` entries became records carrying
+kind and a read flag, marked ahead of the sink gate), and then **five expression holes came out of
+the corpus, each found by opening a site.** Every one was also silently missing from the reference
+index, which is the second reason they were worth fixing:
+
+| hole | site | invented |
+|---|---|---|
+| `for(var/i in 1 to X step Y)` — `RangeEnd` and `Step` bound by nothing | `for(var/i in 1 to value / gcf)` | 119 → 27 |
+| a label's BODY — `set_adj_in_dir: { ... }`, the construct worth 754 diagnostics at M11 | `icon_smoothing.dm`'s `\`-continued macros | 27 → 17 |
+| `var/static`, `var/global`, `var/const` locals are exempt | `var/static/mob/jeremy = new()`, read nowhere, dm.exe silent | 17 → 8 |
+| an assignment whose VALUE IS CONSUMED is a read, while a bare `x = 1` statement is not | `return screentip_change = TRUE` | 8 → 6 |
+| an argument's `Name` (assoc key) and `Weight` bound by nothing | `list((toxin_to_get) = 5)` | 6 → 4 |
+| bracket dimensions **discarded by the parser**, so the read was not in the AST at all | `var/list/tier_list[max_tier]` | 4 → **0** |
+
+The last needed a parser change: `LocalVarStatementSyntax` gained `Dimensions`, and the size is
+parsed rather than consumed and thrown away. `ModifiedTypeExpressionSyntax` was unbound too and is
+now bound, though no corpus site required it.
+
+**One failure was the harness, in the class this project keeps meeting.** `pragma/numeric` went red
+while `dmc diagdiff` reported zero on the same file: `FixtureTests.Analyse` builds its own tree and
+never carried `SuppressedWarnings` across, so it measured the project with every `#pragma ignore`
+stripped. The product was right and the instrument was wrong.
+
+Result: **warklan 12 agreed / 3 missed → 14 / 1**, the remaining one being the `#warn` echo;
+mlaas, madridspy and /tg/station unmoved at zero invented.
+
+The record of the third attempt, kept for the shape of it: the rule itself was pinned first, one
+case per proc against 516.1686, and it is
 narrower than the name suggests: **proc locals only**. An unread local warns, a write-only local
 warns (a plain `x = 1` writes rather than reads), and a local with no initialiser warns. Silent: any
 read at all — through `!`, in an interpolation hole, as a call argument — a compound `x += 1`, which
@@ -1518,9 +1612,11 @@ compiler's own warning name. Pragma level is sequential state that flows through
 `push`/`pop`, so honouring it belongs with the preprocessor walk, and the cheap approximation
 (project-wide suppression) over-suppresses, which is at least the safe direction.
 
-So the check is backed out for the third time, and this time the remainder is two named pieces of
-work rather than a mystery: find the missed read shapes on /tg/station, and honour `#pragma
-ignore`. The probes, the pinned rule and the fixture are in the tree.
+So the check was backed out for the third time, with the remainder as two named pieces of work
+rather than a mystery: find the missed read shapes on /tg/station, and honour `#pragma ignore`. The
+second shipped on 2026-08-11 and the first is the table above. The standing note to re-apply the
+backed-out diff was wrong on a load-bearing detail — `42451a6` carries `PLAN.md`, `ROADMAP.txt` and
+three fixture files and **no `.cs` at all**, so attempt four was written fresh from the pinned rule.
 
 **The earlier record, for the shape of the first two attempts:**
 
@@ -1731,7 +1827,7 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.24, 38 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.25, 38 exports: version, last error, free, workspace
 open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
 pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
@@ -2277,8 +2373,8 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   `.dm`/`.dme`/`.dmf`/`.dmm` before diffing, or the comparison reports 132 phantom misses. That also
   makes `-l` the obvious oracle for resource resolution later, when `FILE_DIR` handling matters.
 - **CLI driver** — `dmc scan|dump-tokens|classify|includes|preprocess|outline|symbols|tree|complete|
-  definition|hover|signature|hints|references|wsymbols|query|bench|diagdiff`, all taking `-DNAME`
-  where they read a `.dme`.
+  definition|hover|signature|hints|references|colors|icons|wsymbols|query|bench|diagdiff`, all
+  taking `-DNAME` where they read a `.dme`.
   Fastest debug loop, and the arbiter when an IDE reports a bug: if the CLI reproduces it, the bug
   is in the core. **Every position-shaped service needs one**, or `INTEGRATION.txt` §12's promise
   quietly excludes it — the reason `dmc signature` shipped in the same pass as `dm_signature_at`.
@@ -3249,3 +3345,51 @@ it.
   carries the two LSP asymmetries found while checking rather than assuming: `typeFrom` rides
   alongside `inferred` there, so `written` never appears, and the LSP has no field for a completion
   context at all.
+- **2026-08-12** — **`docs/lsp.md`**, the protocol for clients that are not VS Code, plus a
+  doc-drift pass. The gap it closes is narrower than "we had no LSP doc" and is §4b's shape:
+  `initializationOptions.environmentFile` and `.defines` decide every answer the server gives, and
+  they were stated **once**, in `editors/vscode/README.md` — a file addressed to users of one
+  client — so a Neovim or Helix integrator had nowhere to find them. It was itself dropped from §5
+  earlier the same day as a would-be second copy, which was the wrong test: duplication was never
+  the question, *where a fact lives* was.
+  Written from `LspServer.cs` rather than from the capability matrix, which is what turned up the
+  correction. **The matrix said the LSP "negotiates" the position encoding. It does not** — it
+  writes `positionEncoding: utf-16` unconditionally and never reads the client's
+  `general.positionEncodings`. Every conformant 3.17 client supports UTF-16, so it holds in
+  practice and would fail silently, on non-ASCII lines only, for one offering just UTF-8. Recorded
+  for the first time in the same pass: `workspace/didChangeConfiguration` is accepted and
+  **ignored**, so neither option can change without a restart.
+  Registered where a live doc has to be to stay true — `docs/internal/README.md`'s routing table,
+  `ROADMAP.txt`'s detail table, `INTEGRATION.txt` §13 and the VS Code README — because it is the
+  one client-facing surface with no smoke test behind it. The Neovim and Helix snippets say plainly
+  that nobody has run them.
+  The same pass fixed drift a triage turned up. **`tgstation` was missing from
+  `CORPUS-BASELINE.txt`** while three docs said all four projects were baselined — and it is the
+  one absence that matters, since it is the only project that has ever held a failure mode the
+  others missed, most recently `unused_var` inventing 119 while the other three were clean.
+  Recorded by running it (0/0/0), with the `-DCBT` hazard written into the file's own header
+  because the key holds no defines. And §5's layout had inverted completely: every milestone
+  bracket marked something that now exists, while `tests/fixtures` had no line at all.
+- **2026-08-12** — **`unused_var` ships on attempt four**, at zero invented on all four projects,
+  and the diagnosis is worth more than the check. Three attempts blamed a missed statement shape;
+  `BindStatement` handles all sixteen kinds and always did. **The walk had no notion of a local
+  being read** — `BindIdentifier` returns early when the sink is null, which is every diagnostics
+  run, and again exactly when the name IS a local, since the reference index excludes them. So the
+  reads were never observable, and `Scope` held no span, no read flag and no kind.
+  Six expression holes then came out of /tg/station, each found by opening a site rather than
+  theorising, and **five had been hiding uses from the reference index too**: a `for` header's
+  `RangeEnd`/`Step`, a label's body (`set_adj_in_dir: { ... }`, the construct worth 754 diagnostics
+  at M11), an argument's assoc `Name` and `Weight`, `ModifiedTypeExpressionSyntax`, and — the last
+  one — bracket dimensions, which **the parser consumed and discarded**, so `var/list/tier_list[max_tier]`
+  had no AST node to bind. `LocalVarStatementSyntax` gained `Dimensions`. Two exemptions were read
+  off the corpus rather than guessed: `static`/`global`/`const` locals, and an assignment whose
+  value is consumed (`return x = TRUE` is a use; a bare `x = 1` statement is not).
+  119 invented → 27 → 17 → 8 → 6 → 4 → **0**. warklan 12 agreed / 3 missed → **14 / 1**, the last
+  being the `#warn` echo.
+  **One red was the harness, the seventh of that class here**: `pragma/numeric` failed while
+  `dmc diagdiff` reported zero on the same file, because `FixtureTests.Analyse` builds its own tree
+  and never carried `SuppressedWarnings` across — it was measuring the project with every
+  `#pragma ignore` stripped.
+  A correction for the next session: `state.md` said to re-apply the backed-out check from
+  `42451a6`. That commit holds docs and fixtures and **no `.cs`**; the implementation never
+  existed in git, and attempt four was written from the pinned rule instead.

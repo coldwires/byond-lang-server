@@ -33,6 +33,95 @@ public class CompletionServiceTests
 
     private static string[] Names(CompletionResult result) => result.Items.Select(i => i.Name).ToArray();
 
+    /// <summary>
+    /// As above, with a stub icon reader so the states are known without a <c>.dmi</c> on disk.
+    /// </summary>
+    private static CompletionResult CompleteWithIcons(
+        string sourceWithCaret, params string[] states)
+    {
+        int caret = sourceWithCaret.IndexOf('|');
+        string source = sourceWithCaret.Remove(caret, 1);
+
+        Document document = new("test.dm", SourceText.From(source), fromBuffer: true);
+
+        ObjectTree tree = new();
+        TypeTreeBuilder.AddFile(tree, "test.dm", document.Parse);
+        tree.IconStates = _ => states;
+
+        LinePosition position = document.Text.GetLinePosition(caret);
+        return CompletionService.CompleteAt(tree, document, position.Line, position.Character);
+    }
+
+    // -- icon_state --------------------------------------------------------
+
+    /// <summary>
+    /// Inside an <c>icon_state = "…"</c>, the list is the states of the icon that type uses.
+    /// </summary>
+    [Fact]
+    public void Icon_state_offers_the_states_of_the_types_own_icon()
+    {
+        CompletionResult result = CompleteWithIcons(
+            "/mob/guy\n\ticon = 'guy.dmi'\n\ticon_state = \"|\"\n", "walk", "run");
+
+        Assert.Equal(CompletionContext.IconState, result.Context);
+        Assert.Equal(new[] { "walk", "run" }, Names(result));
+    }
+
+    /// <summary>
+    /// A subtype that sets only <c>icon_state</c> still finds the icon its parent declared, which
+    /// is how DM is actually written — the icon is set once and the states vary per subtype.
+    /// </summary>
+    [Fact]
+    public void Icon_state_resolves_the_icon_through_the_inheritance_chain()
+    {
+        CompletionResult result = CompleteWithIcons(
+            "/mob/guy\n\ticon = 'guy.dmi'\n/mob/guy/child\n\ticon_state = \"|\"\n", "idle");
+
+        Assert.Equal(CompletionContext.IconState, result.Context);
+        Assert.Equal(new[] { "idle" }, Names(result));
+    }
+
+    /// <summary>
+    /// The empty name is the DEFAULT state and is offered rather than hidden — 226 of 352 real
+    /// icons carry one, and it completes to the empty string the author would type.
+    /// </summary>
+    [Fact]
+    public void Icon_state_offers_the_default_state()
+    {
+        CompletionResult result = CompleteWithIcons(
+            "/mob/guy\n\ticon = 'guy.dmi'\n\ticon_state = \"|\"\n", "", "walk");
+
+        Assert.Equal(new[] { "", "walk" }, Names(result));
+        Assert.Contains("default state", result.Items[0].Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A string that is not an <c>icon_state</c> is not this context, so ordinary completion runs.
+    /// The control without which every string would look like a match.
+    /// </summary>
+    [Fact]
+    public void A_string_that_is_not_an_icon_state_is_not_the_icon_context()
+    {
+        CompletionResult result = CompleteWithIcons(
+            "/mob/guy\n\ticon = 'guy.dmi'\n\tname = \"|\"\n", "walk");
+
+        Assert.NotEqual(CompletionContext.IconState, result.Context);
+    }
+
+    /// <summary>
+    /// With no reader supplied the CONTEXT is still reported, so a client can tell "no icon
+    /// resolved" from "not an icon_state at all". Same reasoning as the bare-`.` ReturnValue case.
+    /// </summary>
+    [Fact]
+    public void Icon_state_reports_its_context_even_with_no_reader()
+    {
+        CompletionResult result = Complete(
+            "/mob/guy\n\ticon = 'guy.dmi'\n\ticon_state = \"|\"\n");
+
+        Assert.Equal(CompletionContext.IconState, result.Context);
+        Assert.Empty(result.Items);
+    }
+
     // -- the acceptance target ---------------------------------------------
 
     /// <summary>

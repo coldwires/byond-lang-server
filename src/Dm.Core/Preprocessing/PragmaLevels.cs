@@ -51,17 +51,55 @@ public enum PragmaLevel
 public sealed class PragmaLevels
 {
     /// <summary>
-    /// The ids we can act on, which is every warning we actually emit.
+    /// Every numeric warning id the compiler has, mapped to its <c>#pragma</c> name.
     /// </summary>
     /// <remarks>
-    /// From the compiler's own warning table (PLAN §8a). Deliberately not the whole 30: an id for a
-    /// warning we never raise would suppress nothing, and listing it would imply we honour it.
+    /// <para>
+    /// The compiler's own warning table, read out of <c>byondcore.dll</c>'s <c>.rdata</c> — PLAN
+    /// §8a. 30 live ids; 2007, 3003 and 4002 are retired gaps and are absent here for that reason
+    /// rather than by oversight.
+    /// </para>
+    /// <para>
+    /// This is a TRANSLATION table, not a list of what we honour — whether a warning is honoured is
+    /// decided by whether we ever raise it. It carried only the four we emit until 2026-08-12, on
+    /// the reasoning that listing more would imply more; the flaw in that showed up the day
+    /// <c>unused_label</c> shipped, when its id had to be added in the same commit or a project
+    /// already silencing 3005 by number would have started seeing it. A complete table removes a
+    /// step somebody has to remember, and an id for a warning we never raise suppresses nothing.
+    /// </para>
     /// </remarks>
     private static readonly Dictionary<string, string> IdsToNames = new(StringComparer.Ordinal)
     {
+        ["1001"] = "bad_cache_file",
+        ["2001"] = "value_changed",
+        ["2002"] = "empty_expression",
+        ["2003"] = "filter_rightmost",
+        ["2004"] = "anything_no_list",
+        ["2005"] = "accidental_assign",
+        ["2006"] = "list_without_filter",
+        ["2008"] = "empty_else",
+        ["3001"] = "list_double_init",
+        ["3002"] = "override_before_def",
+        ["3004"] = "unknown_var",
+        ["3005"] = "unused_label",
         ["3006"] = "unused_var",
+        ["3007"] = "no_effect",
+        ["3008"] = "set_at_top",
+        ["3009"] = "call_by_ref",
+        ["3010"] = "empty_switch",
+        ["3011"] = "var_before_def",
+        ["3012"] = "loop_checks",
         ["3013"] = "no_parent",
+        ["3014"] = "empty_parent",
+        ["3015"] = "requires_version",
+        ["4001"] = "old_new_syntax",
+        ["4003"] = "redundant_waitfor",
+        ["4004"] = "map_format",
         ["4005"] = "new_name",
+        ["4006"] = "call_ext",
+        ["5001"] = "init_proc",
+        ["5002"] = "frequent_call",
+        ["6001"] = "lint_type_mismatch",
     };
 
     private readonly Dictionary<string, Dictionary<string, PragmaLevel>> _entryLevels =

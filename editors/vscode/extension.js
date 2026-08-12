@@ -246,6 +246,79 @@ function activate(context) {
     // returns an EDIT rather than writing the .dme, so this applies as a WorkspaceEdit and is safe
     // against a .dme the user has open with unsaved changes.
     context.subscriptions.push(
+        // The icon browser. dm/iconStates has been served since M8 and nothing asked for it, which
+        // is the same shape as dm/objectTree sitting unused for two milestones while a tree panel
+        // was the headline "missing" feature. A row is not parity until something calls it.
+        vscode.commands.registerCommand("dm.browseIconStates", async () => {
+            let uri = vscode.window.activeTextEditor?.document?.uri;
+
+            if (!uri || !uri.fsPath.toLowerCase().endsWith(".dmi")) {
+                const picked = await vscode.window.showOpenDialog({
+                    canSelectMany: false,
+                    openLabel: "Browse states",
+                    filters: { "DreamMaker icons": ["dmi"] },
+                });
+
+                if (!picked || picked.length === 0) {
+                    return;
+                }
+
+                uri = picked[0];
+            }
+
+            const answer = await client.sendRequest("dm/iconStates", { uri: uri.toString() });
+
+            // "isDmi": false is an ANSWER, not a failure - zero-byte .dmi files ship in real games,
+            // and so do plain PNGs saved under the extension. Say which, rather than showing an
+            // empty list that reads as a broken command.
+            if (!answer || answer.isDmi !== true) {
+                vscode.window.showWarningMessage(
+                    `${uri.fsPath} is not a DreamMaker icon. Zero-byte .dmi files and plain PNGs ` +
+                        "saved under that extension both look like this.",
+                );
+                return;
+            }
+
+            const states = answer.states || [];
+
+            if (states.length === 0) {
+                vscode.window.showInformationMessage("That icon declares no states.");
+                return;
+            }
+
+            const size =
+                answer.width && answer.height ? `${answer.width}x${answer.height}` : "size unstated";
+
+            // A NAME IS NOT A KEY: one name can appear twice, once with movement set, and DM picks
+            // between them at runtime. Keying a map by name would silently drop half of those, so
+            // the list stays an array and the movement ones are labelled.
+            const items = states.map((state) => ({
+                label: state.name === "" ? "(default)" : state.name,
+                description: [
+                    `${state.dirs} dir${state.dirs === 1 ? "" : "s"}`,
+                    `${state.frames} frame${state.frames === 1 ? "" : "s"}`,
+                    state.movement ? "movement" : null,
+                    state.rewind ? "rewind" : null,
+                ]
+                    .filter(Boolean)
+                    .join(", "),
+            }));
+
+            const chosen = await vscode.window.showQuickPick(items, {
+                title: `${states.length} state(s), ${size}`,
+                placeHolder: "Pick a state to copy its name",
+                matchOnDescription: true,
+            });
+
+            if (chosen) {
+                // The empty name is the default state and is completely ordinary. Copying the
+                // literal empty string is what a caller actually wants to paste.
+                const name = chosen.label === "(default)" ? "" : chosen.label;
+                await vscode.env.clipboard.writeText(name);
+                vscode.window.showInformationMessage(`Copied icon_state "${name}"`);
+            }
+        }),
+
         vscode.commands.registerCommand("dm.toggleFileInEnvironment", async () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor || editor.document.languageId !== "dm") {

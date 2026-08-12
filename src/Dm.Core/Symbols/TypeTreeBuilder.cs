@@ -185,6 +185,7 @@ public static class TypeTreeBuilder
                 new DeclarationSite(file, variable.Span, variable.NameSpan))
             {
                 InitialValue = initialValue,
+                IsDeclaration = variable.InVarContext,
             },
             parentType,
             relativeParentType);

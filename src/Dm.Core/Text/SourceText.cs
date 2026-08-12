@@ -173,7 +173,7 @@ public sealed class SourceText
     /// </summary>
     /// <remarks>
     /// Used when handing spans to a client that indexes its buffer in bytes. Unlike
-    /// <see cref="GetLinePosition"/> this does not clamp to a line end — a file offset inside a
+    /// <see cref="GetLinePosition(int)"/> this does not clamp to a line end — a file offset inside a
     /// terminator is meaningful.
     ///
     /// Per-line byte offsets are computed once on first use, so a conversion costs a scan of one

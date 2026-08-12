@@ -340,6 +340,13 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  *                     access. The list is EMPTY; show nothing. Added in 0.14, and
  *                     it exists so you do not have to guess what a user who just
  *                     typed `.` on a fresh line meant.
+ *   "IconState"       inside an `icon_state = "..."` string - the states of the
+ *                     .dmi that type actually uses, found by resolving `icon`
+ *                     through the inheritance chain, so a subtype that sets only
+ *                     icon_state still gets its parent's icon. Items carry the
+ *                     kind "value" and the icon's path as their detail. The
+ *                     EMPTY name is the default state and is completely
+ *                     ordinary; it completes to an empty string. Added in 0.25
  *   "None"            nothing useful here
  *
  * Treat an unknown context word as "Identifier" and show the list as given - more
@@ -997,6 +1004,9 @@ typedef int32_t dm_completion_kind;
 #define DM_COMPLETION_LOCAL     5
 #define DM_COMPLETION_MACRO     6
 #define DM_COMPLETION_KEYWORD   7
+
+/* A literal value rather than a symbol - an icon state name. Added in 0.25. */
+#define DM_COMPLETION_VALUE     8
 
 /*
  * Values are a permanent contract and are never reused. Handle an unknown kind by

@@ -22,7 +22,7 @@ work list.
 | Ancestor chain in one call | `ObjectTree.InheritanceChain` | `dm_query_json` `ancestorsOf` (0.14) | `dm/ancestorsOf` |
 | Disk-change invalidation | `Workspace.Invalidate` | `dm_invalidate` (0.14) | `didChangeWatchedFiles` — ⬜ not yet wired; clients can send didChange |
 | Readiness + warm-at-open | `Workspace.IsTreeBuilt`, `GetObjectTree` | `dm_tree_ready`, `dm_build_tree` (0.15) | `$/progress` announces the build (push, the LSP idiom for the same fact) |
-| Inlay hints (inferred local types) | `InlayHintService` | `dm_inlay_hints` (0.16) | `textDocument/inlayHint` |
+| Inlay hints (inferred local types, parameter names) | `InlayHintService` | `dm_inlay_hints` (0.16) | `textDocument/inlayHint`, with LSP's own kind numbering |
 | Lazy completion documentation | `CompleteBriefAt` + `ResolveDocumentation` | `dm_complete_brief`, `dm_complete_resolve` (0.17) | `resolveProvider` + `completionItem/resolve` |
 | Completion ranking + opt-in cap | `CompletionResult.Truncated`, scope-distance order | `dm_set_completion_limit` (0.18), `truncated` | `isIncomplete` + `sortText` |
 | Per-item declared type + initial value | `CompletionItem.DeclaredType`, `.InitialValue` | `dm_complete_at` `type` / `value` (0.21) | `completion`, nonstandard `type` / `value` |
@@ -39,16 +39,24 @@ work list.
 | Workspace-symbol kind filters | `WorkspaceSymbolService` (`var/`, `proc/`, `verb/`, `#`) | `dm_workspace_symbols` (0.8) — filters ride in the query string | `workspace/symbol` |
 | Object-tree panel | `TreeQueryService` | `dm_query_json` (0.11) | `dm/objectTree` + the client's Explorer view |
 | Colour swatches (`rgb()`, `"#rrggbb"`) | `ColorService` | `dm_document_colors` (0.23) | `documentColor` + `colorPresentation`, components as 0-1 floats |
-| `.dmi` icon states | `Dm.Assets.DmiReader` | `dm_icon_states` (0.24) | `dm/iconStates` — served, and **no client asks yet**: the VS Code extension has no icon browser |
+| `.dmi` icon states | `Dm.Assets.DmiReader` | `dm_icon_states` (0.24) | `dm/iconStates` + the client's **DM: Browse Icon States** command |
+| `icon_state` completion | `CompletionService`, context `IconState` | `dm_complete_at` `context: "IconState"` (0.25) | `completion` — the items, but no context word: LSP has no field for it |
 
-**No gaps remain on any surface** — M8 closed the last blank row on 2026-08-08. What the `.dmi`
-row records instead is a different kind of gap and the one this project has been caught by before:
-the server answers `dm/iconStates` and the VS Code client never asks, exactly as it never asked for
-`dm/objectTree` for two milestones. A row is not parity until something calls it.
+**No gaps remain on any surface** — M8 closed the last blank row on 2026-08-08, and the `.dmi` row
+gained a caller on 2026-08-12. That row had been recording a second kind of gap, and the one this
+project has been caught by before: the server answered `dm/iconStates` and the VS Code client never
+asked, exactly as it never asked for `dm/objectTree` for two milestones. **A row is not parity until
+something calls it**, and that sentence is why this column is worth keeping honest rather than
+ticking.
 
 Before that, the three editor-shaped rows — type-definition, folding, document links — were briefly
 blank on the reasoning that no in-process consumer had asked; the user asked, and they went in at
 0.19 alongside `dm_file_in_project`.
 
-Positions: the ABI and CLI speak both encodings by parameter; LSP negotiates and uses UTF-16.
+Positions: the ABI and CLI speak both encodings by parameter; the LSP **declares** `utf-16` and
+does not negotiate — it never reads the client's `general.positionEncodings`. Every conformant 3.17
+client supports UTF-16 so this holds in practice, and a client offering only UTF-8 would be
+mis-served silently on non-ASCII lines. Corrected here 2026-08-12; this line read "negotiates".
 CLI lines/columns are 1-based, ABI and LSP 0-based.
+
+`docs/lsp.md` is the client-facing form of this table's third column.

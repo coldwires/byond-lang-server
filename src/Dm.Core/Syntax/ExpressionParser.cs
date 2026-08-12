@@ -856,8 +856,14 @@ public sealed class ExpressionParser
             // Thirteen statement keywords are legal segments — tgstation declares a type named
             // `throw` — so a path reader cannot stop at the keyword table. SyntaxFacts has the
             // probe results.
-            if (!IsNameLike(Current) && !SyntaxFacts.IsPathSegmentKeyword(Current))
+            // `!` is a legal type-name segment — warklan's /obj/! quest marker — and lexes as the
+            // Not operator, so it counts only AFTER a separator. A leading `!` stays unary.
+            if (!IsNameLike(Current)
+                && !SyntaxFacts.IsPathSegmentKeyword(Current)
+                && !(Current == TokenKind.Not && segments.Count > 0))
+            {
                 break;
+            }
 
             segments.Add(TextOf(_position));
             segmentSpans.Add(CurrentSpan);

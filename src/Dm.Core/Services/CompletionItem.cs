@@ -25,6 +25,12 @@ public enum CompletionKind
 
     /// <summary>A keyword.</summary>
     Keyword = 7,
+
+    /// <summary>
+    /// A literal value rather than a symbol — an icon state name, which is text the author types
+    /// inside a string and not anything the object tree declares.
+    /// </summary>
+    Value = 8,
 }
 
 /// <summary>Why a completion list contains what it does, which is worth surfacing while debugging.</summary>
@@ -38,6 +44,12 @@ public enum CompletionContext
 
     /// <summary>After <c>.</c> on a value — members of the declared type only.</summary>
     Member = 2,
+
+    /// <summary>
+    /// Inside the string of an <c>icon_state = "…"</c>, where the list is the states of the icon
+    /// the enclosing type actually uses.
+    /// </summary>
+    IconState = 7,
 
     /// <summary>
     /// After <c>:</c> — members of the declared type <b>and its subtypes</b>.
@@ -58,7 +70,7 @@ public enum CompletionContext
     /// A closed vocabulary rather than anything from the tree, so the list is exact. It is NOT the
     /// type system: <c>as datum</c>, <c>as list</c> and <c>as client</c> are all rejected by the
     /// compiler while <c>as movable</c> and <c>as atom</c> are accepted, which no rule about types
-    /// predicts. See <see cref="SyntaxFacts.InputTypes"/>.
+    /// predicts. See <c>SyntaxFacts.InputTypes</c>, which is internal and so cannot be linked here.
     /// </remarks>
     InputType = 6,
 

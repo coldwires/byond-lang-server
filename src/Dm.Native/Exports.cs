@@ -54,6 +54,7 @@ internal static unsafe class Exports
                 return Fail(DmStatus.InvalidArgument, "dme_path is null or empty");
 
             Workspace workspace = Workspace.Open(path);
+            workspace.IconStateReader = DmiReader.StateNames;
             *outWorkspace = HandleTable.Alloc(workspace);
             return Ok();
         }
@@ -273,7 +274,9 @@ internal static unsafe class Exports
             if (string.IsNullOrWhiteSpace(root))
                 return Fail(DmStatus.InvalidArgument, "root directory is null or empty");
 
-            *outWorkspace = HandleTable.Alloc(Workspace.OpenStandalone(root));
+            Workspace standalone = Workspace.OpenStandalone(root);
+            standalone.IconStateReader = DmiReader.StateNames;
+            *outWorkspace = HandleTable.Alloc(standalone);
             return Ok();
         }
         catch (Exception ex)

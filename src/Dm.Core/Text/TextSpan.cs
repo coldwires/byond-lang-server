@@ -8,7 +8,7 @@ namespace Dm.Core.Text;
 /// <remarks>
 /// Offsets are UTF-16 because that is the native indexing of a .NET string and of the
 /// <see cref="SourceText"/> content. Conversion to UTF-8 byte columns happens only at the
-/// boundary, in <see cref="SourceText.GetLinePosition"/>.
+/// boundary, in <see cref="SourceText.GetLinePosition(int)"/>.
 /// </remarks>
 public readonly struct TextSpan : IEquatable<TextSpan>
 {

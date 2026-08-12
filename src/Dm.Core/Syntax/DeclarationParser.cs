@@ -657,13 +657,14 @@ public sealed class DeclarationParser
         List<string> segments = new();
         List<TextSpan> spans = new();
 
-        while (IsNameLike(Current))
+        while (IsNameLike(Current) || IsBangSegment(Current, segments.Count))
         {
             segments.Add(TextOf(_position));
             spans.Add(CurrentSpan);
             _position++;
 
-            if ((Current == TokenKind.Slash || Current == TokenKind.Dot) && IsNameLike(Peek()))
+            if ((Current == TokenKind.Slash || Current == TokenKind.Dot)
+                && (IsNameLike(Peek()) || IsBangSegment(Peek(), segments.Count)))
             {
                 _position++;
                 continue;
@@ -1041,6 +1042,22 @@ public sealed class DeclarationParser
     /// </summary>
     private static bool IsNameLike(TokenKind kind)
         => kind == TokenKind.Identifier || (kind >= TokenKind.KeywordVar && kind <= TokenKind.KeywordGlobal);
+
+    /// <summary>
+    /// <c>!</c> as a type-name segment, which is legal DM and lexes as the <c>Not</c> operator.
+    /// </summary>
+    /// <remarks>
+    /// Only ever AFTER a separator, never as the first segment, so a leading <c>!</c> stays the
+    /// unary operator it is everywhere else. `obj/!` is what warklan declares — a quest marker
+    /// named after the `!.dmi` that floats over an NPC's head — and dm.exe accepts it in the
+    /// slash form while rejecting the indented one with "empty type name".
+    ///
+    /// Dropping the segment did not merely lose the type: it hung that declaration's `icon`,
+    /// `layer` and `pixel_y` on the BUILTIN <c>/obj</c>, so the tree claimed every object in the
+    /// game carried those overrides. Open since M5.
+    /// </remarks>
+    private static bool IsBangSegment(TokenKind kind, int segmentsSoFar)
+        => kind == TokenKind.Not && segmentsSoFar > 0;
 
     /// <summary>
     /// Tokens that can form part of an overloaded operator's name. Stops at <c>(</c>, which begins

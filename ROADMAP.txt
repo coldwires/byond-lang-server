@@ -16,7 +16,7 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.23 MB, ABI 0.24, 38 exports, cdecl on every platform
+    dm_core.dll     2.23 MB, ABI 0.25, 38 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
     tests           1,232 green (1,171 core, 44 native, 17 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
@@ -78,35 +78,45 @@ WHAT'S NEXT
        and the non-RGB colour spaces are deliberately out - see PLAN 8.
     b. DONE 2026-08-08: M8, the .dmi icon states, at ABI 0.24.
     c. dm.exe's DEFAULT-ON WARNINGS - the missed column, below. The grouping
-       is DONE and TWO OF THE FOUR SHIPPED (2026-08-11). The prior was wrong:
+       is DONE and THREE OF THE FOUR SHIPPED. The prior was wrong:
        unused_var is 2 of 16, not the bulk.
          DONE  new_name (4005)  lentext deprecation, 9 lines
          DONE  no_parent (3013) ..() with nothing above it, 4 lines
-         next  unused_var       ATTEMPT THREE, backed out again 2026-08-11 -
-                                but two of three causes are now FIXED and the
-                                rule is pinned (fixture errors/unused_var).
-                                Loop variables and var block headers are
-                                exempt; the "never diagnosed" cause was the
-                                loop variable, misattributed to if(!passed).
-                                mlaas/madridspy/warklan all clean; TGSTATION
-                                INVENTS 119 on locals that ARE read later, so
-                                a statement shape the walk does not descend
-                                into is dropping reads. Also needs #pragma
-                                ignore honoured - pragma/numeric goes red the
-                                moment the check emits, exactly as PLAN 8a
-                                predicted - THAT HALF IS NOW DONE (below), so
-                                attempt four is the missed reads alone.
+         DONE  unused_var       ATTEMPT FOUR, 2026-08-12, ZERO INVENTED on all
+                                four projects. The three previous attempts
+                                blamed a missed STATEMENT shape and that was
+                                never it - BindStatement handles all sixteen
+                                kinds. The walk had NO NOTION OF A LOCAL BEING
+                                READ: BindIdentifier returns early when the
+                                sink is null (every diagnostics run) and again
+                                exactly when the name IS a local, since the
+                                reference index excludes them.
+                                Six EXPRESSION holes then fell out of tgstation
+                                one site at a time, and FIVE were hiding uses
+                                from the reference index too: a for header's
+                                RangeEnd/Step, a label's BODY, an argument's
+                                assoc key and weight, modified-type entries,
+                                and bracket dimensions - which the PARSER threw
+                                away, so the read was not in the AST at all.
+                                119 -> 27 -> 17 -> 8 -> 6 -> 4 -> 0.
+                                warklan 12 agreed/3 missed -> 14/1.
          DONE  #pragma ignore   honoured positionally 2026-08-11: ignore/warn/
                                 error by name AND by numeric id, push/pop
                                 scoped, flowing through include order. A
                                 project silencing a warning in source now
                                 silences it here.
-         defer #warn echo       1 line, and NOT trivial after all: the
-                                compiler reports it at the directive's line
-                                while our preprocessor diagnostics land at
-                                (.dme, line 0). Needs per-file attribution
-                                for walk-time diagnostics, which is worth
-                                doing for every preprocessor diagnostic.
+         DONE  #warn echo       2026-08-12, and NOT trivial: it needed
+                                per-file attribution for walk-time
+                                diagnostics, since every preprocessor
+                                diagnostic landed at (.dme, line 0) and could
+                                never match. Diagnostic gained a File and
+                                IncludeGraph backfills it at the file
+                                boundary. `#warning` turned out to be a
+                                SECOND SPELLING we never mapped, so that whole
+                                family fell through as Unknown.
+                                WARKLAN NOW MATCHES dm.exe EXACTLY, which
+                                puts ALL FOUR projects at 0 missed and
+                                0 invented.
        madridspy is now at COMPLETE agreement with dm.exe; warklan 14 -> 3.
        ConstantEvaluator does NOT gate any of this: it gates init_proc, which
        is off by default and so can never be in a missed column.
@@ -418,6 +428,9 @@ WHERE THE DETAIL LIVES
 
     how to CALL any of it, ownership, encodings,
       troubleshooting by symptom, what an edit costs  INTEGRATION.txt
+    the LSP: launch, initializationOptions, the
+      dm/* methods, what is NOT served, Neovim and
+      Helix config                                    docs/lsp.md
     runnable proofs of 18 DM edge cases               docs/dm-language-notes.md
     the fixture suite: compile + RUN + diagdiff       tests/fixtures/README.md
       - and what to do when BYOND updates             tests/fixtures/README.md
@@ -433,8 +446,6 @@ WHERE THE DETAIL LIVES
 OPEN QUESTIONS
 --------------------------------------------------------------------------------
   - What language is the third IDE in?
-  - Should Dm.Lsp be AOT compiled for startup speed, or keep the reflection-
-    based LSP library? Decide at M10, when the shell is built.
   - What are SpacemanDMM's terms, if we ever borrow from it?
 
   Everything else is answered - full table with evidence in PLAN.md 10.

@@ -70,6 +70,16 @@ public sealed class VarSymbol
     /// </remarks>
     public string InitialValue { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Whether a <c>var/</c> introduced this, rather than a bare override.
+    /// </summary>
+    /// <remarks>
+    /// The discriminator for the duplicate-definition check. <c>/obj/item/hp = 3</c> re-assigns an
+    /// inherited var and is ordinary DM; <c>var/hp</c> on a type whose ancestor declares one is a
+    /// compile error. Treating them alike would fire on most of a real game.
+    /// </remarks>
+    public bool IsDeclaration { get; init; }
+
     public bool IsConst => Modifiers.Contains("const");
 
     public override string ToString() => DeclaredType is { } type ? $"{type}/{Name}" : Name;
@@ -151,6 +161,9 @@ public sealed class ProcSymbol
 public sealed class TypeSymbol
 {
     private readonly Dictionary<string, VarSymbol> _vars = new(System.StringComparer.Ordinal);
+
+    private readonly Dictionary<string, List<DeclarationSite>> _varDeclarationSites =
+        new(System.StringComparer.Ordinal);
     private readonly Dictionary<string, ProcSymbol> _procs = new(System.StringComparer.Ordinal);
     private readonly List<TypeSymbol> _children = new();
     private readonly List<DeclarationSite> _sites = new();
@@ -215,10 +228,38 @@ public sealed class TypeSymbol
 
     internal VarSymbol AddVar(VarSymbol variable)
     {
+        // Which sites DECLARED the name, for the duplicate-definition check. A bare override
+        // (`hp = 3`, no `var/`) is not one — dm.exe accepts those and warning on them would fire
+        // on most of a real game.
+        //
+        // Held HERE rather than on the VarSymbol, and that is the whole design constraint: a
+        // VarSymbol instance is cached in a TreeContribution and replayed across rebuilds, so
+        // accumulating into it would grow the list every time the tree was rebuilt. A TypeSymbol
+        // is fresh per tree, so this is not.
+        if (variable.IsDeclaration)
+        {
+            if (!_varDeclarationSites.TryGetValue(variable.Name, out List<DeclarationSite>? sites))
+            {
+                sites = new List<DeclarationSite>();
+                _varDeclarationSites[variable.Name] = sites;
+            }
+
+            sites.Add(variable.Site);
+        }
+
         // A later declaration of the same name on the same type wins, matching include order.
         _vars[variable.Name] = variable;
         return variable;
     }
+
+    /// <summary>
+    /// The sites that DECLARED a var on this type, in include order. Empty for a name reached only
+    /// by bare override, and for a builtin.
+    /// </summary>
+    public IReadOnlyList<DeclarationSite> VarDeclaringSites(string name)
+        => _varDeclarationSites.TryGetValue(name, out List<DeclarationSite>? sites)
+            ? sites
+            : System.Array.Empty<DeclarationSite>();
 
     internal ProcSymbol GetOrAddProc(string name, bool isVerb)
     {

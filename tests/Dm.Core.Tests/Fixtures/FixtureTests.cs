@@ -199,6 +199,13 @@ public class FixtureTests
         ObjectTree tree = new();
         Builtins.Seed(tree);
 
+        // The pragma levels ride on the tree rather than through Binder.Bind's signature, so a
+        // harness that builds its own tree has to carry them across or it measures a project with
+        // every `#pragma ignore` stripped. Without this, `pragma/numeric` reports the very warning
+        // it exists to prove is suppressed — while `dmc diagdiff`, which does wire it, reports
+        // zero on the same file.
+        tree.SuppressedWarnings = preprocessed.Graph.Warnings;
+
         foreach ((string file, TokenSource source) in PreprocessedSplitter.Split(preprocessed))
         {
             ParseResult parse = DeclarationParser.Parse(source);

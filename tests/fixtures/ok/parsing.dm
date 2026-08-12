@@ -278,6 +278,14 @@
 /datum/parsing/throw
 	var/marker = "thrown"
 
+// `!` is a legal type-name segment in the SLASH form. warklan ships /obj/! as a
+// quest marker named after the `!.dmi` that floats over an NPC's head; dm.exe
+// rejects the indented form with "empty type name", so this spelling is the only
+// testable one. We dropped the segment until 2026-08-12, and dropping it did not
+// merely lose the type — it hung the declaration's members on the BUILTIN parent.
+/datum/parsing/!
+	var/marker = "bang"
+
 /proc/run_parsing()
 	var/datum/parsing/P = new
 
@@ -323,3 +331,7 @@
 	CHECK("locate-in as an initializer", P.locate_in_initializer(), 1)
 	CHECK("in list(...) is a restriction, not a test", P.in_list_restriction(), 2)
 	CHECK("if-condition ternary then in", P.ternary_in_condition(1), "skipped")
+
+	var/datum/parsing/!/B = new
+	CHECK("! as a type segment", B.marker, "bang")
+	CHECK("! type via istype", istype(B, /datum/parsing/!), 1)

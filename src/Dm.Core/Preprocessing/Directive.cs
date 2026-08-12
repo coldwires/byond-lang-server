@@ -139,7 +139,10 @@ public static class DirectiveScanner
         "else" => DirectiveKind.Else,
         "endif" => DirectiveKind.Endif,
         "include" => DirectiveKind.Include,
-        "warn" => DirectiveKind.Warn,
+        // Both spellings, compiler-verified: warklan writes `#warning` and dm.exe echoes it as a
+        // warning rather than rejecting an unknown directive. Only `warn` was mapped until
+        // 2026-08-12, so `#warning` fell through as Unknown and its echo could never be reported.
+        "warn" or "warning" => DirectiveKind.Warn,
         "error" => DirectiveKind.Error,
         "pragma" => DirectiveKind.Pragma,
         _ => DirectiveKind.Unknown,

@@ -412,6 +412,7 @@ internal sealed class LspServer
         if (dme is not null)
         {
             _workspace = Workspace.Open(dme);
+            _workspace.IconStateReader = DmiReader.StateNames;
 
             if (DefinesOf(params_) is { Count: > 0 } defines)
                 _workspace.SetDefines(defines);
@@ -423,6 +424,7 @@ internal sealed class LspServer
             // is far better than the nothing this used to return. Cross-file resolution is what
             // is lost, and dm/fileInProject reports every file as outside a project.
             _workspace = Workspace.OpenStandalone(root);
+            _workspace.IconStateReader = DmiReader.StateNames;
 
             Console.Error.WriteLine(
                 $"dm-lsp: no .dme under {root}; analysing each file on its own. "
@@ -1243,7 +1245,9 @@ internal sealed class LspServer
             json.WriteNumber("character", hint.Position.Character);
             json.WriteEndObject();
             json.WriteString("label", hint.Label);
-            json.WriteNumber("kind", 1); // LSP InlayHintKind.Type
+            // LSP numbers these Type=1, Parameter=2; ours start at 0, so the two tables cannot be
+            // shared and hardcoding one was fine only while there was a single kind.
+            json.WriteNumber("kind", hint.Kind == InlayHintKind.Parameter ? 2 : 1);
             json.WriteEndObject();
         }
 

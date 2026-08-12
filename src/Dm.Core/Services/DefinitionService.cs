@@ -177,7 +177,7 @@ public static class DefinitionService
     /// <c>textDocument/typeDefinition</c>.
     /// </summary>
     /// <remarks>
-    /// One hop past <see cref="DefinitionAt"/>: on <c>var/mob/test/M</c> ordinary definition goes
+    /// One hop past <c>DefinitionAt</c>: on <c>var/mob/test/M</c> ordinary definition goes
     /// to the variable, this goes to <c>/mob/test</c>. Only a <b>written</b> type is followed, not
     /// an inferred one — inference exists so completion can serve a half-written declaration and
     /// knowingly goes further than <c>dm.exe</c>, and sending a caret to a type the compiler does

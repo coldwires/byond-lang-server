@@ -291,6 +291,27 @@ public sealed class IncludeGraph
 
         public List<Diagnostic> Diagnostics { get; } = new();
 
+        /// <summary>
+        /// Attribute every diagnostic this file raised, at the point the file is finished with.
+        /// </summary>
+        /// <remarks>
+        /// Done here rather than at each <c>Diagnostics.Add</c> because two thirds of the emission
+        /// sites are in <c>Preprocessing</c> helpers that receive the list and know nothing about
+        /// the walk. Backfilling at the boundary catches all of them, and cannot be forgotten by a
+        /// new site the way a per-call stamp can.
+        ///
+        /// A nested file finishes before its includer resumes and stamps its own on the way out, so
+        /// anything still unattributed when this runs belongs to <paramref name="path"/>.
+        /// </remarks>
+        private void AttributeTo(string path, int from)
+        {
+            for (int i = from; i < Diagnostics.Count; i++)
+            {
+                if (Diagnostics[i].File is null)
+                    Diagnostics[i] = Diagnostics[i].In(path);
+            }
+        }
+
         /// <summary>Macro state, carried across the whole traversal in include order.</summary>
         public MacroTable Macros { get; } = new();
 
@@ -445,6 +466,20 @@ public sealed class IncludeGraph
         /// <summary>Walks one file's tokens and directives, recording its effect if a cache wants it.</summary>
         private void WalkFile(string path, int depth, bool fromLibrary, SourceText text)
         {
+            int from = Diagnostics.Count;
+
+            try
+            {
+                WalkFileCore(path, depth, fromLibrary, text);
+            }
+            finally
+            {
+                AttributeTo(path, from);
+            }
+        }
+
+        private void WalkFileCore(string path, int depth, bool fromLibrary, SourceText text)
+        {
             LexResult lex = _options.LexProvider?.Invoke(path, text) ?? Lexer.Lex(text);
             IReadOnlyList<Directive> directives = DirectiveScanner.Scan(lex);
             ConditionalStack conditionals = new();
@@ -551,6 +586,16 @@ public sealed class IncludeGraph
                     case DirectiveKind.Endif:
                         if (!conditionals.Endif())
                             Unmatched(directive);
+                        break;
+
+                    // The compiler echoes the author's own text back as a warning, at the
+                    // directive's own line: `Turfs.dm:45:warning: #warning its creating this five
+                    // times...`. No warning NAME, so no `#pragma` handle and a private id is the
+                    // right one. Reporting it at all needed per-file attribution first, which is
+                    // why it sat in the missed column while three cheaper checks shipped past it.
+                    case DirectiveKind.Warn when conditionals.IsActive:
+                        Diagnostics.Add(Diagnostic.Warning(
+                            "DM0204", directive.Span, text.ToString(directive.Span).Trim()));
                         break;
 
                     case DirectiveKind.Define when conditionals.IsActive:
