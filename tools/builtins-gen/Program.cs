@@ -66,15 +66,17 @@ internal static class Program
         int fromReference = ScrapeReference(html, entries);
         int parents = ScrapeParentTypes(html, entries) + AddVerifiedParentTypes(entries);
         int verifiedMembers = AddVerifiedMembers(entries);
-        int fromStddef = stddefPath is not null && File.Exists(stddefPath)
-            ? ReadStddef(stddefPath, entries)
-            : 0;
+        bool haveStddef = stddefPath is not null && File.Exists(stddefPath);
 
-        Write(outputPath, version, entries);
+        int fromStddef = haveStddef ? ReadStddef(stddefPath!, entries) : 0;
+        List<string> macros = haveStddef ? ReadStddefMacros(stddefPath!) : new List<string>();
+
+        Write(outputPath, version, entries, macros);
 
         Console.Out.WriteLine($"builtins for BYOND {version}");
         Console.Out.WriteLine(
             $"  {fromReference} from the reference ({parents} parent links), {verifiedMembers} verified members, {fromStddef} from stddef.dm");
+        Console.Out.WriteLine($"  {macros.Count} #define constants from stddef.dm");
         Console.Out.WriteLine($"  {entries.Count} entries -> {outputPath}");
 
         if (stddefPath is null)
@@ -133,6 +135,18 @@ internal static class Program
 
             // The trailing `var`/`proc` with nothing after it is a section heading, not a member.
             if (keyword == segments.Length - 1)
+                continue;
+
+            // A LEADING keyword is the reference's own sectioning, not an owner — with exactly one
+            // exception, and the counts are what separate them. `/proc/<name>` is a global proc and
+            // there are 204 of those. Everything else that starts with a keyword is a heading:
+            // `/proc/var/args` and `/proc/var/src` are proc-SCOPE VARS, `/proc/set/waitfor` and
+            // `/verb/set/category` are `set` settings, `/verb/arguments/expanding` is an argument
+            // rule, and `/var/const` is a declaration modifier. Read as owners they became 36
+            // global procs and vars named `args`, `src`, `usr`, `caller`, `callee`, `category`,
+            // `waitfor`, `const`, `final` and so on — none of which is a proc, and several of which
+            // are not global either. They were in bare-identifier completion until 2026-08-11.
+            if (keyword == 0 && !(segments[0] == "proc" && segments.Length == 2))
                 continue;
 
             string owner = keyword == 0 ? "/" : "/" + string.Join('/', segments[..keyword]);
@@ -549,6 +563,56 @@ internal static class Program
         return added;
     }
 
+    /// <summary>
+    /// The <c>#define</c> constants <c>stddef.dm</c> declares, in file order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>NORTH</c>, <c>SECONDS</c>, <c>ICON_ADD</c>, <c>ASSERT</c> and 195 more. The compiler
+    /// includes <c>stddef.dm</c> implicitly, so these are defined for every project ever compiled —
+    /// but <see cref="ReadStddef"/> runs the DECLARATION parser, which reads declarations and never
+    /// a directive, so not one of them reached <c>builtins.txt</c> until 2026-08-11. The symptom was
+    /// silent: the binder only checks members through a written receiver and never a bare
+    /// identifier, so nothing reported a missing constant and bare-name completion simply offered no
+    /// BYOND constant at all.
+    /// </para>
+    /// <para>
+    /// They are macros, not tree entries, so they go out as their own line kind and are seeded into
+    /// the <c>MacroTable</c> rather than into the object tree. Emitted as the text following
+    /// <c>#define</c> so the reader can hand them to the same parser a real directive goes through —
+    /// which is what makes the four function-like ones (<c>ASSERT</c> and friends) work for free.
+    /// </para>
+    /// </remarks>
+    private static List<string> ReadStddefMacros(string path)
+    {
+        List<string> macros = new();
+
+        foreach (string raw in File.ReadAllLines(path))
+        {
+            string line = raw.Trim();
+
+            if (!line.StartsWith("#define", StringComparison.Ordinal))
+                continue;
+
+            string body = line["#define".Length..].Trim();
+
+            if (body.Length == 0)
+                continue;
+
+            // A trailing `\` would mean the body continues on the next line. stddef.dm has none
+            // today, and joining them silently would be worse than saying so.
+            if (body.EndsWith('\\'))
+            {
+                Console.Error.WriteLine($"warning: skipping continued #define: {body}");
+                continue;
+            }
+
+            macros.Add(body);
+        }
+
+        return macros;
+    }
+
     private static bool Add(SortedDictionary<string, Entry> entries, Entry entry)
     {
         string key = $"{entry.Kind}{entry.Owner} {entry.Name}";
@@ -582,12 +646,24 @@ internal static class Program
     /// source generators for a fixed, read-only schema. This format needs a dozen lines to read, and
     /// it diffs cleanly when a BYOND release moves something.
     /// </remarks>
-    private static void Write(string path, string version, SortedDictionary<string, Entry> entries)
+    private static void Write(
+        string path, string version, SortedDictionary<string, Entry> entries, List<string> macros)
     {
         StringBuilder output = new();
         output.Append("# BYOND builtins, generated by tools/builtins-gen. Do not edit by hand.\n");
-        output.Append("# T <path> | V <owner> <name> [type] | P <owner> <name> [params]\n");
+        output.Append("# T <path>                     a type\n");
+        output.Append("# X <type> <parent>            an inheritance link a path cannot give\n");
+        output.Append("# V <owner> <name> [type]      a var; the type is optional and rare\n");
+        output.Append("# P <owner> <name> [params]    a proc\n");
+        output.Append("# M <name> [body]              a stddef.dm #define, seeded as a macro\n");
+        output.Append("# A trailing # on V or P - `V#` - marks an entry the DM Reference documents,\n");
+        output.Append("# which is what a hover link is derived from.\n");
         output.Append($"version {version}\n");
+
+        // Macros first, and in FILE order rather than sorted: they are preprocessor state, and one
+        // stddef define referring to another has to come after it.
+        foreach (string macro in macros)
+            output.Append("M ").Append(macro).Append('\n');
 
         foreach (Entry entry in entries.Values)
         {

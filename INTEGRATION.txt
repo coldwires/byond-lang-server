@@ -6,7 +6,7 @@
  bug in the doc - say so.
 
  ABI version at last update: 0.24  (38 exports, cdecl, six RIDs)
- Last updated: 2026-08-08
+ Last updated: 2026-08-11
 ================================================================================
 
 
@@ -89,9 +89,11 @@ WHAT YOU GET TODAY
       write it.
 
     - Semantic error squiggles via dm_diagnostics: undefined vars and procs
-      through a typed receiver, duplicate definitions, and the DM03xx
-      compiles-clean-but-lies warnings - the same set the LSP publishes and
-      dmc diagdiff holds at ZERO INVENTED against dm.exe on 1.5M lines.
+      through a typed receiver, duplicate definitions, the DM03xx
+      compiles-clean-but-lies warnings, and two of dm.exe's own default-on
+      warnings carrying its names - new_name and no_parent. The same set the
+      LSP publishes and dmc diagdiff holds at ZERO INVENTED against dm.exe on
+      1.5M lines. `#pragma ignore` is obeyed; see section 4.
     - The editor-shaped surfaces: dm_type_definition_at (where a var's
       WRITTEN type is declared), dm_folding_ranges (from the AST, since
       DM's two block syntaxes nest freely and indentation-based folding
@@ -453,6 +455,27 @@ WHAT YOU GET TODAY
       id, severity (a WORD - "error", "warning"), message, and a zero-based
       range in your encoding. An empty array with DM_OK is the ordinary
       answer on a clean file.
+
+      ** WE OBEY #pragma ignore **
+      Some of what we report carries dm.exe's OWN warning name rather than a
+      DM0xxx id - "new_name", "no_parent" - and those are the names
+      `#pragma warn|ignore|error` takes. A project that writes
+
+          #pragma ignore no_parent
+
+      has told the compiler not to say it, and we treat that as having been
+      told too. Numeric ids work as well as names (`#pragma ignore 3013`),
+      `#pragma push`/`pop` scope it to a region, and the level flows through
+      INCLUDE ORDER - so an ignore in the first file a .dme includes silences
+      the rest of the project, and swapping two #include lines changes the
+      answer. All of that is the compiler's behaviour, verified against it.
+
+      The consequence for you: a diagnostic disappearing after an edit to some
+      other file may be a pragma rather than a bug. `dmc diagdiff` shows the
+      same set we do.
+
+      Our own DM0xxx ids have no pragma name and are never suppressed this
+      way - they are the things dm.exe has no name for.
 
       ** COST ** The semantic half needs the object tree, so the first call
       after an edit rebuilds it - same as dm_complete_at. Debounce it.

@@ -18,6 +18,17 @@ namespace Dm.Core.Symbols;
 /// </remarks>
 public sealed class ObjectTree
 {
+    /// <summary>
+    /// Which warnings <c>#pragma ignore</c> silenced in this project, and where.
+    /// </summary>
+    /// <remarks>
+    /// Carried here rather than passed to <see cref="Binding.Binder"/> because every caller of the
+    /// binder already holds the tree the same walk produced, so this reaches all four of them —
+    /// the ABI, the LSP, the CLI and the reference index — without a signature change apiece.
+    /// Null on a tree built without a walk, such as a unit test's, where nothing is suppressed.
+    /// </remarks>
+    public Preprocessing.PragmaLevels? SuppressedWarnings { get; set; }
+
     private readonly Dictionary<TypePath, TypeSymbol> _types = new();
 
     public ObjectTree()
