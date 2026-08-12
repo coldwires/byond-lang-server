@@ -593,7 +593,7 @@ internal static class Program
         string path = OptionValue(args, "--path") ?? "/";
         bool noBuiltins = Array.IndexOf(args, "--no-builtins") >= 0;
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
         ObjectTree tree = workspace.GetObjectTree();
 
         if (OptionValue(args, "--members") is { } memberPath)
@@ -692,7 +692,7 @@ internal static class Program
         if (OptionValue(args, "--limit") is { } given && int.TryParse(given, out int parsed))
             limit = parsed;
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
 
         IReadOnlyList<WorkspaceSymbol> hits = WorkspaceSymbolService.Search(
             workspace.GetObjectTree(), args[2], limit);
@@ -726,7 +726,7 @@ internal static class Program
             return 1;
         }
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
         Document document = workspace.GetDocument(args[2]);
 
         HoverResult? hover = HoverService.HoverAt(
@@ -764,7 +764,7 @@ internal static class Program
             return 1;
         }
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
 
         int limit = ReferenceService.DefaultLimit;
         if (OptionValue(args, "--limit") is { } given && int.TryParse(given, out int parsed))
@@ -832,7 +832,7 @@ internal static class Program
             return 1;
         }
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
         Document document = workspace.GetDocument(args[2]);
 
         SignatureHelpResult? help = SignatureHelpService.SignatureAt(
@@ -871,7 +871,7 @@ internal static class Program
             return 1;
         }
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
         Document document = workspace.GetDocument(args[2]);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
@@ -1045,7 +1045,7 @@ internal static class Program
             end = toLine;
         }
 
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
         Document document = workspace.GetDocument(args[2]);
 
         // CLI positions are 1-based; the service is 0-based like the ABI.
@@ -1076,7 +1076,7 @@ internal static class Program
 
         // Through the workspace, so this is the same path the ABI takes: the preprocessed tree,
         // the project's macros, and any -D flags.
-        using Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        using Workspace workspace = OpenWorkspace(args);
         Document document = workspace.GetDocument(args[2]);
 
         // `--resolve <name>` is dm_complete_resolve: one item's documentation, nothing else.
@@ -1158,6 +1158,21 @@ internal static class Program
         }
 
         return new IncludeOptions { Defines = defines.Count > 0 ? defines : null };
+    }
+
+    /// <summary>
+    /// Opens the project named by <c>args[1]</c>, with the shell's own icon reader attached.
+    /// </summary>
+    /// <remarks>
+    /// Eight commands opened a workspace with the same line, and every one of them would have had
+    /// to remember the reader — <c>Dm.Core</c> cannot read a <c>.dmi</c>, so the host supplies it.
+    /// One place to forget instead of eight.
+    /// </remarks>
+    private static Workspace OpenWorkspace(string[] args)
+    {
+        Workspace workspace = Workspace.Open(args[1], BuildOptions(args).Defines);
+        workspace.IconStateReader = DmiReader.StateNames;
+        return workspace;
     }
 
     internal static string? OptionValue(string[] args, string name)

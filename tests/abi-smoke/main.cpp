@@ -9,6 +9,12 @@
 
 #include "dm_core.h"
 
+// The optional C++ wrapper, included here so it is COMPILED ON EVERY RID rather than only on
+// whatever machine last touched it. It is meant to be copied verbatim by a client, and the public
+// CI run of 2026-08-07 is the reason that matters: the documented Linux and macOS link recipes had
+// never worked for anyone following them, because nothing built them.
+#include "dm_core.hpp"
+
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -1358,6 +1364,41 @@ static void test_workspace_symbols(const fs::path &dir)
     dm_workspace_close(ws);
 }
 
+/// The C++ wrapper, exercised rather than merely compiled.
+///
+/// Three things worth one check each: that a failed open THROWS instead of returning a status
+/// nobody read, that a workspace closes itself, and that a string crossing the boundary is copied
+/// out and freed without the caller seeing a char*.
+static void test_cpp_wrapper(const fs::path &dme)
+{
+    std::printf("c++ wrapper\n");
+
+    check(dm::abi_compatible(), "wrapper: major version matches the header");
+
+    bool threw = false;
+
+    try
+    {
+        dm::workspace missing = dm::workspace::open((dme.parent_path() / "nope.dme").string());
+        (void)missing;
+    }
+    catch (const dm::error &e)
+    {
+        threw = true;
+        check(e.status() == DM_ERR_NOT_FOUND, "wrapper: a missing .dme throws NOT_FOUND");
+    }
+
+    check(threw, "wrapper: a failed open throws rather than returning");
+
+    {
+        dm::workspace ws = dm::workspace::open(dme.string());
+        check(!ws.root().empty(), "wrapper: root() copies the string out and frees it");
+        check(ws.get() != nullptr, "wrapper: the raw handle is still reachable");
+    }
+
+    std::printf("\n");
+}
+
 int main()
 {
     const fs::path dir = fs::temp_directory_path() / "dm_abi_smoke";
@@ -1371,6 +1412,7 @@ int main()
 
     std::printf("dm_core ABI smoke test\n\n");
 
+    test_cpp_wrapper(dme);
     test_version();
     test_open_missing();
     test_open_null_out();

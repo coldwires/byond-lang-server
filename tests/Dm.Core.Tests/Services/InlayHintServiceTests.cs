@@ -21,6 +21,57 @@ public class InlayHintServiceTests
     }
 
     /// <summary>
+    /// Parameter names at a call site, resolved through the same signature help the popup uses.
+    /// </summary>
+    [Fact]
+    public void A_call_is_hinted_with_its_parameter_names()
+    {
+        IReadOnlyList<InlayHint> hints = Hints(
+            "/mob/test\n" +
+            "\tproc/heal(amount as num, silent = 0)\n" +
+            "\t\treturn amount\n" +
+            "\n" +
+            "/proc/f()\n" +
+            "\tvar/mob/test/t = new\n" +
+            "\tt.heal(10, 1)\n");
+
+        Assert.Equal(
+            new[] { "amount:", "silent:" },
+            hints.Where(h => h.Kind == InlayHintKind.Parameter).Select(h => h.Label).ToArray());
+    }
+
+    /// <summary>
+    /// Two suppressions, both of which would otherwise put noise beside the argument: an argument
+    /// already written as <c>name = value</c> says which parameter it means, and one whose text IS
+    /// the parameter's name would read as <c>amount: amount</c>.
+    /// </summary>
+    [Fact]
+    public void A_hint_that_would_say_nothing_is_suppressed()
+    {
+        IReadOnlyList<InlayHint> hints = Hints(
+            "/mob/test\n" +
+            "\tproc/heal(amount as num, silent = 0)\n" +
+            "\t\treturn amount\n" +
+            "\n" +
+            "/proc/f(amount)\n" +
+            "\tvar/mob/test/t = new\n" +
+            "\tt.heal(amount, silent = 1)\n");
+
+        Assert.DoesNotContain(hints, h => h.Kind == InlayHintKind.Parameter);
+    }
+
+    [Theory]
+    [InlineData("mob/target", "target")]
+    [InlineData("amount as num", "amount")]
+    [InlineData("silent = 0", "silent")]
+    [InlineData("n", "n")]
+    [InlineData("obj/item/I as obj", "I")]
+    public void A_parameter_name_is_read_back_out_of_its_rendering(string rendered, string expected)
+    {
+        Assert.Equal(expected, InlayHintService.ParameterName(rendered));
+    }
+
+    /// <summary>
     /// The DM-specific case the feature exists for: an untyped local whose type only inference
     /// knows. The hint shows what completion already rides on, so the two cannot disagree.
     /// </summary>

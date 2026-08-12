@@ -13,6 +13,10 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 25: dm_complete_at gains the "IconState" context and the "value" item kind — inside an
+    ///     `icon_state = "…"`, the states of the icon that type actually uses. Additive; no export
+    ///     changed, and a client that does not know either word treats them as it already treats an
+    ///     unknown one.
     /// 24: added dm_icon_states — the icon states in a .dmi, which is M8.
     /// 23: added dm_document_colors — the colours written in a file, with the text to write back.
     /// 22: completion items carry "typeFrom" - which route produced the receiver's type, so a
@@ -43,7 +47,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 24;
+    public const int Minor = 25;
 
     public static int Packed => (Major << 16) | Minor;
 }

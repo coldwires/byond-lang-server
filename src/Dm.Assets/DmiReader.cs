@@ -123,6 +123,31 @@ public static class DmiReader
 {
     private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
 
+    /// <summary>
+    /// State names for a file, or empty when it is not an icon. The shape
+    /// <see cref="Dm.Core.Workspace.IconStateReader"/> wants.
+    /// </summary>
+    /// <remarks>
+    /// One adapter here rather than the same three lines in each shell — <c>Dm.Core</c> cannot
+    /// reference this assembly, so every host has to supply the reader itself, and three copies of
+    /// a conversion is how they drift.
+    ///
+    /// Duplicate names are KEPT. A name can appear twice, once with <c>movement</c> set, and
+    /// deduplicating would quietly drop the still or moving variant of 34 icons in 352.
+    /// </remarks>
+    public static IReadOnlyList<string> StateNames(string path)
+    {
+        if (!TryRead(path, out DmiIcon icon))
+            return Array.Empty<string>();
+
+        List<string> names = new(icon.States.Count);
+
+        foreach (DmiState state in icon.States)
+            names.Add(state.Name);
+
+        return names;
+    }
+
     /// <summary>Reads a file from disk. False when it is not a DM icon.</summary>
     public static bool TryRead(string path, out DmiIcon icon)
     {

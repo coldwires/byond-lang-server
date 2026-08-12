@@ -20,3 +20,23 @@
 
 /proc/still_clean()
 	return 3
+
+// 3005 is unused_label, and 3013 is no_parent. Two more ids from the compiler's
+// own table, silenced by NUMBER - so this file proves the mapping rather than
+// asserting it. The whole 30-id table is mapped now; before 2026-08-12 only the
+// four warnings we emit were, which meant the id had to be remembered at the
+// moment a new check shipped.
+#pragma ignore 3005
+
+/proc/has_an_unused_label()
+	var/r = 0
+	silenced: {
+		r = 1
+	}
+	return r
+
+#pragma ignore 3013
+
+/proc/has_no_parent_proc()
+	..()
+	return 4

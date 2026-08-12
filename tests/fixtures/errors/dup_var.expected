@@ -1,0 +1,5 @@
+15 error twice: duplicate definition
+16 error twice: previous definition
+20 error inherited: previous definition
+22 error inherited: duplicate definition
+32 error name: duplicate definition (conflicts with built-in variable)

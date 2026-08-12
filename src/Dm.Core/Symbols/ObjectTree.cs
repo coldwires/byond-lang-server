@@ -29,6 +29,21 @@ public sealed class ObjectTree
     /// </remarks>
     public Preprocessing.PragmaLevels? SuppressedWarnings { get; set; }
 
+    /// <summary>
+    /// Reads the state names out of a <c>.dmi</c>, given the resource path as the source writes it
+    /// — <c>icons/mob.dmi</c>. Null when nothing supplied one, which is the ordinary case.
+    /// </summary>
+    /// <remarks>
+    /// Injected rather than called directly because <c>Dm.Core</c> does not reference
+    /// <c>Dm.Assets</c>: the reader lives in whichever shell is hosting, and <see cref="Workspace"/>
+    /// is what turns a relative resource path into an absolute one, since it owns the root.
+    ///
+    /// It rides here for the same reason the pragma levels do — every caller already holds the tree
+    /// the walk produced, so one property reaches the ABI, the LSP and the CLI without four
+    /// signature changes and four chances to forget one.
+    /// </remarks>
+    public System.Func<string, System.Collections.Generic.IReadOnlyList<string>>? IconStates { get; set; }
+
     private readonly Dictionary<TypePath, TypeSymbol> _types = new();
 
     public ObjectTree()

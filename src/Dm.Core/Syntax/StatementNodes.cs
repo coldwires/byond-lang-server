@@ -38,7 +38,8 @@ public sealed class LocalVarStatementSyntax : StatementSyntax
         IReadOnlyList<string> modifiers,
         ExpressionSyntax? initializer,
         IReadOnlyList<LocalVarStatementSyntax> siblings,
-        TextSpan span)
+        TextSpan span,
+        IReadOnlyList<ExpressionSyntax>? dimensions = null)
         : base(span)
     {
         Name = name;
@@ -47,6 +48,7 @@ public sealed class LocalVarStatementSyntax : StatementSyntax
         Modifiers = modifiers;
         Initializer = initializer;
         Siblings = siblings;
+        Dimensions = dimensions ?? System.Array.Empty<ExpressionSyntax>();
     }
 
     public string Name { get; }
@@ -62,6 +64,15 @@ public sealed class LocalVarStatementSyntax : StatementSyntax
 
     /// <summary>Further names from the same <c>var/</c>, as in <c>var/a = 1, b = 2</c>.</summary>
     public IReadOnlyList<LocalVarStatementSyntax> Siblings { get; }
+
+    /// <summary>
+    /// The sizes of a bracket declaration — <c>var/M[10]</c>, <c>var/grid[10][5]</c>. Empty for
+    /// <c>var/L[]</c>, which states no size, and for a declaration with no brackets at all.
+    /// These are ordinary expressions and routinely read variables
+    /// (<c>var/list/tier_list[max_tier]</c>); the parser consumed and discarded them until
+    /// 2026-08-12, which hid those reads from the binder and the reference index alike.
+    /// </summary>
+    public IReadOnlyList<ExpressionSyntax> Dimensions { get; }
 }
 
 public sealed class IfStatementSyntax : StatementSyntax

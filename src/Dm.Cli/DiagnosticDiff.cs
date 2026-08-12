@@ -10,6 +10,7 @@ using Dm.Core.Includes;
 using Dm.Core.Symbols;
 using Dm.Core.Preprocessing;
 using Dm.Core.Syntax;
+using Dm.Core.Text;
 
 namespace Dm.Cli;
 
@@ -351,8 +352,14 @@ internal static class DiagnosticDiff
             if (!Comparable(diagnostic))
                 continue;
 
+            // A walk-time diagnostic now says which file it came from, so it can be compared at the
+            // line dm.exe reports it on instead of collapsing onto the .dme at line 0 — which made
+            // every one of them a guaranteed miss.
+            string file = diagnostic.File ?? preprocessed.Graph.DmePath;
+            int line = diagnostic.File is null ? 0 : LineOf(diagnostic.File, diagnostic.Span.Start);
+
             found.Add((
-                new Entry(Relative(root, preprocessed.Graph.DmePath), 0, Severity(diagnostic)),
+                new Entry(Relative(root, file), line, Severity(diagnostic)),
                 $"{diagnostic.Id} {diagnostic.Message}"));
         }
 
@@ -410,6 +417,35 @@ internal static class DiagnosticDiff
 
     private static string Severity(Diagnostic diagnostic)
         => diagnostic.Severity == DiagnosticSeverity.Error ? "error" : "warning";
+
+    /// <summary>
+    /// The 1-based line an offset falls on, for a walk-time diagnostic that names its own file.
+    /// </summary>
+    /// <remarks>
+    /// Read through <see cref="SourceFileReader"/> rather than <c>File.ReadAllText</c>, since real
+    /// projects contain Windows-1252 files and a mis-decoded byte moves every later offset. Cached
+    /// because a project can raise many diagnostics in one file.
+    /// </remarks>
+    private static readonly Dictionary<string, SourceText> LineSources = new(StringComparer.OrdinalIgnoreCase);
+
+    private static int LineOf(string file, int offset)
+    {
+        if (!LineSources.TryGetValue(file, out SourceText? text))
+        {
+            try
+            {
+                text = SourceFileReader.Read(file);
+            }
+            catch (IOException)
+            {
+                return 0;
+            }
+
+            LineSources[file] = text;
+        }
+
+        return text.GetLinePosition(offset).Line + 1;
+    }
 
     private static string Relative(string root, string path)
     {

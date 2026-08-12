@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.24  (38 exports, cdecl, six RIDs)
+ ABI version at last update: 0.25  (38 exports, cdecl, six RIDs)
  Last updated: 2026-08-11
 ================================================================================
 
@@ -90,8 +90,8 @@ WHAT YOU GET TODAY
 
     - Semantic error squiggles via dm_diagnostics: undefined vars and procs
       through a typed receiver, duplicate definitions, the DM03xx
-      compiles-clean-but-lies warnings, and two of dm.exe's own default-on
-      warnings carrying its names - new_name and no_parent. The same set the
+      compiles-clean-but-lies warnings, and three of dm.exe's own default-on
+      warnings carrying its names - new_name, no_parent and unused_var. The same set the
       LSP publishes and dmc diagdiff holds at ZERO INVENTED against dm.exe on
       1.5M lines. `#pragma ignore` is obeyed; see section 4.
     - The editor-shaped surfaces: dm_type_definition_at (where a var's
@@ -458,7 +458,7 @@ WHAT YOU GET TODAY
 
       ** WE OBEY #pragma ignore **
       Some of what we report carries dm.exe's OWN warning name rather than a
-      DM0xxx id - "new_name", "no_parent" - and those are the names
+      DM0xxx id - "new_name", "no_parent", "unused_var" - and those are the names
       `#pragma warn|ignore|error` takes. A project that writes
 
           #pragma ignore no_parent
@@ -546,6 +546,18 @@ WHAT YOU GET TODAY
                         `as movable` and `as atom` are accepted, which no rule
                         about types predicts. Items are marked builtin and
                         carry the detail "input filter"
+        IconState       inside an `icon_state = "..."` string - the states of
+                        the .dmi THAT TYPE ACTUALLY USES. Found by resolving
+                        `icon` through the inheritance chain, so a subtype that
+                        sets only icon_state still offers its parent's icon,
+                        which is how DM is written. Items carry kind "value"
+                        and the icon's path as their detail.
+                        The EMPTY name is the default state and is completely
+                        ordinary - 226 of 352 real icons have one - so it
+                        completes to an empty string rather than being hidden.
+                        An empty list with this context means we could not
+                        resolve an icon, which is different from there being
+                        no states.
         ReturnValue     a bare leading `.` - DM's return-value variable,
                         not member access. The list is empty; show nothing.
                         This is the context that saves you guessing what a
@@ -1439,7 +1451,9 @@ WHAT YOU GET TODAY
          document links, $/cancelRequest, $/progress and the
          dm/objectTree family (same shapes as dm_query_json) over stdio;
          editors/vscode/README.md is the five-minute recipe for running
-         it against a real game. Incremental document sync is the one
+         it against a real game, and docs/lsp.md is the protocol for
+         every other client - launch, initializationOptions, the dm/*
+         methods, and what is deliberately not served. Incremental document sync is the one
          deliberate omission - full sync costs one string against a
          ~10 ms rebuild, so it waits for a profile to ask. The
          same core answers both shells, so nothing here changes for you

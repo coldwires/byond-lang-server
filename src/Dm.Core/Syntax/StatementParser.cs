@@ -777,7 +777,11 @@ public sealed class StatementParser
         List<string> segments = new();
         List<TextSpan> spans = new();
 
-        while (IsDeclarationName(Current) || IsKeywordTypeSegment(_position))
+        // `!` is a legal type-name segment (warklan's /obj/! quest marker) and lexes as the Not
+        // operator, so it counts only AFTER a separator — `var/datum/parsing/!/B` names a type,
+        // while a leading `!` is the unary operator it is everywhere else.
+        while (IsDeclarationName(Current) || IsKeywordTypeSegment(_position)
+            || (Current == TokenKind.Not && segments.Count > 0))
         {
             string word = CurrentText;
 
@@ -799,7 +803,8 @@ public sealed class StatementParser
             }
 
             if (Current is TokenKind.Slash or TokenKind.Dot
-                && (IsDeclarationName(Peek()) || IsKeywordTypeSegment(_position + 1)))
+                && (IsDeclarationName(Peek()) || IsKeywordTypeSegment(_position + 1)
+                    || (Peek() == TokenKind.Not && segments.Count > 0)))
             {
                 _position++;
                 continue;
@@ -826,12 +831,27 @@ public sealed class StatementParser
                 TextSpan.FromBounds(spans[0].Start, spans[^2].End),
                 spans.GetRange(0, spans.Count - 1));
 
-        // `var/L[]` and `var/M[10]` are declaration brackets, not indexing.
+        // `var/L[]` and `var/M[10]` are declaration brackets, not indexing. A size is an ordinary
+        // expression and often reads a variable — `var/list/tier_list[max_tier]` — so it is kept
+        // rather than skipped; discarding it hid those reads from every consumer of the AST.
+        List<ExpressionSyntax>? dimensions = null;
+
         while (Current == TokenKind.OpenBracket)
         {
-            int depth = 0;
+            _position++;
 
-            do
+            if (Current != TokenKind.CloseBracket)
+            {
+                ExpressionSyntax size = ParseExpression();
+                (dimensions ??= new List<ExpressionSyntax>()).Add(size);
+            }
+
+            // An unterminated or unreadable bracket must not eat the rest of the declaration, so
+            // recovery walks to the matching close rather than trusting the expression to land on
+            // one. A buffer mid-keystroke reaches here constantly.
+            int depth = 1;
+
+            while (depth > 0 && !AtEnd)
             {
                 if (Current == TokenKind.OpenBracket)
                     depth++;
@@ -840,7 +860,6 @@ public sealed class StatementParser
 
                 _position++;
             }
-            while (depth > 0 && !AtEnd);
         }
 
         ExpressionSyntax? initializer = null;
@@ -932,7 +951,7 @@ public sealed class StatementParser
         }
 
         return new LocalVarStatementSyntax(
-            name, nameSpan, declaredType, modifiers, initializer, siblings, SpanFrom(start));
+            name, nameSpan, declaredType, modifiers, initializer, siblings, SpanFrom(start), dimensions);
     }
 
     /// <summary>

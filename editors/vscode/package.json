@@ -33,6 +33,10 @@
       {
         "command": "dm.toggleFileInEnvironment",
         "title": "DM: Toggle This File in the .dme"
+      },
+      {
+        "command": "dm.browseIconStates",
+        "title": "DM: Browse Icon States"
       }
     ],
     "menus": {

@@ -6,7 +6,14 @@
 # Update deliberately, after reading why a number moved:
 #   dmc diagdiff <dme> --baseline <this file> --update
 #
+# THE DEFINES ARE NOT IN THE KEY, AND ONE ROW NEEDS THEM. tgstation builds with -DCBT, so
+# re-running it without one compiles a different program from the one the row was measured on -
+# the same failure as diagdiff not passing -D to dm.exe, which is what made tgstation
+# unmeasurable until 2026-08-05. The other three take no flags.
+#   dmc diagdiff <path>\tgstation.dme -DCBT --baseline <this file>
+#
 # dme	agreed	missed	invented
 hell.dme	4	0	0
-Klan Wars.dme	12	3	0
+Klan Wars.dme	15	0	0
 spies.dme	0	0	0
+tgstation.dme	0	0	0

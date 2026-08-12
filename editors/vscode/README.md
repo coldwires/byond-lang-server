@@ -3,6 +3,11 @@
 Diagnostics, completion, hover, go-to-definition, and symbols for BYOND DM,
 served by `Dm.Lsp` over stdio.
 
+**Using a different editor?** `docs/lsp.md` is the protocol — launch,
+`initializationOptions`, the custom `dm/*` methods, what is deliberately not
+served, and Neovim and Helix configuration. The settings below are this
+client's spelling of the same two options.
+
 ## Run it against your game, today
 
 ```
@@ -42,6 +47,19 @@ nothing declares them, so there is nowhere to go.
 
 The tree is built lazily by the server, so the panel is empty until something has
 asked a question that needs it. It refreshes on save and from the toolbar button.
+
+## Icon states
+
+**DM: Browse Icon States** lists every state in a `.dmi` — the active file if one is open,
+otherwise a file picker — with its direction and frame counts, and copies the name you pick.
+
+Two things the list shows that a naive reader would get wrong. An empty name is the **default
+state** and is completely ordinary, so it appears as `(default)`; and one name can appear **twice**,
+once marked `movement`, because DM picks between the still and moving variants at runtime. A
+dictionary keyed by name silently drops half of those.
+
+A zero-byte `.dmi`, or a plain PNG saved under that extension, is reported as not an icon rather
+than as an empty list. Both exist in shipped games.
 
 ## Which `.dme` is being analysed
 

@@ -62,7 +62,7 @@ public sealed class Workspace : IDisposable
     /// Replaces the injected defines and drops the cached tree.
     /// </summary>
     /// <remarks>
-    /// Separate from <see cref="Open"/> because the tree is built lazily, so a client can set these
+    /// Separate from <see cref="Open(string)"/> because the tree is built lazily, so a client can set these
     /// immediately after opening and still have them apply â€” and can change build flags later
     /// without reopening the project.
     /// </remarks>
@@ -109,6 +109,17 @@ public sealed class Workspace : IDisposable
 
     /// <summary>Absolute path to the directory containing the <c>.dme</c>.</summary>
     public string RootDirectory { get; }
+
+    /// <summary>
+    /// Reads a <c>.dmi</c>'s state names, given an ABSOLUTE path. Set by the hosting shell.
+    /// </summary>
+    /// <remarks>
+    /// <c>Dm.Core</c> does not reference <c>Dm.Assets</c>, so the reader has to arrive from
+    /// outside — the same seam as <c>IncludeOptions.SourceProvider</c>. Set it before the first
+    /// query that builds the tree; unset, <c>icon_state</c> completion still reports its context
+    /// and returns an empty list, which is honest rather than silent.
+    /// </remarks>
+    public Func<string, IReadOnlyList<string>>? IconStateReader { get; set; }
 
     /// <summary>
     /// Windows paths differ only by case; POSIX paths do not. Getting this wrong means one file
@@ -295,6 +306,13 @@ public sealed class Workspace : IDisposable
         // The walk's pragma levels ride on the tree, so every binder caller gets them without a
         // signature change - see ObjectTree.SuppressedWarnings.
         tree.SuppressedWarnings = _suppressedWarnings;
+
+        // Same reasoning for icon states, with the work split where the knowledge is: a resource
+        // path is relative to the project, which only the workspace knows, and reading a .dmi needs
+        // Dm.Assets, which only a shell has.
+        tree.IconStates = IconStateReader is { } read
+            ? resource => read(System.IO.Path.Combine(RootDirectory, resource.Replace('\\', '/')))
+            : null;
 
         _tree = tree;
         return tree;

@@ -67,3 +67,35 @@
 	var/k = usr.key
 	//? complete 67:14 => key, client, loc, Move, !hp
 	return k
+
+// Four expression positions that NOTHING bound until 2026-08-12, each one found
+// by unused_var inventing on tgstation rather than by anything pointed at the
+// index. A use in any of them was invisible to find-references, document
+// highlight and what-overrides-this alike, and no test here would have noticed:
+// every use in this file until now sat in a plain statement.
+//
+// They are marked through `ammo` because a local is not an index symbol.
+/proc/index_positions()
+	var/obj/gun/g = new
+	var/list/out = list()
+	for(var/i in 1 to g.ammo)
+		out += i
+	for(var/j in 1 to 2)
+		scan: {
+			out += g.ammo
+			break scan
+		}
+	out = list(g.ammo = 1)
+	var/list/sized[g.ammo]
+	return sized
+
+// Exact set equality, so a position dropping back out of the index fails here.
+// 81 is a `for` header's RANGE BOUND, 85 a LABELLED BLOCK's body, 88 an
+// ASSOCIATIVE KEY, 89 a BRACKET DIMENSION - and 89 needed the parser to keep the
+// size expression at all, since it was consumed and discarded before.
+//
+// 56 and 59 are the CHAINED receiver `t.weapon.ammo`, and they earned this mark
+// its keep: written a day earlier, it recorded their absence, and it failed the
+// moment ReceiverType learned to walk a chain. Completion, definition and hover
+// all answered at 56 the whole time - the index was the one surface that did not.
+//? references 81:22 => types.dm:20 write, code.dm:56 write, code.dm:59 read, code.dm:81 read, code.dm:85 read, code.dm:88 read, code.dm:89 read

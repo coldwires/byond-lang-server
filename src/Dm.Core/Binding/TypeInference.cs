@@ -55,6 +55,7 @@ public static class TypeInference
     /// <summary>
     /// The type an expression produces, or null when nothing in reach says what it is.
     /// </summary>
+    /// <param name="expression">The expression to read a type off, or null.</param>
     /// <param name="lookup">
     /// Resolves a bare name to its declared type. Supplied by the caller because the scope chain
     /// lives with the service asking the question, not here.
