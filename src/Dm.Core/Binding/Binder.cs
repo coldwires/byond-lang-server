@@ -1105,11 +1105,14 @@ public sealed class Binder
         // `src` is the type the proc is declared on.
         IdentifierExpressionSyntax { Name: "src" } => scope.EnclosingType,
 
-        // A local or parameter, but only when it carries a declared type. A bare name that is not
-        // in scope is deliberately NOT resolved as a type here: completion falls back to reading
-        // `mob` as `/mob`, which is right for offering members and wrong for reporting errors,
-        // since an untyped local of that name would then be checked against a type it never had.
-        IdentifierExpressionSyntax identifier => scope.Lookup(identifier.Name),
+        // A bare name, in dm.exe's own resolution order: the nearest local — typed or not, since
+        // an untyped local still SETTLES the name and falling through would type the receiver
+        // from a member it shadows — then `usr`, then the enclosing type's members by written
+        // type, then a root global's. Members and globals were missing until 0.28: `clone.health`
+        // through a typed member var `var/mob/pc/clone` sat unchecked, unindexed and uncertain to
+        // rename, though its type is written down. A name resolving to none of these is NOT read
+        // as a type; completion dropped that fallback at 0.26 and this walk never had it.
+        IdentifierExpressionSyntax identifier => BareNameReceiverType(identifier.Name, scope),
 
         // A path written out as a value.
         PathExpressionSyntax { Path.Anchor: PathAnchor.Absolute } path
@@ -1141,6 +1144,34 @@ public sealed class Binder
 
         _ => null,
     };
+
+    /// <summary>
+    /// The written type a bare-name receiver carries, in <c>dm.exe</c>'s resolution order. Null
+    /// both for "nothing declares it" and for an untyped declaration, which equally mean
+    /// "do not check".
+    /// </summary>
+    private TypePath? BareNameReceiverType(string name, Scope scope)
+    {
+        // A local settles the name whatever its type.
+        if (scope.Find(name) is { } local)
+            return local.DeclaredType;
+
+        // `usr` is always a /mob — compiler-verified in PLAN §8, including that `world.mob` is a
+        // runtime default for connecting clients rather than a static retype.
+        if (name == "usr")
+            return UsrType;
+
+        if (_tree.Find(scope.EnclosingType) is { } enclosing
+            && _tree.ResolveVar(enclosing, name) is { DeclaredType: { } member })
+        {
+            return member;
+        }
+
+        // Root vars: project globals, and builtins like `world`, which is a root var typed /world.
+        return _tree.Root.FindVar(name) is { DeclaredType: { } global } ? global : null;
+    }
+
+    private static readonly TypePath UsrType = TypePath.Parse("/mob");
 
     private static TypePath PathOf(PathSyntax path, TypePath enclosing)
         => path.Anchor == PathAnchor.Absolute

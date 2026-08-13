@@ -901,7 +901,15 @@ dm_status dm_signature_at(dm_workspace workspace, const char *file,
  * Uncertain reasons: "colonAccess" (`:`, `?:`, `?.`, `::` - lookup wider
  * than a written type), "untypedReceiver" (`.` through a call result, index
  * or untyped var - dm.exe degrades these to `:` and stops checking), and
- * "stringLiteral" (the name as a whole word inside a string).
+ * "stringLiteral" (a literal whose WHOLE text is the name - vars["health"]
+ * and call(g, "attack") spell the bare name and nothing else, while prose
+ * merely contains it; narrowed from whole-word matching in 0.28, which
+ * flagged seven sentences of flavour text on the project it was measured on).
+ *
+ * Since 0.28 a bare-name receiver resolves in dm.exe's own order - local,
+ * `usr` (always /mob), the enclosing type's members, root globals - so
+ * accesses like `owner.hp` through `var/mob/owner` are proven edits rather
+ * than uncertainty.
  *
  * Handle an unknown refusal or reason word by treating the rename as refused.
  *

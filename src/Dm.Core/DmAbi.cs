@@ -14,6 +14,10 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 28: bare-name receivers resolve in dm.exe's own order — local, `usr`, the enclosing
+    ///     type's members, root globals — so diagnostics check them, the reference index holds
+    ///     them, and rename proves them. Rename's "stringLiteral" uncertainty narrowed to a
+    ///     literal whose WHOLE text is the name; prose merely containing it is no longer flagged.
     /// 27: added dm_rename_at — best-effort rename: provable edits plus the "uncertain" list of
     ///     `:` accesses, untyped receivers and string literals carrying the name, which are
     ///     reported rather than guessed at.
@@ -55,7 +59,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 27;
+    public const int Minor = 28;
 
     /// <summary>Both numbers in one int: <c>(major &lt;&lt; 16) | minor</c>.</summary>
     public static int Packed => (Major << 16) | Minor;

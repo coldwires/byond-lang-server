@@ -37,6 +37,15 @@ internal sealed class LspServer
     private Workspace? _workspace;
     private bool _shutdownRequested;
 
+    // Negotiated at initialize from the client's general.positionEncodings, first supported entry
+    // wins so the client's preference order is honoured. UTF-16 is the LSP default and what a
+    // client that says nothing gets.
+    private PositionEncoding _encoding = PositionEncoding.Utf16;
+
+    // Paths with an open buffer, so an Invalidate can re-publish every document a user is looking
+    // at. The buffers themselves live in the workspace; this is only the guest list.
+    private readonly HashSet<string> _open = new(StringComparer.OrdinalIgnoreCase);
+
     // $/cancelRequest bookkeeping. The reader thread calls RequestCancel while this thread is
     // busy, so the three fields are guarded; everything else in the server stays single-threaded.
     private readonly object _cancelGate = new();
@@ -100,6 +109,7 @@ internal sealed class LspServer
                     string path = PathOf(params_.GetProperty("textDocument"));
                     string text = params_.GetProperty("textDocument").GetProperty("text").GetString() ?? "";
                     _workspace?.SetBuffer(path, text);
+                    _open.Add(path);
                     PublishDiagnostics(path);
                     break;
                 }
@@ -125,10 +135,27 @@ internal sealed class LspServer
                 {
                     string path = PathOf(params_.GetProperty("textDocument"));
                     _workspace?.CloseBuffer(path);
+                    _open.Remove(path);
 
                     // Diagnostics now describe what is on disk, which may differ from the buffer
                     // just closed.
                     PublishDiagnostics(path);
+                    break;
+                }
+
+                case "workspace/didChangeWatchedFiles":
+                {
+                    // The disk moved underneath the workspace — a git checkout, a build step,
+                    // another editor. One Invalidate covers any number of changes, since the
+                    // per-file caches revalidate by write time and only what actually changed is
+                    // re-read. Buffers stay authoritative for open documents, but their
+                    // diagnostics can change when a DIFFERENT file moved, so every open document
+                    // re-publishes.
+                    _workspace?.Invalidate();
+
+                    foreach (string open in _open)
+                        PublishDiagnostics(open);
+
                     break;
                 }
 
@@ -443,9 +470,11 @@ internal sealed class LspServer
             Console.Error.WriteLine("dm-lsp: no workspace root and no .dme; analysis is off.");
         }
 
+        _encoding = NegotiateEncoding(params_);
+
         json.WriteStartObject();
         json.WriteStartObject("capabilities");
-        json.WriteString("positionEncoding", "utf-16");
+        json.WriteString("positionEncoding", _encoding == PositionEncoding.Utf8 ? "utf-8" : "utf-16");
         json.WriteNumber("textDocumentSync", 1); // full
         json.WriteStartObject("completionProvider");
         json.WriteStartArray("triggerCharacters");
@@ -527,6 +556,36 @@ internal sealed class LspServer
     /// the first <c>.dme</c> in the workspace root. Real projects keep it at the top — a `.dme`
     /// IS the project — so no recursive search.
     /// </summary>
+    /// <summary>
+    /// The client's <c>general.positionEncodings</c> is an ordered preference list, and the first
+    /// entry this server speaks wins. A client that says nothing gets UTF-16, the LSP default.
+    /// Until 0.28-era this server declared utf-16 unconditionally, which mis-served a UTF-8-only
+    /// client silently and only on lines with non-ASCII text — the worst kind of wrong.
+    /// </summary>
+    private static PositionEncoding NegotiateEncoding(JsonElement params_)
+    {
+        if (params_.TryGetProperty("capabilities", out JsonElement capabilities)
+            && capabilities.ValueKind == JsonValueKind.Object
+            && capabilities.TryGetProperty("general", out JsonElement general)
+            && general.ValueKind == JsonValueKind.Object
+            && general.TryGetProperty("positionEncodings", out JsonElement encodings)
+            && encodings.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement encoding in encodings.EnumerateArray())
+            {
+                switch (encoding.ValueKind == JsonValueKind.String ? encoding.GetString() : null)
+                {
+                    case "utf-16":
+                        return PositionEncoding.Utf16;
+                    case "utf-8":
+                        return PositionEncoding.Utf8;
+                }
+            }
+        }
+
+        return PositionEncoding.Utf16;
+    }
+
     private static string? FindDme(JsonElement params_, string? root)
     {
         if (params_.TryGetProperty("initializationOptions", out JsonElement options)
@@ -634,7 +693,7 @@ internal sealed class LspServer
             line,
             character,
             ws.GetMacroNames(cancel),
-            PositionEncoding.Utf16,
+            _encoding,
             cancel,
             ws.CompletionLimit);
 
@@ -726,7 +785,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         HoverResult? hover = HoverService.HoverAt(
-            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16,
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, _encoding,
             cancel, ws.GetMacroTable(cancel));
 
         if (hover is null)
@@ -770,7 +829,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         SignatureHelpResult? help = SignatureHelpService.SignatureAt(
-            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16);
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, _encoding);
 
         if (help is null)
         {
@@ -810,7 +869,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.DefinitionAt(
-            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16,
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, _encoding,
             cancel, ws.GetMacroTable(cancel));
 
         json.WriteStartArray();
@@ -841,7 +900,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         IReadOnlyList<DocumentSymbol> symbols = DocumentSymbolService.GetSymbols(
-            document.Parse, includeParameters: false, PositionEncoding.Utf16, cancel);
+            document.Parse, includeParameters: false, _encoding, cancel);
 
         json.WriteStartArray();
 
@@ -888,7 +947,7 @@ internal sealed class LspServer
                     name.GetString() ?? string.Empty,
                     ws.GetMacroNames(cancel),
                     ws.GetFileText,
-                    PositionEncoding.Utf16,
+                    _encoding,
                     cancel);
 
                 if (documentation.Length > 0)
@@ -916,7 +975,7 @@ internal sealed class LspServer
         Document document = ws.GetDocument(path);
 
         IReadOnlyList<DefinitionLocation> found = DefinitionService.TypeDefinitionAt(
-            TreeAnnouncingBuild(ws, cancel, path), document, line, character, PositionEncoding.Utf16, cancel);
+            TreeAnnouncingBuild(ws, cancel, path), document, line, character, _encoding, cancel);
 
         json.WriteStartArray();
 
@@ -1197,11 +1256,11 @@ internal sealed class LspServer
         }
     }
 
-    private static int OffsetOf(Document document, JsonElement position)
+    private int OffsetOf(Document document, JsonElement position)
         => document.Text.GetOffset(
             position.GetProperty("line").GetInt32(),
             position.GetProperty("character").GetInt32(),
-            PositionEncoding.Utf16);
+            _encoding);
 
     /// <summary>Clickable <c>#include</c> targets — needs no object tree, only this file's tokens.</summary>
     private void WriteDocumentLinks(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
@@ -1245,7 +1304,7 @@ internal sealed class LspServer
 
         IReadOnlyList<InlayHint> hints = InlayHintService.HintsFor(
             TreeAnnouncingBuild(ws, cancel), document, startLine, endLine,
-            PositionEncoding.Utf16, cancel);
+            _encoding, cancel);
 
         json.WriteStartArray();
 
@@ -1463,7 +1522,7 @@ internal sealed class LspServer
             ws.GetDocument(path),
             line,
             character,
-            PositionEncoding.Utf16,
+            _encoding,
             ReferenceService.DefaultLimit,
             cancel);
     }
@@ -1555,7 +1614,7 @@ internal sealed class LspServer
 
         string newName = params_.GetProperty("newName").GetString() ?? string.Empty;
 
-        RenameResult result = ws.RenameAt(path, line, character, newName, PositionEncoding.Utf16, cancel);
+        RenameResult result = ws.RenameAt(path, line, character, newName, _encoding, cancel);
 
         if (full)
         {
@@ -1997,10 +2056,10 @@ internal sealed class LspServer
 
     private static string UriOf(string path) => new Uri(Path.GetFullPath(path)).AbsoluteUri;
 
-    private static void WriteRange(Utf8JsonWriter json, SourceText text, TextSpan span)
+    private void WriteRange(Utf8JsonWriter json, SourceText text, TextSpan span)
     {
-        LinePosition start = text.GetLinePosition(span.Start, PositionEncoding.Utf16);
-        LinePosition end = text.GetLinePosition(span.End, PositionEncoding.Utf16);
+        LinePosition start = text.GetLinePosition(span.Start, _encoding);
+        LinePosition end = text.GetLinePosition(span.End, _encoding);
 
         json.WriteStartObject("range");
         WritePosition(json, "start", start);

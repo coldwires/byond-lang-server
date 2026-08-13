@@ -62,6 +62,63 @@ public class BinderTests
         Assert.DoesNotContain(Bind(source), d => d.Id == "no_parent");
     }
 
+    /// <summary>
+    /// <c>usr</c> is always a <c>/mob</c> — compiler-verified, and <c>world.mob</c> does not
+    /// retype it — so dm.exe checks members through it and, since 0.28, so do we. The first
+    /// assert failing is the missed check returning; the second failing is inventing on every
+    /// game that touches <c>usr</c>.
+    /// </summary>
+    [Fact]
+    public void A_member_through_usr_is_checked()
+    {
+        // /mob is declared in the source because this harness's tree carries no builtins.
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob\n\tvar/hp = 1\n/proc/f()\n\treturn usr.hp + usr.nonexistent_xyz\n");
+
+        Assert.Contains(found, d => d.Id == "DM0400" && d.Message.Contains("nonexistent_xyz"));
+        Assert.DoesNotContain(found, d => d.Message.Contains("hp"));
+    }
+
+    /// <summary>
+    /// A bare name resolving to a TYPED member of the enclosing type carries that written type —
+    /// mlaas's <c>clone.health</c> through <c>var/mob/pc/clone</c>, which sat unchecked,
+    /// unindexed and uncertain-to-rename until 0.28.
+    /// </summary>
+    [Fact]
+    public void A_member_receiver_reached_by_bare_name_is_checked()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob\n\tvar/hp = 1\n"
+            + "/obj/pill\n\tvar/mob/owner\n\tproc/show()\n\t\treturn owner.hp + owner.nonexistent_xyz\n");
+
+        Assert.Contains(found, d => d.Id == "DM0400" && d.Message.Contains("nonexistent_xyz"));
+        Assert.DoesNotContain(found, d => d.Message.Contains("hp"));
+    }
+
+    /// <summary>
+    /// An untyped LOCAL shadows a typed member of the same name, so the check must stop at the
+    /// local — falling through would check against a type the receiver never had, and invent.
+    /// </summary>
+    [Fact]
+    public void An_untyped_local_shadowing_a_member_stops_the_check()
+    {
+        Assert.DoesNotContain(
+            Bind(
+                "/mob\n\tvar/hp = 1\n"
+                + "/obj/pill\n\tvar/mob/owner\n\tproc/show(x)\n\t\tvar/owner = x\n\t\treturn owner.anything_at_all\n"),
+            d => d.Id is "DM0400" or "DM0401");
+    }
+
+    /// <summary>A typed root GLOBAL as a receiver is checked through its written type.</summary>
+    [Fact]
+    public void A_global_receiver_is_checked()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "var/mob/keeper\n/mob\n\tvar/hp = 1\n/proc/f()\n\treturn keeper.hp + keeper.nonexistent_xyz\n");
+
+        Assert.Contains(found, d => d.Id == "DM0400" && d.Message.Contains("nonexistent_xyz"));
+    }
+
     /// <summary>Binds the last file against a tree built from all of them, as a real build does.</summary>
     private static IReadOnlyList<Diagnostic> Bind(params string[] files)
     {
