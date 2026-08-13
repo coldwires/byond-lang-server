@@ -252,11 +252,11 @@ public class StatementParserTests
     [Theory]
     [InlineData("\tdel src\n", TokenKind.KeywordDel)]
     [InlineData("\tthrow EXCEPTION(\"bad\")\n", TokenKind.KeywordThrow)]
-    public void Del_and_throw_take_a_bare_operand(string source, TokenKind expected)
+    public void Del_and_throw_take_a_bare_operand(string source, object expected)
     {
         UnaryStatementSyntax statement = Single<UnaryStatementSyntax>(source);
 
-        Assert.Equal(expected, statement.Keyword);
+        Assert.Equal((TokenKind)expected, statement.Keyword);
         Assert.NotNull(statement.Operand);
     }
 

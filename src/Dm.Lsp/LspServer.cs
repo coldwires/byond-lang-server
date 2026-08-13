@@ -200,6 +200,14 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteDocumentHighlight(json, params_, cancel));
                     break;
 
+                case "textDocument/rename":
+                    RespondCancellable(id, (json, cancel) => WriteRename(json, params_, cancel, full: false));
+                    break;
+
+                case "dm/rename":
+                    RespondCancellable(id, (json, cancel) => WriteRename(json, params_, cancel, full: true));
+                    break;
+
                 case "dm/references":
                     RespondCancellable(id, (json, cancel) => WriteReferencesByPath(json, params_, cancel));
                     break;
@@ -461,6 +469,11 @@ internal sealed class LspServer
         json.WriteBoolean("definitionProvider", true);
         json.WriteBoolean("referencesProvider", true);
 
+        // Best-effort by design: the WorkspaceEdit carries only PROVABLE sites, and the uncertain
+        // ones — `:` accesses, untyped receivers, string dispatch — are announced by count through
+        // window/showMessage and listed by dm/rename. See RenameService for why sound is impossible.
+        json.WriteBoolean("renameProvider", true);
+
         // What overrides this proc - the reference index's `override` kind, which is the safety
         // question before changing a proc's behaviour in an override-heavy tree.
         json.WriteBoolean("implementationProvider", true);
@@ -681,7 +694,6 @@ internal sealed class LspServer
                     TypeSource.Initializer => "initializer",
                     TypeSource.Assignment => "assignment",
                     TypeSource.InputFilter => "as",
-                    TypeSource.BareTypeName => "bareTypeName",
                     _ => "none",
                 });
             }
@@ -1525,6 +1537,147 @@ internal sealed class LspServer
 
         json.WriteEndArray();
     }
+
+    /// <summary>
+    /// Rename, on both spellings. The standard response is a <c>WorkspaceEdit</c> of the provable
+    /// sites only — it has no field for "and check these by hand" — with a refusal answered as
+    /// null plus a <c>window/showMessage</c> saying why, and an uncertain count announced the same
+    /// way. <c>dm/rename</c> is the full answer: refusal word, edits, and every uncertain site
+    /// with its reason.
+    /// </summary>
+    private void WriteRename(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel, bool full)
+    {
+        if (RequirePosition(params_, out string path, out int line, out int character) is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string newName = params_.GetProperty("newName").GetString() ?? string.Empty;
+
+        RenameResult result = ws.RenameAt(path, line, character, newName, PositionEncoding.Utf16, cancel);
+
+        if (full)
+        {
+            WriteFullRename(json, ws, result);
+            return;
+        }
+
+        if (result.Refusal != RenameRefusal.None)
+        {
+            ShowMessage(MessageTypeWarning, $"rename refused: {RefusalWord(result.Refusal)}");
+            json.WriteNullValue();
+            return;
+        }
+
+        if (result.Uncertain.Count > 0)
+        {
+            ShowMessage(MessageTypeWarning,
+                $"renamed {result.Edits.Count} site(s); {result.Uncertain.Count} site(s) were NOT"
+                + " changed because nothing proves they are this symbol — `:` accesses, untyped"
+                + " receivers or string dispatch. `dmc rename` or dm/rename lists them.");
+        }
+
+        json.WriteStartObject();
+        json.WriteStartObject("changes");
+
+        // Edits arrive sorted by file, so one pass groups them per URI.
+        int i = 0;
+        while (i < result.Edits.Count)
+        {
+            string file = result.Edits[i].File;
+
+            if (!ws.TryGetDocument(file, out Document target))
+            {
+                while (i < result.Edits.Count && result.Edits[i].File == file)
+                    i++;
+
+                continue;
+            }
+
+            json.WriteStartArray(UriOf(file));
+
+            for (; i < result.Edits.Count && result.Edits[i].File == file; i++)
+            {
+                json.WriteStartObject();
+                WriteRange(json, target.Text, result.Edits[i].Span);
+                json.WriteString("newText", result.NewName);
+                json.WriteEndObject();
+            }
+
+            json.WriteEndArray();
+        }
+
+        json.WriteEndObject();
+        json.WriteEndObject();
+    }
+
+    /// <summary>The <c>dm/rename</c> shape: everything the CLI prints, as data.</summary>
+    private void WriteFullRename(Utf8JsonWriter json, Workspace ws, RenameResult result)
+    {
+        json.WriteStartObject();
+        json.WriteString("refusal", RefusalWord(result.Refusal));
+        json.WriteString("target", result.Target);
+        json.WriteString("newName", result.NewName);
+
+        json.WriteStartArray("edits");
+
+        foreach (RenameEdit edit in result.Edits)
+        {
+            if (!ws.TryGetDocument(edit.File, out Document target))
+                continue;
+
+            json.WriteStartObject();
+            json.WriteString("uri", UriOf(edit.File));
+            WriteRange(json, target.Text, edit.Span);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteStartArray("uncertain");
+
+        foreach (UncertainSite site in result.Uncertain)
+        {
+            if (!ws.TryGetDocument(site.File, out Document target))
+                continue;
+
+            json.WriteStartObject();
+            json.WriteString("uri", UriOf(site.File));
+            json.WriteString("reason", ReasonWord(site.Reason));
+            WriteRange(json, target.Text, site.Span);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+
+    private const int MessageTypeWarning = 2;
+
+    private static string RefusalWord(RenameRefusal refusal) => refusal switch
+    {
+        RenameRefusal.None => "none",
+        RenameRefusal.NothingAtPosition => "nothingAtPosition",
+        RenameRefusal.Builtin => "builtin",
+        RenameRefusal.Type => "type",
+        _ => "invalidName",
+    };
+
+    private static string ReasonWord(UncertainReason reason) => reason switch
+    {
+        UncertainReason.ColonAccess => "colonAccess",
+        UncertainReason.UntypedReceiver => "untypedReceiver",
+        _ => "stringLiteral",
+    };
+
+    private void ShowMessage(int type, string message)
+        => Rpc.Notify(_output, "window/showMessage", json =>
+        {
+            json.WriteStartObject();
+            json.WriteNumber("type", type);
+            json.WriteString("message", message);
+            json.WriteEndObject();
+        });
 
     private void WriteDocumentHighlight(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
     {

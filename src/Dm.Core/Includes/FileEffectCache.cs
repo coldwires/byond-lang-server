@@ -36,7 +36,7 @@ internal enum EffectKind
 /// the words they used, rather than against the resolved path. A diagnostic that moves when a file
 /// is served from cache is a diagnostic that looks like a bug in us.
 /// </remarks>
-public readonly struct IncludeSite
+internal readonly struct IncludeSite
 {
     public IncludeSite(string target, TextSpan span)
     {
@@ -182,7 +182,7 @@ internal sealed class FileEffect
 /// <c>#pragma multiple</c>.
 /// </para>
 /// </remarks>
-public sealed class FileEffectCache
+internal sealed class FileEffectCache
 {
     private readonly Dictionary<(string Path, int EntryHash), FileEffect> _entries = new();
 

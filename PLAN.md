@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.25** · 1,232 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.27** · 1,271 tests ·
 > Last updated: 2026-08-11
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -424,12 +424,17 @@ byond-lang-server/
 
 **Three planned entries were dropped rather than built, and saying which is the point of this
 section.** `docs/abi.md` is `INTEGRATION.txt`, with `abi/dm_core.h` as the contract it describes.
-`docs/api.md` stays dropped on a measurement rather than on the duplication argument first given
-here, which was the wrong test: `Dm.Core` exposes **155 public types and 884 public members against
-12 internal**, so `public` is a default rather than a decision and "the in-process surface" is not
-yet a documentable object — prose over it would drift on the first commit. What is genuinely owed
-there is structural and is in `state.md`: decide the supported surface, ship the XML doc file (746
-comments exist and reach no assembly consumer today), and fix the ~16 broken crefs that turns up.
+`docs/api.md` was dropped while `public` was a default rather than a decision — 155 public types
+against 12 internal, an undocumentable object. **The surface was decided 2026-08-13: 61 public
+types against 106 internal.** Public is what `Dm.Native` and `Dm.Lsp` consume — `Workspace`,
+`Document`, the services and their result types, `ObjectTree`/`TypeSymbol`/`TypePath`,
+`Diagnostic`, the text primitives — which is the §3 sync rule made structural: the in-process
+surface cannot outgrow the other two shells when it IS what the other two shells call. The lexer,
+parser, preprocessor and cache layers are `internal`; `dmc`, whose instrumentation commands exist
+to see past the API, reaches them via `InternalsVisibleTo` (as assembly name `dmc`), the same
+mechanism the tests already used. Five types stay public as opaque handles a consumer shuttles
+between workspace and services without reading — `MacroTable`, `SemanticContext`, `LexResult`,
+`FileSyntax`, `SyntaxNode` — with the members that would expose internals made internal.
 `tests/corpus/` never appeared because the corpus is games on
 disk that this repo cannot vendor, and what fills that role is `tests/fixtures` plus the corpus list
 in `ROADMAP.txt`. And there is no `DiagnosticService`: the semantic set comes from `Binder.Bind` and
@@ -446,7 +451,8 @@ guidance was in `INTEGRATION.txt` while `ROADMAP.txt` held the only copy. `lsp.m
 and the wiring; it points at `INTEGRATION.txt` §4 for what an answer means, since both shells call
 the same services.
 
-`abi/dm_core.hpp` is the one entry still genuinely owed.
+`abi/dm_core.hpp`, the last entry owed here, shipped 2026-08-12 and is compiled on every RID by
+`abi-smoke`.
 
 ---
 
@@ -460,16 +466,16 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.23 MB, 38 exports) via NativeAOT, for six
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.29 MB, 39 exports) via NativeAOT, for six
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.24 and passing 242 checks on x64 and
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.27 and passing 258 checks on x64 and
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,232 today (1,171
-  core, 44 native, 17 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,271 today (1,209
+  core, 44 native, 18 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -780,8 +786,11 @@ declarations, so statement parsing slots in later without disturbing this.
   `BuiltinMacros.Seed` defines the constants into the `MacroTable`, since a macro is not a member of
   anything. The count has grown with every hole a check exposed: `/image`'s appearance vars,
   `/callee`, `/alist`, the 39 object-typed vars, `world`, and the constants.
-- ✅ The acceptance target works. `mob.` resolves through `/mob` → `/atom/movable` → `/atom` →
-  `/datum`, so it offers `loc`, `Move()` and `MouseMove()` — none of which appear in any file.
+- ✅ The acceptance target works, restated 2026-08-13 to what `dm.exe` accepts: a receiver that is
+  a **var** typed `/mob` — a local, a parameter, or a root global, `var/mob/mob` included —
+  resolves through `/mob` → `/atom/movable` → `/atom` → `/datum`, so it offers `loc`, `Move()` and
+  `MouseMove()`, none of which appear in any file. A bare type name offers nothing: `mob.loc` is
+  "undefined var" to the compiler, and the fallback that completed it anyway left at ABI 0.26.
 
 **Written as `builtins.txt`, not `builtins.json`.** `Dm.Core` is a NativeAOT target, so a
 reflection-based deserializer is out and JSON would mean source generators for a fixed, read-only
@@ -1204,8 +1213,8 @@ as a rule they have to follow.
     `documentHighlight` + `dm/references` + `dm/ancestorsOf`, and `dmc references` as the
     arbiter. No persistent index yet: each query walks the retained parses, capped and
     truncation-flagged; incrementality is M9-shaped work for when a profile asks. It subsumes
-    M11's find-references bullet; rename remains open on the `:`/string-dispatch soundness
-    question.
+    M11's find-references bullet; rename shipped on it at 0.27 as best-effort with the
+    uncertainty reported (§ Deferred has the decision).
   - Their do-not-change list is contract: UTF-16 default stays honest, whole-document
     `dm_set_buffer` stays, additive ABI changes bump the minor.
 - ✅ semanticTokens backed by the M2/M6 classification service, over the small TextMate base.
@@ -1657,7 +1666,11 @@ are both off by default in `dm.exe`, so implementing them here surfaces lints mo
 never seen.
 
 Find-references and rename cannot be fully sound in DM because of `:` and string-based dispatch
-(`call()`, `text2path()`). Decide whether rename is safe-subset-only or best-effort-with-warning.
+(`call()`, `text2path()`). **Decided 2026-08-13, the user's call: best-effort with the uncertainty
+REPORTED.** `dm_rename_at` (0.27) edits only sites the binder's own resolution proves and returns
+every unproven carrier of the name — `:`-family accesses, `.` through unwritten types, whole-word
+string-literal hits — as an `uncertain` list with reasons, which is the product rather than an
+apology. Locals and types refuse rather than guess.
 
 ### Deferred
 
@@ -1827,7 +1840,7 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.25, 38 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.27, 39 exports: version, last error, free, workspace
 open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
 pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
@@ -1864,6 +1877,9 @@ dm_status   dm_hover_at(dm_workspace, const char* file, int32_t line, int32_t ch
                         dm_position_encoding, char** out_json);                /* M7, 0.7 */
 dm_status   dm_signature_at(dm_workspace, const char* file, int32_t line, int32_t character,
                             dm_position_encoding, char** out_json);           /* M10, 0.12 */
+dm_status   dm_rename_at(dm_workspace, const char* file, int32_t line, int32_t character,
+                         dm_position_encoding, const char* new_name,
+                         char** out_json);                                    /* 0.27 */
 dm_status   dm_diagnostics(dm_workspace, const char* file,
                            dm_position_encoding, char** out_json);            /* M11, 0.13 */
 dm_status   dm_inlay_hints(dm_workspace, const char* file, int32_t start_line,
@@ -2205,7 +2221,7 @@ that the two candidate behaviours produce different compiler output.
 | **A proc-local var's initializer rejects a top-level relational `in`.** | `var/r = y in L` is *"unexpected 'in' expression"* whatever the left side — bare, parenthesised, or a whole ternary — and whatever the right, `g()`, `typesof()`, `(L)` and `world` included. `var/r = (y in L)` parenthesised whole compiles, as do the same text as a statement, a global's initializer, and a type-level var's. Three exemptions, each its own grammar: the locate unit, `input(...) [as null\|anything] in choices` (mlaas ships eight), and a literal `list(...)` RHS — which is the declaration's **value-restriction clause**, not the operator: `var/r = 2 in list(4,5)` leaves `r` holding **2**, runtime-verified, so we match the compiler and warn (`DM0301`); tgstation ships one and its var holds the wrong thing. Fixture `errors/local_in` plus six runtime checks in `ok/parsing.dm`. |
 | **An `#include` is legal in expression position, splicing the file into the surrounding brackets.** | tgstation's `ApiVersion()` is `return new /datum/tgs_version(` + `#include "__interop_version.dm"` + `)`, where the included file is one string literal. Compiles clean and the value lands in the argument list — runtime-verified through the constructed object. The directive still ends at its own line even mid-expression. |
 | **A `.` after a written path continues the path; it is never member access.** | `/obj/item.weight` with `weight` a var on `/obj/item` is *"undefined type path"*, and the same text compiles clean when `/obj/item/weight` is a **type** — so the `.` is read as a path separator (§4a's mid-path rule) and nothing about the var is consulted. Same after `new`: `new /mob/test.hp` is *"undefined type path"*. Completion therefore offers child **types** there, not members; it offered members until 2026-08-07, which is a completion that cannot build. |
-| **A bare type name is not a receiver at all.** | `mob.loc`, `mob.hp` and `mob.sub` are each *"undefined var"* — a bare `mob` is neither a variable nor a path, since §4a context 3 needs a LEADING separator for the path reading. So PLAN §1's acceptance target (`mob.` lists `/mob`'s members) is a convenience the compiler never accepts, and **unlike the untyped-local divergence there is no edit that makes it legal** — `var/mob/x` fixes `x.`, nothing fixes `mob.`. Kept because exploring a type by name is useful, and reported as `typeFrom: "bareTypeName"` with `inferred` set so a client can badge or drop it. |
+| **A bare type name is not a receiver at all — but a typed GLOBAL is.** | `mob.loc`, `mob.hp` and `mob.sub` are each *"undefined var"* — a bare `mob` is neither a variable nor a path, since §4a context 3 needs a LEADING separator for the path reading, and **unlike the untyped-local divergence there is no edit that makes it legal** — `var/mob/x` fixes `x.`, nothing fixes `mob.`. The fallback that offered members anyway (marked `typeFrom: "bareTypeName"`) was removed at ABI 0.26 on the user's call, and removing it exposed what it had been masking: a root `var/obj/machine` **does** type `machine.` — dm.exe compiles the access — and the resolver never consulted root vars, so typed globals answered 0 items. The idiomatic shadow `var/mob/mob` compiles too and now resolves through the **var**, which is the mechanism dm.exe uses, rather than agreeing by coincidence. Probes 2026-08-13 on 516.1686: bare `mob.name`/`obj.name` error; `var/obj/o = new` + `o.name`, root `var/obj/machine` + `machine.name`, and root `var/mob/mob` + `mob.name` all compile. |
 | **A member missing on a `new /path(...)` receiver RAISES at runtime.** | Runtime-verified: `new /mob/test(1).elsewhere` compiles clean and then fails with *"undefined variable /mob/test/var/elsewhere"* — not null. The same holds for `o:elsewhere` on an untyped var and for writing through one. So the compiler's acceptance is not benign; it is a crash waiting on a code path, the `DM03xx` shape. We know the constructed type exactly because it is written two tokens away, so **`DM0302`** warns where `dm.exe` declines to look, and completion offers that type's members instead of nothing. The `:`-on-untyped case is deliberately NOT diagnosed — duck-typing through `:` is legitimate DM and warning there would invent on working code. Zero DM0302 across mlaas, madridspy, warklan and tgstation. |
 | **`new /path(args).member` is checked at the widest setting, not against `/path`.** | `new /mob/test(1).elsewhere` compiles where `elsewhere` exists only on an unrelated type, while `new /mob/test(1).nowhere_at_all` is *"`<expression>`.nowhere_at_all: undefined var"* — the compiler names the receiver `<expression>`, so it holds no type for it. This is §8's degrade-to-`:` rule, and it means a `new` expression is NOT typed by the path written two characters earlier. Parentheses are what make it member access at all. |
 | **The `as` clause takes a closed vocabulary of eighteen input types, and it is not the type system.** | Compiled one verb parameter per candidate, `as bogus_xyz` as the control that must fail. Accepted: `anything null text message num icon sound file key color command_text password mob obj turf area movable atom`. **Rejected: `datum`, `list` and `client`** — while `movable` and `atom` are fine, which no rule about types predicts. These are the filters DreamSeeker knows how to prompt for, a different question from what a value may hold. The reference says the vocabulary exists and that `\|` combines it, and never enumerates it. `SyntaxFacts.InputTypes`; completion offers it after `as` and after a `\|` continuing one. 516.1686. |
@@ -3393,3 +3409,55 @@ it.
   A correction for the next session: `state.md` said to re-apply the backed-out check from
   `42451a6`. That commit holds docs and fixtures and **no `.cs`**; the implementation never
   existed in git, and attempt four was written from the pinned rule instead.
+- **2026-08-13** — **ABI 0.26: the bare-type-name completion fallback is removed, on the user's
+  call, and typed globals resolve as receivers.** `mob.` offering `/mob`'s members was §1's old
+  acceptance target and dm.exe never accepted it (`mob.name` is "undefined var"; four probes on
+  516.1686 re-verified). Removing it exposed what it had been masking: `ResolveReceiver` checked
+  locals and the enclosing type's vars and **never root vars**, so a root `var/obj/machine` —
+  which dm.exe compiles `machine.name` through — answered 0 items on every surface that shares the
+  resolver (completion, definition, hover, signature help). The idiomatic shadow `var/mob/mob` now
+  resolves through the var, dm.exe's own mechanism, instead of agreeing by coincidence — the
+  `src.client.` shape again. `typeFrom` loses the `bareTypeName` word (a dead switch arm for
+  clients, not a break; the enum number is not reused), §1's target is restated to the var-based
+  resolution, and the §8 row carries the probe matrix. Fixtures: `errors/bare_type_receiver` pins
+  the rejection, `services/` gains the global and shadow receivers. Republished and re-smoked on
+  both architectures the same day.
+- **2026-08-13** — **The `Dm.Core` public surface is decided: 61 public types against 106
+  internal, from 155 against 12.** The method was measurement rather than taste: every public type
+  was bucketed by which shell names it (case-sensitively — the first, case-insensitive scan put
+  `Token` in the API on the strength of `CancellationTokenSource.Token`), and the API is what
+  `Dm.Native` and `Dm.Lsp` consume, which is §3's sync rule made structural. The lexer, parser,
+  preprocessor and cache layers went `internal`; `dmc` reaches them via `InternalsVisibleTo`
+  (assembly name `dmc`, not `Dm.Cli` — the first build said so), since its instrumentation
+  commands exist to see past the API. Five opaque-handle types stay public with internal members
+  (`MacroTable`, `SemanticContext`, `LexResult`, `FileSyntax`, `SyntaxNode`) because shells
+  shuttle them between workspace and services. Nine parser-test theories took internal enums in
+  public signatures; internal test classes looked like the fix and xUnit1000 is right that the
+  runner ignores them, so the parameters are `object` with a body cast. All 1,264 tests pass with
+  identical counts. CS1591 stays suppressed on a measurement recorded in the csproj: 181
+  undocumented members remain, dominated by self-evident properties and enum values, and
+  manufacturing summaries for those would violate the project's own writing rules.
+- **2026-08-13** — **Rename ships at ABI 0.27, on the user's call: best-effort with the
+  uncertainty reported.** `RenameService` edits only what the binder's own walk proves — the same
+  resolution diagnostics and the reference index use, declarations and the override family
+  included — and returns every unproven carrier of the name as an `uncertain` list: `:`-family
+  accesses and unwritten-type `.` accesses from a new uncertain sink on the binder's two refusal
+  points, plus whole-word string-literal hits for `call()`/`text2path()` dispatch. Refusals are
+  data, not errors: nothingAtPosition (locals are not indexed; a typed local is caught before
+  definition resolves it to its type), builtin, type, invalidName. The new-name rule is the real
+  lexer — one identifier token — which accepts `proc` and `verb` because a var by either name
+  compiles: probed against 516.1686 and pinned as `ok/parsing.dm`'s structural-word check rather
+  than guessed from the keyword list. Surfaces in the same pass: `Workspace.RenameAt`,
+  `dm_rename_at` + `RenameJson` + header + hpp wrapper + smoke checks, LSP `rename` (provable
+  edits only; refusal and uncertain count via `window/showMessage`, which the standard response
+  has no field for) + `dm/rename` with the full list, and `dmc rename` as the arbiter. Six unit
+  tests; the smoke test pins the colon-access site staying unedited. On mlaas: 20 provable edits,
+  10 uncertain — 7 prose strings, an `icon_state = "health"` that shares the var's spelling and
+  must not be renamed, and two untyped receivers of which one (`usr.health`) is our own
+  conservatism: `Binder.ReceiverType` has no `usr` case though `usr` is provably `/mob`, recorded
+  as an open item since fixing it turns on `usr` member checking everywhere.
+- **2026-08-13** — **CS1591 reversed, the user's call: all 192 undocumented public members got
+  real doc comments and the suppression is gone**, so an undocumented public API now fails the
+  build. The comments carry facts rather than boilerplate — zero-based-ness, encoding units,
+  `ChildCount` describing what exists versus what `Children` carries, `End` exclusive — drawn
+  from the implementations, not the names.

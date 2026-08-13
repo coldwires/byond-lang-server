@@ -8,7 +8,7 @@ namespace Dm.Core.Includes;
 /// <summary>
 /// The target of one <c>#include</c>.
 /// </summary>
-public readonly struct IncludeDirective
+internal readonly struct IncludeDirective
 {
     public IncludeDirective(string target, bool isLibrary, TextSpan span, TextSpan targetSpan = default)
     {

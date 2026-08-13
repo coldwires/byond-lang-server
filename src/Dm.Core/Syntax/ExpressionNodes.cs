@@ -3,14 +3,14 @@ using Dm.Core.Text;
 
 namespace Dm.Core.Syntax;
 
-public abstract class ExpressionSyntax : SyntaxNode
+internal abstract class ExpressionSyntax : SyntaxNode
 {
     protected ExpressionSyntax(TextSpan span) : base(span)
     {
     }
 }
 
-public enum LiteralKind
+internal enum LiteralKind
 {
     Number,
     String,
@@ -19,7 +19,7 @@ public enum LiteralKind
 }
 
 /// <summary>A number, a string with no interpolation, a resource literal, or <c>null</c>.</summary>
-public sealed class LiteralExpressionSyntax : ExpressionSyntax
+internal sealed class LiteralExpressionSyntax : ExpressionSyntax
 {
     public LiteralExpressionSyntax(LiteralKind kind, string text, TextSpan span) : base(span)
     {
@@ -36,7 +36,7 @@ public sealed class LiteralExpressionSyntax : ExpressionSyntax
 }
 
 /// <summary>A bare name, including <c>src</c>, <c>usr</c>, <c>world</c> and <c>global</c>.</summary>
-public sealed class IdentifierExpressionSyntax : ExpressionSyntax
+internal sealed class IdentifierExpressionSyntax : ExpressionSyntax
 {
     public IdentifierExpressionSyntax(string name, TextSpan span) : base(span) => Name = name;
 
@@ -50,7 +50,7 @@ public sealed class IdentifierExpressionSyntax : ExpressionSyntax
 /// Only paths with a leading separator get here. A bare <c>a.b</c> is member access, not a path —
 /// PLAN.md §4a, "no leading separator means it is not a path at all".
 /// </remarks>
-public sealed class PathExpressionSyntax : ExpressionSyntax
+internal sealed class PathExpressionSyntax : ExpressionSyntax
 {
     public PathExpressionSyntax(PathSyntax path) : base(path.Span) => Path = path;
 
@@ -60,7 +60,7 @@ public sealed class PathExpressionSyntax : ExpressionSyntax
 }
 
 /// <summary>The bare <c>.</c>, which is the implicit return value of the enclosing proc.</summary>
-public sealed class ReturnValueExpressionSyntax : ExpressionSyntax
+internal sealed class ReturnValueExpressionSyntax : ExpressionSyntax
 {
     public ReturnValueExpressionSyntax(TextSpan span) : base(span)
     {
@@ -69,7 +69,7 @@ public sealed class ReturnValueExpressionSyntax : ExpressionSyntax
     public override string ToString() => ".";
 }
 
-public enum MemberAccessKind
+internal enum MemberAccessKind
 {
     /// <summary><c>.</c> — checked against the declared type.</summary>
     Dot,
@@ -91,7 +91,7 @@ public enum MemberAccessKind
 /// <remarks>
 /// <see cref="Target"/> is null for the leading forms <c>::A</c> and <c>::A()</c>.
 /// </remarks>
-public sealed class MemberAccessExpressionSyntax : ExpressionSyntax
+internal sealed class MemberAccessExpressionSyntax : ExpressionSyntax
 {
     public MemberAccessExpressionSyntax(
         ExpressionSyntax? target,
@@ -126,7 +126,7 @@ public sealed class MemberAccessExpressionSyntax : ExpressionSyntax
 }
 
 /// <summary>An index expression, <c>L[i]</c> or the null-conditional <c>L?[i]</c>.</summary>
-public sealed class IndexExpressionSyntax : ExpressionSyntax
+internal sealed class IndexExpressionSyntax : ExpressionSyntax
 {
     public IndexExpressionSyntax(ExpressionSyntax target, ExpressionSyntax? index, bool isNullConditional, TextSpan span)
         : base(span)
@@ -148,7 +148,7 @@ public sealed class IndexExpressionSyntax : ExpressionSyntax
 /// One argument. DM allows an associative form, <c>list(a = 1, b = 2)</c>, where the name is a key
 /// rather than a parameter name, and a weighted form, <c>pick(20;"brown", 1;"albino")</c>.
 /// </summary>
-public sealed class ArgumentSyntax : SyntaxNode
+internal sealed class ArgumentSyntax : SyntaxNode
 {
     public ArgumentSyntax(
         ExpressionSyntax? name,
@@ -180,7 +180,7 @@ public sealed class ArgumentSyntax : SyntaxNode
     public ExpressionSyntax? Weight { get; }
 }
 
-public sealed class InvocationExpressionSyntax : ExpressionSyntax
+internal sealed class InvocationExpressionSyntax : ExpressionSyntax
 {
     public InvocationExpressionSyntax(ExpressionSyntax target, IReadOnlyList<ArgumentSyntax> arguments, TextSpan span)
         : base(span)
@@ -202,7 +202,7 @@ public sealed class InvocationExpressionSyntax : ExpressionSyntax
 /// dm.exe 516.1666, see PLAN.md §8. <see cref="Arguments"/> being empty therefore does not mean the
 /// parent is called with nothing.
 /// </remarks>
-public sealed class ParentCallExpressionSyntax : ExpressionSyntax
+internal sealed class ParentCallExpressionSyntax : ExpressionSyntax
 {
     public ParentCallExpressionSyntax(IReadOnlyList<ArgumentSyntax> arguments, TextSpan span) : base(span)
         => Arguments = arguments;
@@ -210,7 +210,7 @@ public sealed class ParentCallExpressionSyntax : ExpressionSyntax
     public IReadOnlyList<ArgumentSyntax> Arguments { get; }
 }
 
-public enum UnaryOperatorKind
+internal enum UnaryOperatorKind
 {
     Not,
     Negate,
@@ -227,7 +227,7 @@ public enum UnaryOperatorKind
     AddressOf,
 }
 
-public sealed class UnaryExpressionSyntax : ExpressionSyntax
+internal sealed class UnaryExpressionSyntax : ExpressionSyntax
 {
     public UnaryExpressionSyntax(UnaryOperatorKind kind, ExpressionSyntax operand, TextSpan span) : base(span)
     {
@@ -243,7 +243,7 @@ public sealed class UnaryExpressionSyntax : ExpressionSyntax
 }
 
 /// <summary>A binary operator application. <c>in</c> is one of these, at the lowest precedence.</summary>
-public sealed class BinaryExpressionSyntax : ExpressionSyntax
+internal sealed class BinaryExpressionSyntax : ExpressionSyntax
 {
     public BinaryExpressionSyntax(ExpressionSyntax left, TokenKind operatorToken, ExpressionSyntax right, TextSpan span)
         : base(span)
@@ -265,7 +265,7 @@ public sealed class BinaryExpressionSyntax : ExpressionSyntax
 /// An assignment. Kept separate from <see cref="BinaryExpressionSyntax"/> because it is
 /// right-associative and because its left side is a target rather than a value.
 /// </summary>
-public sealed class AssignmentExpressionSyntax : ExpressionSyntax
+internal sealed class AssignmentExpressionSyntax : ExpressionSyntax
 {
     public AssignmentExpressionSyntax(
         ExpressionSyntax target,
@@ -286,7 +286,7 @@ public sealed class AssignmentExpressionSyntax : ExpressionSyntax
     public ExpressionSyntax Value { get; }
 }
 
-public sealed class ConditionalExpressionSyntax : ExpressionSyntax
+internal sealed class ConditionalExpressionSyntax : ExpressionSyntax
 {
     public ConditionalExpressionSyntax(
         ExpressionSyntax condition,
@@ -312,7 +312,7 @@ public sealed class ConditionalExpressionSyntax : ExpressionSyntax
 /// <see cref="Type"/> is null for the bare <c>new</c> used when the target's type is already known,
 /// as in <c>var/list/L = new</c>. It can also be a <see cref="ModifiedTypeExpressionSyntax"/>.
 /// </remarks>
-public sealed class NewExpressionSyntax : ExpressionSyntax
+internal sealed class NewExpressionSyntax : ExpressionSyntax
 {
     public NewExpressionSyntax(ExpressionSyntax? type, IReadOnlyList<ArgumentSyntax> arguments, TextSpan span)
         : base(span)
@@ -334,7 +334,7 @@ public sealed class NewExpressionSyntax : ExpressionSyntax
 /// elsewhere in DM, and <c>;</c> separates entries written on one line. Verified against dm.exe
 /// 516.1666, see PLAN.md §8.
 /// </remarks>
-public sealed class ModifiedTypeExpressionSyntax : ExpressionSyntax
+internal sealed class ModifiedTypeExpressionSyntax : ExpressionSyntax
 {
     public ModifiedTypeExpressionSyntax(
         ExpressionSyntax type,
@@ -353,7 +353,7 @@ public sealed class ModifiedTypeExpressionSyntax : ExpressionSyntax
 }
 
 /// <summary>One piece of an interpolated string: either literal text or an embedded expression.</summary>
-public sealed class InterpolatedStringPartSyntax : SyntaxNode
+internal sealed class InterpolatedStringPartSyntax : SyntaxNode
 {
     public InterpolatedStringPartSyntax(string? text, ExpressionSyntax? expression, TextSpan span) : base(span)
     {
@@ -369,7 +369,7 @@ public sealed class InterpolatedStringPartSyntax : SyntaxNode
 }
 
 /// <summary>A string containing at least one <c>[expression]</c> hole.</summary>
-public sealed class InterpolatedStringExpressionSyntax : ExpressionSyntax
+internal sealed class InterpolatedStringExpressionSyntax : ExpressionSyntax
 {
     public InterpolatedStringExpressionSyntax(IReadOnlyList<InterpolatedStringPartSyntax> parts, TextSpan span)
         : base(span)
@@ -385,7 +385,7 @@ public sealed class InterpolatedStringExpressionSyntax : ExpressionSyntax
 /// The clause constrains what the call accepts, and on a proc declaration it also gives the return
 /// type the binder needs — <c>.</c> degrades to <c>:</c> without one, see PLAN.md §4a.
 /// </remarks>
-public sealed class AsExpressionSyntax : ExpressionSyntax
+internal sealed class AsExpressionSyntax : ExpressionSyntax
 {
     public AsExpressionSyntax(ExpressionSyntax expression, IReadOnlyList<string> inputTypes, TextSpan span)
         : base(span)
@@ -401,7 +401,7 @@ public sealed class AsExpressionSyntax : ExpressionSyntax
 }
 
 /// <summary>Stands in for an expression that could not be parsed, so recovery has something to return.</summary>
-public sealed class ErrorExpressionSyntax : ExpressionSyntax
+internal sealed class ErrorExpressionSyntax : ExpressionSyntax
 {
     public ErrorExpressionSyntax(TextSpan span) : base(span)
     {

@@ -29,7 +29,7 @@ namespace Dm.Core.Binding;
 /// gives up otherwise rather than guessing.
 /// </para>
 /// </remarks>
-public static class TypeInference
+internal static class TypeInference
 {
     /// <summary>
     /// The <c>as</c> input types that name a real type in the tree.

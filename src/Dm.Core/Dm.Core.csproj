@@ -9,8 +9,13 @@
       constraint binds here.
     -->
     <IsAotCompatible>true</IsAotCompatible>
+    <!--
+      CS1591 is deliberately NOT suppressed: every public member was documented on 2026-08-13
+      (192 comments, the user's call), so a new public API without a doc comment fails the build
+      under TreatWarningsAsErrors. If this ever needs a NoWarn again, the surface has drifted -
+      shrink it or document it rather than silencing the gate.
+    -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +25,13 @@
       to change.
     -->
     <InternalsVisibleTo Include="Dm.Core.Tests" />
+    <!--
+      dmc is the debug driver and the arbiter, and its instrumentation commands (scan, outline,
+      preprocess, the raw tree mode) deliberately reach the lexer, parser and preprocessor layers
+      that are NOT the supported API. The supported surface is what Dm.Native and Dm.Lsp consume,
+      PLAN.md's §3 sync rule, and dmc seeing past it is the point of dmc.
+    -->
+    <InternalsVisibleTo Include="dmc" />
   </ItemGroup>
 
   <ItemGroup>

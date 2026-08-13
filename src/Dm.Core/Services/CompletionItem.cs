@@ -9,6 +9,7 @@ public enum CompletionKind
     /// <summary>A var on a type, or a global.</summary>
     Variable = 1,
 
+    /// <summary>A proc, builtin or declared.</summary>
     Proc = 2,
 
     /// <summary>A verb, which a player can invoke directly.</summary>
@@ -118,22 +119,17 @@ public enum TypeSource
     /// <summary>A parameter's <c>as</c> clause: <c>f(n as num)</c>. Written, and still unchecked.</summary>
     InputFilter = 4,
 
-    /// <summary>
-    /// A bare type name used as a receiver: <c>mob.</c>.
-    /// </summary>
-    /// <remarks>
-    /// The one route where NO edit makes the expression legal. <c>mob.loc</c> is "undefined var" —
-    /// a bare <c>mob</c> is neither a variable nor a path, since §4a needs a leading separator for
-    /// that — so unlike an untyped local, which becomes valid the moment a type is written, this
-    /// cannot compile in any form. Offered anyway because exploring a type's members by name is
-    /// useful and PLAN §1 asks for it, and marked so a client can say so.
-    /// </remarks>
-    BareTypeName = 5,
+    // 5 was BareTypeName — `mob.` offering /mob's members though dm.exe calls it "undefined var".
+    // Removed 2026-08-13 with the fallback that produced it: a global var lookup took its place,
+    // which answers the idiomatic `var/mob/mob` shadow through the var instead of by coincidence.
+    // The number is not reused so a client still switching on the old word cannot be handed a
+    // different meaning.
 }
 
 /// <summary>One entry in a completion list.</summary>
 public sealed class CompletionItem
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public CompletionItem(
         string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "",
         bool inferred = false, int rank = 0, string declaredType = "", string initialValue = "",
@@ -161,8 +157,10 @@ public sealed class CompletionItem
     /// </remarks>
     internal int Rank { get; }
 
+    /// <summary>The text to insert, which is also the label.</summary>
     public string Name { get; }
 
+    /// <summary>What the item is, so a client can pick an icon.</summary>
     public CompletionKind Kind { get; }
 
     /// <summary>Where it came from, or its signature. Empty when there is nothing useful to add.</summary>
@@ -232,12 +230,14 @@ public sealed class CompletionItem
     /// </remarks>
     public TypeSource TypeSource { get; }
 
+    /// <summary>Debug rendering: kind and name.</summary>
     public override string ToString() => $"{Kind} {Name}";
 }
 
 /// <summary>A completion list plus the context that produced it.</summary>
 public sealed class CompletionResult
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public CompletionResult(
         CompletionContext context,
         System.Collections.Generic.IReadOnlyList<CompletionItem> items,
@@ -248,6 +248,7 @@ public sealed class CompletionResult
         Truncated = truncated;
     }
 
+    /// <summary>Which rule chose the items — <see cref="CompletionContext.None"/> when the list is empty.</summary>
     public CompletionContext Context { get; }
 
     /// <summary>

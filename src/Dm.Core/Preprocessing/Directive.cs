@@ -5,7 +5,7 @@ using Dm.Core.Text;
 
 namespace Dm.Core.Preprocessing;
 
-public enum DirectiveKind
+internal enum DirectiveKind
 {
     /// <summary>A <c>#</c> followed by a name we do not recognise.</summary>
     Unknown,
@@ -33,7 +33,7 @@ public enum DirectiveKind
 /// Layout tokens are excluded: the range stops at the newline that ends the logical line, with line
 /// continuations already folded away by the lexer.
 /// </remarks>
-public readonly struct Directive
+internal readonly struct Directive
 {
     public Directive(
         DirectiveKind kind,
@@ -81,7 +81,7 @@ public readonly struct Directive
 /// is not mistaken for a directive. Both occur in real code — a library documenting its own usage in
 /// a block comment, and commented-out includes left in <c>.dme</c> files.
 /// </remarks>
-public static class DirectiveScanner
+internal static class DirectiveScanner
 {
     public static IReadOnlyList<Directive> Scan(LexResult lex)
     {

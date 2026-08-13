@@ -9,7 +9,7 @@ namespace Dm.Core.Syntax;
 /// a leading <c>/</c> is absolute from root, a leading <c>.</c> is an upward search through the code
 /// tree, and no leading separator means the path is relative to the enclosing indentation.
 /// </remarks>
-public enum PathAnchor
+internal enum PathAnchor
 {
     /// <summary>No leading separator; relative to the enclosing block.</summary>
     Relative,
@@ -26,7 +26,7 @@ public enum PathAnchor
 /// Mid-path, <c>/</c> and <c>.</c> are the same token, so the segments are stored without recording
 /// which separator was written. The anchor is kept because leading position is where they differ.
 /// </remarks>
-public sealed class PathSyntax
+internal sealed class PathSyntax
 {
     public PathSyntax(PathAnchor anchor, IReadOnlyList<string> segments, TextSpan span, IReadOnlyList<TextSpan> segmentSpans)
     {
@@ -53,8 +53,10 @@ public sealed class PathSyntax
     public override string ToString() => Text;
 }
 
+/// <summary>Base of every syntax node. Public only as the opaque base of <see cref="FileSyntax"/>; the node family is internal.</summary>
 public abstract class SyntaxNode
 {
+    /// <summary>Records the node's span.</summary>
     protected SyntaxNode(TextSpan span) => Span = span;
 
     /// <summary>Span in the file this node was parsed from.</summary>
@@ -64,13 +66,13 @@ public abstract class SyntaxNode
 /// <summary>Everything declared in one file.</summary>
 public sealed class FileSyntax : SyntaxNode
 {
-    public FileSyntax(IReadOnlyList<DeclarationSyntax> declarations, TextSpan span) : base(span)
+    internal FileSyntax(IReadOnlyList<DeclarationSyntax> declarations, TextSpan span) : base(span)
         => Declarations = declarations;
 
-    public IReadOnlyList<DeclarationSyntax> Declarations { get; }
+    internal IReadOnlyList<DeclarationSyntax> Declarations { get; }
 }
 
-public abstract class DeclarationSyntax : SyntaxNode
+internal abstract class DeclarationSyntax : SyntaxNode
 {
     protected DeclarationSyntax(PathSyntax path, TextSpan span) : base(span) => Path = path;
 
@@ -84,7 +86,7 @@ public abstract class DeclarationSyntax : SyntaxNode
 }
 
 /// <summary>A type node such as <c>/obj/item</c>, possibly with members indented beneath it.</summary>
-public sealed class TypeDeclarationSyntax : DeclarationSyntax
+internal sealed class TypeDeclarationSyntax : DeclarationSyntax
 {
     public TypeDeclarationSyntax(
         PathSyntax path,
@@ -114,7 +116,7 @@ public sealed class TypeDeclarationSyntax : DeclarationSyntax
 /// One <c>var/</c> can introduce several names — <c>var/a = 1, b = 2</c> — so a group is modelled as
 /// a parent with children rather than as separate declarations, which keeps the outline readable.
 /// </remarks>
-public sealed class VarDeclarationSyntax : DeclarationSyntax
+internal sealed class VarDeclarationSyntax : DeclarationSyntax
 {
     public VarDeclarationSyntax(
         PathSyntax path,
@@ -167,7 +169,7 @@ public sealed class VarDeclarationSyntax : DeclarationSyntax
 }
 
 /// <summary>A proc or verb declaration.</summary>
-public sealed class ProcDeclarationSyntax : DeclarationSyntax
+internal sealed class ProcDeclarationSyntax : DeclarationSyntax
 {
     public ProcDeclarationSyntax(
         PathSyntax path,
@@ -200,7 +202,7 @@ public sealed class ProcDeclarationSyntax : DeclarationSyntax
 }
 
 /// <summary>One parameter in a proc or verb signature.</summary>
-public sealed class ParameterSyntax : SyntaxNode
+internal sealed class ParameterSyntax : SyntaxNode
 {
     public ParameterSyntax(
         string name,

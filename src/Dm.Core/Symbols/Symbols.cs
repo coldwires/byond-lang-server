@@ -5,7 +5,7 @@ using Dm.Core.Text;
 namespace Dm.Core.Symbols;
 
 /// <summary>Where a declaration was written. A type is legitimately declared in many files.</summary>
-public readonly struct DeclarationSite
+internal readonly struct DeclarationSite
 {
     public DeclarationSite(string file, TextSpan span, TextSpan nameSpan)
     {
@@ -24,7 +24,7 @@ public readonly struct DeclarationSite
     public override string ToString() => $"{File}{Span}";
 }
 
-public sealed class VarSymbol
+internal sealed class VarSymbol
 {
     internal VarSymbol(string name, TypePath? declaredType, IReadOnlyList<string> modifiers, DeclarationSite site)
     {
@@ -94,7 +94,7 @@ public sealed class VarSymbol
 /// declaring <c>proc/</c> twice on one type is a duplicate-definition error, which needs the count
 /// to diagnose at M11.
 /// </remarks>
-public sealed class ProcSymbol
+internal sealed class ProcSymbol
 {
     private readonly List<DeclarationSite> _sites = new();
 
@@ -174,8 +174,10 @@ public sealed class TypeSymbol
         Parent = parent;
     }
 
+    /// <summary>The normalised absolute path that keys this node in the tree.</summary>
     public TypePath Path { get; }
 
+    /// <summary>The path's last segment. Empty for the root.</summary>
     public string Name => Path.Name;
 
     /// <summary>The implicit parent, from the path. <c>/obj/item</c>'s is <c>/obj</c>.</summary>
@@ -207,17 +209,18 @@ public sealed class TypeSymbol
     /// </summary>
     public bool IsBuiltin { get; internal set; }
 
+    /// <summary>Direct path children, in the order the tree created them.</summary>
     public IReadOnlyList<TypeSymbol> Children => _children;
 
-    public IReadOnlyCollection<VarSymbol> Vars => _vars.Values;
+    internal IReadOnlyCollection<VarSymbol> Vars => _vars.Values;
 
-    public IReadOnlyCollection<ProcSymbol> Procs => _procs.Values;
+    internal IReadOnlyCollection<ProcSymbol> Procs => _procs.Values;
 
     /// <summary>
     /// Every place this type was declared. Empty for a node that only exists because something
     /// deeper was declared — <c>/obj/item/sword</c> alone brings <c>/obj/item</c> into being.
     /// </summary>
-    public IReadOnlyList<DeclarationSite> Sites => _sites;
+    internal IReadOnlyList<DeclarationSite> Sites => _sites;
 
     /// <summary>True when the type was declared outright rather than implied by a descendant.</summary>
     public bool IsDeclared => _sites.Count > 0;
@@ -256,7 +259,7 @@ public sealed class TypeSymbol
     /// The sites that DECLARED a var on this type, in include order. Empty for a name reached only
     /// by bare override, and for a builtin.
     /// </summary>
-    public IReadOnlyList<DeclarationSite> VarDeclaringSites(string name)
+    internal IReadOnlyList<DeclarationSite> VarDeclaringSites(string name)
         => _varDeclarationSites.TryGetValue(name, out List<DeclarationSite>? sites)
             ? sites
             : System.Array.Empty<DeclarationSite>();
@@ -271,9 +274,10 @@ public sealed class TypeSymbol
         return proc;
     }
 
-    public VarSymbol? FindVar(string name) => _vars.GetValueOrDefault(name);
+    internal VarSymbol? FindVar(string name) => _vars.GetValueOrDefault(name);
 
-    public ProcSymbol? FindProc(string name) => _procs.GetValueOrDefault(name);
+    internal ProcSymbol? FindProc(string name) => _procs.GetValueOrDefault(name);
 
+    /// <summary>The path text, such as <c>/obj/item</c>.</summary>
     public override string ToString() => Path.Text;
 }

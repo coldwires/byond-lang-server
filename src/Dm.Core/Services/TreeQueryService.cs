@@ -15,6 +15,7 @@ namespace Dm.Core.Services;
 /// </remarks>
 public sealed class TreeNode
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public TreeNode(
         string path,
         string name,
@@ -37,8 +38,10 @@ public sealed class TreeNode
         Children = children;
     }
 
+    /// <summary>The full type path, such as <c>/obj/item</c>; <c>/</c> for the root.</summary>
     public string Path { get; }
 
+    /// <summary>The last path segment alone; <c>/</c> for the root.</summary>
     public string Name { get; }
 
     /// <summary>
@@ -47,25 +50,35 @@ public sealed class TreeNode
     /// </summary>
     public bool Declared { get; }
 
+    /// <summary>True when BYOND declares the type rather than the project.</summary>
     public bool Builtin { get; }
 
     /// <summary>Where this type inherits from, which is not always its path parent.</summary>
     public string? ParentType { get; }
 
+    /// <summary>
+    /// How many children exist in the tree, not how many <see cref="Children"/> holds — a
+    /// depth-limited node still says whether to draw an expander.
+    /// </summary>
     public int ChildCount { get; }
 
+    /// <summary>Vars declared on this type itself, inherited ones not counted.</summary>
     public int VarCount { get; }
 
+    /// <summary>Procs declared on this type itself, inherited ones not counted.</summary>
     public int ProcCount { get; }
 
+    /// <summary>Child nodes, empty once the requested depth runs out.</summary>
     public IReadOnlyList<TreeNode> Children { get; }
 
+    /// <summary>Debug rendering: the path.</summary>
     public override string ToString() => Path;
 }
 
 /// <summary>One var or proc in a members response.</summary>
 public sealed class MemberEntry
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public MemberEntry(
         string name,
         string detail,
@@ -88,13 +101,16 @@ public sealed class MemberEntry
         NameSpan = nameSpan;
     }
 
+    /// <summary>The member's bare name, no path.</summary>
     public string Name { get; }
 
     /// <summary>The declaration as written: a signature for a proc, a declared type for a var.</summary>
     public string Detail { get; }
 
+    /// <summary>Var, proc or verb.</summary>
     public SymbolKind Kind { get; }
 
+    /// <summary>True when BYOND declares the member rather than the project.</summary>
     public bool Builtin { get; }
 
     /// <summary>True when the member comes from an ancestor rather than the type asked about.</summary>
@@ -103,12 +119,16 @@ public sealed class MemberEntry
     /// <summary>The type the member is declared on, which is what <see cref="Inherited"/> points at.</summary>
     public string Owner { get; }
 
+    /// <summary>The declaring file. A builtin has no source to open, so its value means nothing.</summary>
     public string File { get; }
 
+    /// <summary>The whole declaration's span in that file.</summary>
     public TextSpan Span { get; }
 
+    /// <summary>The name alone, which is where a caret should land.</summary>
     public TextSpan NameSpan { get; }
 
+    /// <summary>Debug rendering: owner and name.</summary>
     public override string ToString() => $"{Owner} {Name}";
 }
 
@@ -120,20 +140,24 @@ public sealed class MemberEntry
 /// </remarks>
 public sealed class SubtypeListing
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public SubtypeListing(IReadOnlyList<TreeNode> types, bool truncated)
     {
         Types = types;
         Truncated = truncated;
     }
 
+    /// <summary>The matching subtypes, childless nodes, in tree order.</summary>
     public IReadOnlyList<TreeNode> Types { get; }
 
+    /// <summary>True when the cap cut the list. Reported rather than left to infer from the count.</summary>
     public bool Truncated { get; }
 }
 
 /// <summary>A type's members, as one response.</summary>
 public sealed class TypeMembers
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public TypeMembers(string path, IReadOnlyList<MemberEntry> vars, IReadOnlyList<MemberEntry> procs)
     {
         Path = path;
@@ -141,10 +165,13 @@ public sealed class TypeMembers
         Procs = procs;
     }
 
+    /// <summary>The type asked about, as a full path.</summary>
     public string Path { get; }
 
+    /// <summary>Vars, own before inherited.</summary>
     public IReadOnlyList<MemberEntry> Vars { get; }
 
+    /// <summary>Procs and verbs, own before inherited.</summary>
     public IReadOnlyList<MemberEntry> Procs { get; }
 }
 

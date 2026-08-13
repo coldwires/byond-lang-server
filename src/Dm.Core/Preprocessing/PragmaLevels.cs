@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace Dm.Core.Preprocessing;
 
 /// <summary>What a <c>#pragma warn|ignore|error</c> did to one warning name.</summary>
-public enum PragmaLevel
+internal enum PragmaLevel
 {
     /// <summary>Reported as the compiler reports it. The default for every name.</summary>
     Warn = 0,
@@ -48,7 +48,7 @@ public enum PragmaLevel
 /// can carry <c>#pragma ignore 9999</c> forever and never learn it does nothing.
 /// </para>
 /// </remarks>
-public sealed class PragmaLevels
+internal sealed class PragmaLevels
 {
     /// <summary>
     /// Every numeric warning id the compiler has, mapped to its <c>#pragma</c> name.

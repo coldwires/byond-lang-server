@@ -981,6 +981,59 @@ internal static unsafe class Exports
     }
 
     /// <summary>
+    /// Renames the symbol at a position: the provable edits, plus the sites rename refuses to
+    /// guess about. Added in ABI 0.27.
+    /// </summary>
+    /// <remarks>
+    /// A refusal is <c>DM_OK</c> with a <c>refusal</c> word rather than an error, because "this
+    /// cannot be renamed" is an answer. The <c>uncertain</c> list is the point of the call: `:`
+    /// accesses, untyped receivers and string dispatch can hold live sites no resolver can prove,
+    /// and applying the edits without showing that list is how a game breaks silently.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_rename_at")]
+    public static int RenameAt(
+        IntPtr workspace,
+        byte* filePath,
+        int line,
+        int character,
+        int encoding,
+        byte* newName,
+        byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            if (encoding is not ((int)PositionEncoding.Utf8 or (int)PositionEncoding.Utf16))
+                return Fail(DmStatus.InvalidArgument, $"unknown position encoding {encoding}");
+
+            string? path = NativeStrings.Read(filePath);
+            if (string.IsNullOrWhiteSpace(path))
+                return Fail(DmStatus.InvalidArgument, "file is null or empty");
+
+            string? replacement = NativeStrings.Read(newName);
+            if (string.IsNullOrEmpty(replacement))
+                return Fail(DmStatus.InvalidArgument, "new_name is null or empty");
+
+            RenameResult result = ws.RenameAt(
+                path, line, character, replacement, (PositionEncoding)encoding);
+
+            *outJson = NativeStrings.Allocate(RenameJson.Write(ws, result, (PositionEncoding)encoding));
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            return Fail(Classify(ex), ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Searches the whole project for symbols by name. Added in ABI 0.8.
     /// </summary>
     /// <remarks>

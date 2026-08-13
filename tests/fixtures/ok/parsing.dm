@@ -206,6 +206,17 @@
 		var/static/x = 7
 		return final + x
 
+	// The STRUCTURAL words work as variable names too: `proc` and `verb` lex
+	// as ordinary identifiers (mob.proc.attack() depends on that), and with a
+	// value on the same line each is a var, not a block header - the header
+	// reading needs the line to end at the word. Compiler-verified 2026-08-13
+	// while validating rename's new-name rule, which accepts them because
+	// dm.exe does.
+	var/proc = 3
+	var/verb = 4
+	proc/structural_word_as_name()
+		return proc + verb
+
 	// `locate(X) in container` is one grammatical unit, legal inside a ternary
 	// branch where a bare `in` is rejected with "expected ':'". tgstation
 	// writes `cond ? locate(X) in L : null` three times. The value is the
@@ -323,6 +334,7 @@
 	CHECK("keyword as a type segment", T.marker, "thrown")
 	CHECK("keyword type via istype", istype(T, /datum/parsing/throw), 1)
 	CHECK("modifier word as a name", P.modifier_word_as_name(5), 17)
+	CHECK("structural word as a name", P.structural_word_as_name(), 7)
 	CHECK("locate-in inside a ternary, hit", P.locate_in_ternary(1), "found")
 	CHECK("locate-in inside a ternary, miss", P.locate_in_ternary(0), "none")
 	CHECK("statement ternary-then-in, true branch", P.ternary_then_in_statement(1), 5)

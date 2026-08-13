@@ -29,7 +29,7 @@ namespace Dm.Core.Preprocessing;
 /// file-effect memoization described in PLAN.md §6 M9, which is a larger change.
 /// </para>
 /// </remarks>
-public sealed class ExpandedRunCache
+internal sealed class ExpandedRunCache
 {
     private readonly Dictionary<string, Entry> _entries;
 

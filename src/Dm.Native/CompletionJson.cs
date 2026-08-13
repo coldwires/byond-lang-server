@@ -47,7 +47,6 @@ internal static class CompletionJson
                 TypeSource.Initializer => "initializer",
                 TypeSource.Assignment => "assignment",
                 TypeSource.InputFilter => "as",
-                TypeSource.BareTypeName => "bareTypeName",
                 _ => "none",
             }).Append('"');
 

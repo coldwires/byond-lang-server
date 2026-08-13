@@ -1160,6 +1160,67 @@ static void test_diagnostics(const fs::path &dir)
 }
 
 // ---------------------------------------------------------------------------
+// Rename. Best-effort by design: "edits" holds only the proven sites, and the
+// "uncertain" list - colon accesses, untyped receivers, string dispatch - is
+// the half a client must SHOW rather than apply. A refusal is DM_OK with a
+// word, because "this cannot be renamed" is an answer.
+// ---------------------------------------------------------------------------
+static void test_rename(const fs::path &dir)
+{
+    const fs::path dme = dir / "rename.dme";
+    {
+        std::ofstream out(dme);
+        out << "#include \"rename.dm\"\n";
+    }
+    {
+        std::ofstream out(dir / "rename.dm");
+        out << "/mob/guy\n\tvar/hp = 1\n\tproc/heal(amount)\n\t\thp += amount\n";
+        out << "/proc/f()\n\tvar/mob/guy/g = new\n\tg.hp = 5\n\treturn g:hp\n";
+    }
+
+    std::printf("rename\n");
+
+    dm_workspace ws = nullptr;
+    check(dm_workspace_open(dme.string().c_str(), &ws) == DM_OK, "rename: workspace opens");
+
+    // Line 1 (0-based) is `\tvar/hp = 1`; character 6 sits on `hp`.
+    char *json = nullptr;
+    check(dm_rename_at(ws, "rename.dm", 1, 6, DM_ENCODING_UTF16, "health", &json) == DM_OK,
+          "rename: call succeeds");
+
+    if (json)
+    {
+        const std::string doc(json);
+        check(doc.find("\"refusal\":\"none\"") != std::string::npos, "rename: not refused");
+        check(doc.find("/mob/guy/hp") != std::string::npos, "rename: canonical target named");
+        check(doc.find("\"edits\":[{") != std::string::npos, "rename: edits produced");
+        check(doc.find("\"uncertain\":[{") != std::string::npos,
+              "rename: the colon access is reported, not edited");
+        check(doc.find("colonAccess") != std::string::npos, "rename: with its reason");
+        dm_free(json);
+    }
+
+    // A keyword is not an identifier, and the refusal is data rather than an error.
+    json = nullptr;
+    check(dm_rename_at(ws, "rename.dm", 1, 6, DM_ENCODING_UTF16, "var", &json) == DM_OK,
+          "rename: a keyword new-name still answers DM_OK");
+
+    if (json)
+    {
+        check(std::string(json).find("invalidName") != std::string::npos,
+              "rename: and says invalidName");
+        dm_free(json);
+    }
+
+    char *rejected = reinterpret_cast<char *>(0x1);
+    check(dm_rename_at(ws, "rename.dm", 1, 6, 99, "x", &rejected) == DM_ERR_INVALID_ARG,
+          "rename: unknown encoding rejected");
+    check(rejected == nullptr, "rename: out-param cleared on failure");
+
+    dm_workspace_close(ws);
+}
+
+// ---------------------------------------------------------------------------
 // Signature help. The popup for an open argument list: which proc, and which
 // parameter the caret sits in. Nothing-to-show is an empty object with DM_OK,
 // as with hover.
@@ -1426,6 +1487,7 @@ int main()
     test_definition(dir);
     test_hover(dir);
     test_signature(dir);
+    test_rename(dir);
     test_diagnostics(dir);
     test_references(dir);
     test_workspace_symbols(dir);

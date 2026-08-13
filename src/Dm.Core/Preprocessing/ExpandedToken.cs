@@ -12,7 +12,7 @@ namespace Dm.Core.Preprocessing;
 /// diagnostic and every go-to-definition in macro-heavy code lands on the macro's definition rather
 /// than on the code the author is looking at.
 /// </remarks>
-public sealed class MacroExpansion
+internal sealed class MacroExpansion
 {
     internal MacroExpansion(MacroDefinition macro, SourceText useSource, TextSpan useSpan, MacroExpansion? parent)
     {
@@ -58,7 +58,7 @@ public sealed class MacroExpansion
 /// <summary>
 /// A token after preprocessing, carrying enough to map it back to source.
 /// </summary>
-public readonly struct ExpandedToken
+internal readonly struct ExpandedToken
 {
     public ExpandedToken(TokenKind kind, SourceText source, TextSpan span, MacroExpansion? expansion)
     {

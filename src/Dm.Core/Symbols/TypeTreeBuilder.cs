@@ -27,7 +27,7 @@ namespace Dm.Core.Symbols;
 /// which is what <see cref="ProcSymbol.DeclaringCount"/> records.</description></item>
 /// </list>
 /// </remarks>
-public static class TypeTreeBuilder
+internal static class TypeTreeBuilder
 {
     /// <summary>Builds a tree from files already in include order.</summary>
     public static ObjectTree Build(
@@ -376,7 +376,7 @@ public static class TypeTreeBuilder
 /// ingredients and replays through <see cref="TypeSymbol.GetOrAddProc"/>.
 /// </para>
 /// </remarks>
-public sealed class TreeContribution
+internal sealed class TreeContribution
 {
     private readonly List<Op> _ops = new();
 

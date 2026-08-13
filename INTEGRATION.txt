@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.25  (38 exports, cdecl, six RIDs)
+ ABI version at last update: 0.27  (39 exports, cdecl, six RIDs)
  Last updated: 2026-08-11
 ================================================================================
 
@@ -60,6 +60,8 @@ WHAT YOU GET TODAY
       documents.
     - Signature help via dm_signature_at. Which proc an open argument list
       belongs to and which parameter the caret is in, exact mid-keystroke.
+    - Rename via dm_rename_at. Best-effort with the uncertainty REPORTED:
+      provable edits, plus the `:`/untyped/string sites a human must check.
     - Semantic highlighting. Colour IDs 12-15 distinguish a type name, a
       proc name, a var name and a macro name. See COLOURS below.
     - Document outline / symbols, with syntax diagnostics, via
@@ -169,8 +171,8 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.24 and
-  passing 242 checks on x64 AND x86. It covers version negotiation, string
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.27 and
+  passing 258 checks on x64 AND x86. It covers version negotiation, string
   ownership, handle lifetime including use-after-close, classification in both
   encodings, document symbols, completion, injected defines, go-to-definition,
   hover, signature help, diagnostics, the reference index, invalidation, the
@@ -626,11 +628,12 @@ WHAT YOU GET TODAY
       A word, beside "inferred", for clients that want to word the warning
       accurately:
 
-        "written"       a declared type - the only one dm.exe checks
+        "written"       a declared type - the only one dm.exe checks. A
+                        typed GLOBAL counts: a root `var/obj/machine`
+                        types `machine.` (0.26)
         "initializer"   an untyped local's `= new /obj/item`
         "assignment"    the nearest `x = ...` before the cursor
         "as"            a parameter's `as` clause
-        "bareTypeName"  a type's own name as the receiver, `mob.`
         "none"          nothing resolved it
 
       "as" is why this field exists. The author WROTE `f(n as num)` and
@@ -641,11 +644,12 @@ WHAT YOU GET TODAY
       words is telling them something false. Word that case as "you wrote
       this and the compiler will not enforce it".
 
-      "bareTypeName" is the one route where NO edit makes the expression
-      legal: `mob.loc` is "undefined var", and a bare `mob` is neither a
-      variable nor a path. An untyped local becomes valid the moment a type
-      is written; this never does. It is offered because exploring a type by
-      name is useful. Drop these if you only want completions that build.
+      "bareTypeName" existed until 0.26: `mob.` used to offer /mob's members
+      though `mob.loc` is "undefined var" to dm.exe - a bare type name is
+      neither a variable nor a path. That fallback is gone; `mob.` answers
+      an empty list unless a var of that name is in scope, which is the var
+      resolving (root `var/mob/mob` is idiomatic DM and compiles). If you
+      switched on the word, the arm is dead, not broken.
 
       Handle an unknown word by treating it as "none".
 
@@ -783,6 +787,39 @@ WHAT YOU GET TODAY
 
       ** COST ** Same as dm_complete_at: the first call after an edit
       rebuilds the object tree. The token scan itself is per-file and cheap.
+
+  dm_rename_at(ws, file, line, character, encoding, new_name, &json)
+                                                                 NEW in 0.27
+      Renames the symbol at the position: the provable edits, plus the
+      "uncertain" sites rename refuses to guess about. UTF-8 JSON, YOU FREE
+      IT with dm_free. Line and character are ZERO-BASED; spans in the
+      answer come back in the encoding you passed, spelled as the reference
+      query spells them (startLine/startChar/endLine/endChar over the OLD
+      name - write new_name there).
+
+      ** BEST-EFFORT BY DESIGN, AND THE UNCERTAIN LIST IS THE POINT. **
+      A sound rename is impossible in DM: `:` searches the whole subtype
+      tree and call("name") / text2path() dispatch on strings. "edits"
+      holds only sites PROVEN by the same resolution diagnostics and
+      references use; "uncertain" holds every site carrying the name
+      without proof, each with a reason word - "colonAccess" (`:`, `?:`,
+      `?.`, `::`), "untypedReceiver" (`.` through a call result, index or
+      untyped var), "stringLiteral" (the name as a whole word in a string).
+      SHOW that list to your user. Applying the edits and discarding it is
+      how a game breaks with no error anywhere.
+
+      A refusal is DM_OK with a "refusal" word, because "this cannot be
+      renamed" is an answer: "nothingAtPosition" (locals and parameters are
+      not indexed), "builtin", "type" (type rename is not built), or
+      "invalidName". `proc` and `verb` are ACCEPTED as new names - a var by
+      either name compiles, verified against dm.exe. Treat an unknown word
+      as refused.
+
+      Renaming any override renames the family: the target is the same
+      canonical spelling references use, so ask at any declaration or use.
+
+      ** COST ** One binder walk over every project file, plus the tree
+      build if this is the first call after an edit.
 
   dm_definition_at(ws, file, line, character, encoding, &json)   NEW in 0.6
       Where the symbol at a position is declared, as UTF-8 JSON. YOU FREE IT

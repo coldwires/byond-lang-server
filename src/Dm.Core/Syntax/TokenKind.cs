@@ -17,7 +17,7 @@ namespace Dm.Core.Syntax;
 /// <c>"[src.name] hit [target.name]"</c> requires.
 /// </para>
 /// </remarks>
-public enum TokenKind
+internal enum TokenKind
 {
     /// <summary>A character the lexer does not recognise. Never thrown on; always reported.</summary>
     Unknown = 0,

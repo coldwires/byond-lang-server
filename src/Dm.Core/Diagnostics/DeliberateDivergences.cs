@@ -18,7 +18,7 @@ namespace Dm.Core.Diagnostics;
 /// fixture that compiles clean failing a zero-invented check for a warning we meant to emit.
 /// </para>
 /// </remarks>
-public static class DeliberateDivergences
+internal static class DeliberateDivergences
 {
     private static readonly Dictionary<string, string> Reasons = new(StringComparer.Ordinal)
     {

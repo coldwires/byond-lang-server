@@ -13,7 +13,7 @@ namespace Dm.Core.Syntax;
 /// Whitespace produces no token; it is the gap between spans. Comments do produce tokens, because
 /// classification and doc-comment extraction both need them.
 /// </remarks>
-public readonly struct Token
+internal readonly struct Token
 {
     public Token(TokenKind kind, TextSpan span)
     {

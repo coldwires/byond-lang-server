@@ -32,7 +32,7 @@ namespace Dm.Core.Symbols;
 /// </description></item>
 /// </list>
 /// </remarks>
-public static class RelativePath
+internal static class RelativePath
 {
     /// <summary>
     /// Resolves <paramref name="segments"/> as a leading-<c>.</c> path from <paramref name="anchor"/>,

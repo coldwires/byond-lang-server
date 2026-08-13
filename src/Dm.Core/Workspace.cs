@@ -535,6 +535,37 @@ public sealed class Workspace : IDisposable
     }
 
     /// <summary>
+    /// Renames the symbol at a position: the provable edits, plus the sites rename refuses to
+    /// guess about. The rules are <see cref="Services.RenameService"/>'s.
+    /// </summary>
+    /// <remarks>
+    /// Instance-level because every piece lives here: the project parses, the macro table the
+    /// resolution needs, and the per-file lex the string scan reads. A file outside the project
+    /// renames within itself alone — the same boundary every other answer has in standalone mode.
+    /// </remarks>
+    public Services.RenameResult RenameAt(
+        string file,
+        int line,
+        int character,
+        string newName,
+        PositionEncoding encoding = PositionEncoding.Utf16,
+        CancellationToken cancellationToken = default)
+    {
+        Document document = GetDocument(file);
+        ObjectTree tree = GetTreeFor(file, cancellationToken);
+
+        IReadOnlyList<(string File, ParseResult Parse)> files =
+            HasEnvironmentFile && IsFileInProject(file, cancellationToken)
+                ? GetProjectParses(cancellationToken)
+                : new[] { (NormalisePath(file), document.Parse) };
+
+        return Services.RenameService.RenameAt(
+            tree, files, document, line, character, newName, encoding, cancellationToken,
+            GetMacroTable(cancellationToken),
+            f => TryGetDocument(f, out Document lexed) ? lexed.Lex : null);
+    }
+
+    /// <summary>
     /// Returns the document for a path, using a pushed buffer if there is one and reading from disk
     /// otherwise.
     /// </summary>
@@ -555,6 +586,7 @@ public sealed class Workspace : IDisposable
         return loaded;
     }
 
+    /// <summary>The non-throwing <see cref="GetDocument"/>: false instead of an exception when the file cannot be read.</summary>
     public bool TryGetDocument(string path, out Document document)
     {
         try
@@ -595,6 +627,7 @@ public sealed class Workspace : IDisposable
             : System.IO.Path.GetFullPath(System.IO.Path.Combine(RootDirectory, path));
     }
 
+    /// <summary>Releases the workspace's caches, pushed buffers included. Idempotent.</summary>
     public void Dispose()
     {
         if (_disposed)

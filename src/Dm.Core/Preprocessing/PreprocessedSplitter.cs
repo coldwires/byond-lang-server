@@ -29,7 +29,7 @@ namespace Dm.Core.Preprocessing;
 /// what decides override resolution.
 /// </para>
 /// </remarks>
-public static class PreprocessedSplitter
+internal static class PreprocessedSplitter
 {
     /// <summary>One entry per file reached, in compile order, with that file's tokens gathered.</summary>
     public static List<(string File, TokenSource Source)> Split(

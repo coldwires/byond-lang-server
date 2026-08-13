@@ -23,9 +23,9 @@ public class DirectiveScannerTests
     [InlineData("#warn text", DirectiveKind.Warn)]
     [InlineData("#error text", DirectiveKind.Error)]
     [InlineData("#pragma multiple", DirectiveKind.Pragma)]
-    public void Classifies_each_directive(string source, DirectiveKind expected)
+    public void Classifies_each_directive(string source, object expected)
     {
-        Assert.Equal(expected, Assert.Single(Scan(source)).Kind);
+        Assert.Equal((DirectiveKind)expected, Assert.Single(Scan(source)).Kind);
     }
 
     [Fact]

@@ -39,6 +39,10 @@ public sealed class Binder
     // same resolution, so the index and the diagnostics cannot disagree about what a name means.
     // Null on the diagnostics-only path, where every sink branch short-circuits to nothing.
     private readonly Action<Services.Reference>? _sink;
+
+    // The sites resolution deliberately stops at — `:`-family accesses and `.` through an unwritten
+    // type — for a caller that needs to know where proof ends rather than only where it succeeds.
+    private readonly Action<Services.UncertainSite>? _uncertain;
     private readonly string? _referenceName;
     private string _inside = "/";
 
@@ -70,12 +74,14 @@ public sealed class Binder
     /// <summary>Set while binding a `for` header, so its variable is recorded as exempt.</summary>
     private bool _declaringLoopVariable;
 
-    private Binder(ObjectTree tree, string? file, Action<Services.Reference>? sink, string? referenceName)
+    private Binder(ObjectTree tree, string? file, Action<Services.Reference>? sink, string? referenceName,
+        Action<Services.UncertainSite>? uncertain)
     {
         _tree = tree;
         _file = file;
         _sink = sink;
         _referenceName = referenceName;
+        _uncertain = uncertain;
     }
 
     /// <summary>Binds one file's declarations and returns what did not resolve.</summary>
@@ -94,14 +100,21 @@ public sealed class Binder
     /// A bare-name prefilter for the sink: only occurrences of this name are emitted, which lets a
     /// single-symbol query skip resolution work on every other name in the project.
     /// </param>
+    /// <param name="uncertain">
+    /// Receives the member accesses the walk deliberately does NOT resolve — `:`-family lookups
+    /// and `.` through a receiver with no written type — when they carry the filtered name. This
+    /// is what rename stands on: an edit needs proof, and these are exactly the sites where proof
+    /// stops. Filtered by <paramref name="referenceName"/> the same way the sink is.
+    /// </param>
     public static IReadOnlyList<Diagnostic> Bind(
         ObjectTree tree,
         FileSyntax root,
         string? file = null,
         Action<Services.Reference>? sink = null,
-        string? referenceName = null)
+        string? referenceName = null,
+        Action<Services.UncertainSite>? uncertain = null)
     {
-        Binder binder = new(tree, file, sink, referenceName);
+        Binder binder = new(tree, file, sink, referenceName, uncertain);
         binder.BindDeclarations(root.Declarations, TypePath.Root);
 
         return binder._diagnostics;
@@ -876,18 +889,27 @@ public sealed class Binder
         // checks and both are worth making — but a wrong subtype walk invents errors on working
         // code, so it waits until the `.` case is proven at zero invented.
         if (member.Kind != MemberAccessKind.Dot)
+        {
+            if (UncertainWants(member.Name))
+                _uncertain!(new Services.UncertainSite(
+                    _file ?? string.Empty, member.NameSpan, Services.UncertainReason.ColonAccess));
+
             return;
+        }
 
         // Only a receiver whose type is written down is checked. Anything else is either genuinely
         // unknowable — a call result or an index, where dm.exe silently degrades `.` to `:` and
         // stops checking — or an untyped variable, where it rejects every member including the
         // right one. The second is a real diagnostic and a valuable one, but it needs certainty
         // that we saw the declaration, so it is not in this pass.
-        if (ReceiverType(member.Target, scope) is not { } receiver)
-            return;
+        if (ReceiverType(member.Target, scope) is not { } receiver || _tree.Find(receiver) is not { } type)
+        {
+            if (UncertainWants(member.Name))
+                _uncertain!(new Services.UncertainSite(
+                    _file ?? string.Empty, member.NameSpan, Services.UncertainReason.UntypedReceiver));
 
-        if (_tree.Find(receiver) is not { } type)
             return;
+        }
 
         bool isProc = invoked && _tree.ResolveProc(type, member.Name) is not null;
         bool exists = isProc || _tree.ResolveVar(type, member.Name) is not null;
@@ -950,6 +972,11 @@ public sealed class Binder
     /// <summary>Whether the sink is on and wants this name — the cheap gate before any walk.</summary>
     private bool SinkWants(string name)
         => _sink is not null
+            && (_referenceName is null || string.Equals(name, _referenceName, StringComparison.Ordinal));
+
+    /// <summary>The same gate for the uncertain sink, which is filtered by the same name.</summary>
+    private bool UncertainWants(string name)
+        => _uncertain is not null
             && (_referenceName is null || string.Equals(name, _referenceName, StringComparison.Ordinal));
 
     /// <summary>

@@ -27,7 +27,7 @@ namespace Dm.Core.Syntax;
 /// interpolation hole, so the state is a stack.
 /// </para>
 /// </remarks>
-public sealed class Lexer
+internal sealed class Lexer
 {
     private sealed class StringState
     {

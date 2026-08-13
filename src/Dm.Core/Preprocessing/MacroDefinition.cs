@@ -15,7 +15,7 @@ namespace Dm.Core.Preprocessing;
 /// <c>#define A (x)</c> is object-like and expands to <c>(x)</c>, while <c>#define B(v)</c> is
 /// function-like and a bare <c>B</c> is not expanded at all.
 /// </remarks>
-public sealed class MacroDefinition
+internal sealed class MacroDefinition
 {
     internal MacroDefinition(
         string name,

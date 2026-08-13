@@ -26,7 +26,7 @@ namespace Dm.Core.Syntax;
 /// costs its line and nothing more.
 /// </para>
 /// </remarks>
-public sealed class StatementParser
+internal sealed class StatementParser
 {
     private static readonly HashSet<string> VarModifiers =
         new(StringComparer.Ordinal) { "const", "tmp", "global", "static", "final" };

@@ -23,7 +23,7 @@ namespace Dm.Core.Symbols;
 /// cleanly when a BYOND release moves something.
 /// </para>
 /// </remarks>
-public static class Builtins
+internal static class Builtins
 {
     private const string ResourceName = "Dm.Core.Resources.builtins.txt";
 

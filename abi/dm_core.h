@@ -375,19 +375,19 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  *
  * "typeFrom" (0.22) says WHICH route produced that type, as a word:
  *
- *   "written"      a declared type - the only one dm.exe checks
+ *   "written"      a declared type - the only one dm.exe checks. Globals count:
+ *                  a root `var/obj/machine` types `machine.` (0.26)
  *   "initializer"  an untyped local's `= new /obj/item`
  *   "assignment"   the nearest `x = ...` before the cursor
  *   "as"           a parameter's `as` clause
- *   "bareTypeName" a type's own name as the receiver, `mob.`
  *   "none"         nothing resolved it
  *
- * "bareTypeName" is the one route where NO edit makes the expression legal.
- * `mob.loc` is "undefined var" - a bare `mob` is neither a variable nor a path,
- * since a path reading needs a leading separator - so unlike an untyped local,
- * which compiles the moment a type is written, this cannot compile in any form.
- * It is offered because exploring a type's members by name is useful; a client
- * that wants only completions the build will accept should drop this one.
+ * "bareTypeName" was in this list until 0.26: a type's own name as the receiver,
+ * `mob.`, offering members dm.exe refuses ("undefined var" - a bare `mob` is
+ * neither a variable nor a path, since a path reading needs a leading separator).
+ * The fallback is gone and the word with it; `mob.` now answers an empty list
+ * unless a var of that name is in scope, which is the var resolving. A client
+ * still switching on the word has a dead arm, not a break.
  *
  * ** "as" IS THE ONE THAT MAKES "inferred" A MISLEADING WORD ** and the reason this
  * field exists. The author WROTE `f(n as num)`; nothing was guessed. dm.exe still
@@ -849,6 +849,69 @@ dm_status dm_inlay_hints(dm_workspace workspace, const char* file,
 dm_status dm_signature_at(dm_workspace workspace, const char *file,
                           int32_t line, int32_t character,
                           dm_position_encoding encoding, char **out_json);
+
+/* -- rename ---------------------------------------------------------------- */
+
+/*
+ * Renames the symbol at a position, as a UTF-8 JSON document. Added in ABI 0.27.
+ *
+ * You own the buffer. Release it with dm_free. Line and character are
+ * ZERO-BASED and follow the encoding you pass. Spans in the answer come back
+ * in the same encoding, spelled as the reference query spells them.
+ *
+ * BEST-EFFORT BY DESIGN, and the "uncertain" list is the point of the call.
+ * A sound rename is impossible in DM: `:` searches the whole subtype tree,
+ * and call("name") / text2path() dispatch on strings no resolver can see. So
+ * "edits" holds only the sites PROVEN to be this symbol - the same resolution
+ * diagnostics and find-references use - and "uncertain" holds every site that
+ * carries the name without proof. Nothing in "uncertain" is edited. Show that
+ * list to the user; applying the edits and discarding it is how a game breaks
+ * with no error anywhere.
+ *
+ * A refusal is DM_OK with a "refusal" word rather than an error, because
+ * "this cannot be renamed" is an answer:
+ *
+ *   "none"               edits were produced
+ *   "nothingAtPosition"  not an index symbol; locals and parameters are not
+ *                        indexed
+ *   "builtin"            the symbol is BYOND's; a game cannot rename it
+ *   "type"               a type path; type rename is a different edit engine
+ *                        and is not built
+ *   "invalidName"        the new name does not lex as one identifier. `proc`
+ *                        and `verb` are ACCEPTED - a var by either name
+ *                        compiles, verified against dm.exe
+ *
+ * Shape:
+ *
+ *   {
+ *     "refusal": "none",
+ *     "target": "/mob/guy/hp",           the canonical symbol, as references
+ *                                        spell it - renaming any override
+ *                                        renames the family
+ *     "newName": "health",
+ *     "edits": [
+ *       { "file": "...", "startLine": 7, "startChar": 5,
+ *         "endLine": 7, "endChar": 7 }   the OLD name's span; write newName
+ *     ],
+ *     "uncertain": [
+ *       { "file": "...", "reason": "colonAccess", ... same span keys ... }
+ *     ]
+ *   }
+ *
+ * Uncertain reasons: "colonAccess" (`:`, `?:`, `?.`, `::` - lookup wider
+ * than a written type), "untypedReceiver" (`.` through a call result, index
+ * or untyped var - dm.exe degrades these to `:` and stops checking), and
+ * "stringLiteral" (the name as a whole word inside a string).
+ *
+ * Handle an unknown refusal or reason word by treating the rename as refused.
+ *
+ * COST: one binder walk over every project file, plus the tree build if the
+ * first call after an edit.
+ */
+dm_status dm_rename_at(dm_workspace workspace, const char *file,
+                       int32_t line, int32_t character,
+                       dm_position_encoding encoding, const char *new_name,
+                       char **out_json);
 
 /* -- go to definition ---------------------------------------------------- */
 

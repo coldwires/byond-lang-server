@@ -20,6 +20,7 @@ public sealed class SignatureHelpResult
     /// <summary>The owning path, `/mob/proc/heal`-style.</summary>
     public string Detail { get; }
 
+    /// <summary>The proc's name as called.</summary>
     public string Name { get; }
 
     /// <summary>Rendered parameters, types and defaults included: <c>amount as num</c>.</summary>
@@ -52,6 +53,7 @@ public sealed class SignatureHelpResult
 /// </remarks>
 public static class SignatureHelpService
 {
+    /// <summary>The signature for the call enclosing a position, or null when no call encloses it.</summary>
     public static SignatureHelpResult? SignatureAt(
         ObjectTree tree,
         Document document,

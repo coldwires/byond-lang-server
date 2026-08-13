@@ -24,7 +24,7 @@ namespace Dm.Core.Preprocessing;
 /// keeps all three forms consistent with what <c>#define</c> itself accepts.
 /// </para>
 /// </remarks>
-public static class CommandLineDefine
+internal static class CommandLineDefine
 {
     /// <summary>
     /// Parses one <c>-D</c> specification, or returns null if it does not name a macro.

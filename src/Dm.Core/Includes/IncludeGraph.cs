@@ -8,7 +8,7 @@ using Dm.Core.Text;
 
 namespace Dm.Core.Includes;
 
-public enum IncludeKind
+internal enum IncludeKind
 {
     /// <summary>A <c>.dm</c> source file. The only kind we recurse into.</summary>
     DmSource,
@@ -24,7 +24,7 @@ public enum IncludeKind
 }
 
 /// <summary>One file reached from the <c>.dme</c>, in compile order.</summary>
-public sealed class IncludedFile
+internal sealed class IncludedFile
 {
     internal IncludedFile(string path, IncludeKind kind, string? includedFrom, int depth, bool fromLibrary)
     {
@@ -52,7 +52,7 @@ public sealed class IncludedFile
     public override string ToString() => $"{Path} ({Kind})";
 }
 
-public sealed class IncludeOptions
+internal sealed class IncludeOptions
 {
     /// <summary>
     /// Root for angle-bracket includes. Defaults to the BYOND user library folder.
@@ -144,7 +144,7 @@ public sealed class IncludeOptions
 /// possible and is also what decides override resolution.
 /// </para>
 /// </remarks>
-public sealed class IncludeGraph
+internal sealed class IncludeGraph
 {
     private IncludeGraph(
         string dmePath,

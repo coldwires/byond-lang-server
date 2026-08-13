@@ -10,9 +10,17 @@ namespace Dm.Core;
 /// </remarks>
 public static class DmAbi
 {
+    /// <summary>Bumped only on a breaking change; the high 16 bits of <see cref="Packed"/>.</summary>
     public const int Major = 0;
 
     /// <summary>
+    /// 27: added dm_rename_at — best-effort rename: provable edits plus the "uncertain" list of
+    ///     `:` accesses, untyped receivers and string literals carrying the name, which are
+    ///     reported rather than guessed at.
+    /// 26: a bare type name as a receiver (`mob.`) resolves to nothing, matching dm.exe's
+    ///     "undefined var"; typed GLOBALS resolve as receivers instead, which they never had.
+    ///     The "bareTypeName" typeFrom word is gone with the fallback that produced it — a client
+    ///     switching on it has a dead arm, not a break.
     /// 25: dm_complete_at gains the "IconState" context and the "value" item kind — inside an
     ///     `icon_state = "…"`, the states of the icon that type actually uses. Additive; no export
     ///     changed, and a client that does not know either word treats them as it already treats an
@@ -47,7 +55,8 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 25;
+    public const int Minor = 27;
 
+    /// <summary>Both numbers in one int: <c>(major &lt;&lt; 16) | minor</c>.</summary>
     public static int Packed => (Major << 16) | Minor;
 }

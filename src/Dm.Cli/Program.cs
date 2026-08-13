@@ -51,6 +51,7 @@ internal static class Program
                 "colors" => Colors(args),
                 "icons" => Icons(args),
                 "references" => References(args),
+                "rename" => Rename(args),
                 "wsymbols" => WorkspaceSymbols(args),
                 "query" => Query(args),
                 "bench" => Bench.Run(args),
@@ -111,6 +112,8 @@ internal static class Program
         Console.Error.WriteLine("      --path <target>      query by canonical path instead: /mob/hp,");
         Console.Error.WriteLine("                           /mob/heal(), /heal() for a global, a type path");
         Console.Error.WriteLine("      --limit <n>          cap (default 1000)");
+        Console.Error.WriteLine("  rename <dme> <file> <line> <col> <new-name>");
+        Console.Error.WriteLine("                           provable edits, plus the sites left for a human");
         Console.Error.WriteLine("  wsymbols <dme> <query>               search the project by name");
         Console.Error.WriteLine("      --limit <n>          how many hits to show (default 200)");
         Console.Error.WriteLine("  definition <dme> <file> <line> <col> where the symbol is declared");
@@ -816,6 +819,82 @@ internal static class Program
             $"{listing.References.Count} reference(s){(listing.Truncated ? " (truncated)" : "")}");
 
         return 0;
+    }
+
+    private static int Rename(string[] args)
+    {
+        if (args.Length < 6
+            || !int.TryParse(args[3], out int line) || !int.TryParse(args[4], out int column))
+        {
+            Console.Error.WriteLine("error: rename needs <dme> <file> <line> <col> <new-name>");
+            return 1;
+        }
+
+        using Workspace workspace = OpenWorkspace(args);
+
+        RenameResult result = workspace.RenameAt(args[2], line - 1, column - 1, args[5]);
+
+        if (result.Refusal != RenameRefusal.None)
+        {
+            Console.Out.WriteLine($"refused: {Words.Refusal(result.Refusal)}");
+            return 0;
+        }
+
+        Console.Out.WriteLine($"rename {result.Target} -> {result.NewName}");
+        Console.Out.WriteLine();
+
+        foreach (RenameEdit edit in result.Edits)
+        {
+            SourceText text = workspace.GetDocument(edit.File).Text;
+            LinePosition at = text.GetLinePosition(edit.Span.Start);
+
+            Console.Out.WriteLine(
+                $"{Relative(workspace.RootDirectory, edit.File)}({at.Line + 1},{at.Character + 1}): "
+                + $"{text.ToString(edit.Span)} -> {result.NewName}");
+        }
+
+        if (result.Uncertain.Count > 0)
+        {
+            Console.Out.WriteLine();
+            Console.Out.WriteLine("NOT edited — check these by hand:");
+
+            foreach (UncertainSite site in result.Uncertain)
+            {
+                SourceText text = workspace.GetDocument(site.File).Text;
+                LinePosition at = text.GetLinePosition(site.Span.Start);
+
+                Console.Out.WriteLine(
+                    $"{Relative(workspace.RootDirectory, site.File)}({at.Line + 1},{at.Character + 1}): "
+                    + $"{Words.Uncertainty(site.Reason)}   {text.ToString(site.Span)}");
+            }
+        }
+
+        Console.Out.WriteLine();
+        Console.Out.WriteLine($"{result.Edits.Count} edit(s), {result.Uncertain.Count} uncertain");
+
+        return 0;
+    }
+
+    /// <summary>The refusal and uncertainty words, spelled once — the ABI and LSP reuse them.</summary>
+    private static class Words
+    {
+        public static string Refusal(RenameRefusal refusal) => refusal switch
+        {
+            RenameRefusal.NothingAtPosition => "nothing at this position is a renameable symbol"
+                + " (locals and parameters are not indexed)",
+            RenameRefusal.Builtin => "that symbol is BYOND's; a game cannot rename it",
+            RenameRefusal.Type => "that names a type; type rename is not built",
+            RenameRefusal.InvalidName => "the new name is not a legal identifier",
+            _ => "none",
+        };
+
+        public static string Uncertainty(UncertainReason reason) => reason switch
+        {
+            UncertainReason.ColonAccess => "colon access ",
+            UncertainReason.UntypedReceiver => "untyped recv ",
+            UncertainReason.StringLiteral => "string       ",
+            _ => "?            ",
+        };
     }
 
     private static int Signature(string[] args)

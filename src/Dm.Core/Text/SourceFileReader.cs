@@ -16,7 +16,7 @@ namespace Dm.Core.Text;
 /// is a reliable discriminator because the multi-byte sequence rules are restrictive enough that
 /// Windows-1252 text almost never forms valid UTF-8 by accident.
 /// </remarks>
-public static class SourceFileReader
+internal static class SourceFileReader
 {
     /// <summary>
     /// Windows-1252 differs from Latin-1 only in 0x80–0x9F, where Latin-1 has unused control codes
@@ -109,7 +109,7 @@ public static class SourceFileReader
     }
 }
 
-public enum SourceEncoding
+internal enum SourceEncoding
 {
     Utf8,
     Utf8Bom,

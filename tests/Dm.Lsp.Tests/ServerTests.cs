@@ -525,6 +525,47 @@ public sealed class ServerTests : IDisposable
     }
 
     /// <summary>
+    /// Rename answers a WorkspaceEdit of PROVABLE sites only, announces the uncertain count as a
+    /// window/showMessage — the standard response has no field for it — and dm/rename returns the
+    /// full answer with each uncertain site's reason.
+    /// </summary>
+    [Fact]
+    public void Rename_edits_the_proven_sites_and_reports_the_colon_access()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/mob\\n\\tvar/hp = 1\\n\\tproc/hurt()\\n\\t\\thp = 2\\n\\n/proc/f()\\n\\tvar/mob/m = new\\n\\treturn m.hp + m:hp\\n\"}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/rename\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":7,\"character\":10}},\"newName\":\"health\"}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"dm/rename\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":7,\"character\":10}},\"newName\":\"health\"}}}}");
+
+        List<JsonDocument> frames = Frames();
+
+        Assert.Contains(frames, f =>
+            f.RootElement.TryGetProperty("method", out JsonElement method)
+            && method.GetString() == "window/showMessage");
+
+        // The declaration, the bare write inside hurt, and m.hp — three proven sites, one file.
+        JsonElement changes = frames[^2].RootElement.GetProperty("result").GetProperty("changes");
+        JsonProperty only = Assert.Single(changes.EnumerateObject());
+        Assert.Equal(3, only.Value.GetArrayLength());
+
+        foreach (JsonElement edit in only.Value.EnumerateArray())
+            Assert.Equal("health", edit.GetProperty("newText").GetString());
+
+        // `m:hp` is reported with its reason rather than edited.
+        JsonElement full = frames[^1].RootElement.GetProperty("result");
+        Assert.Equal("none", full.GetProperty("refusal").GetString());
+        Assert.Equal("/mob/hp", full.GetProperty("target").GetString());
+        Assert.Equal(3, full.GetProperty("edits").GetArrayLength());
+
+        JsonElement uncertain = full.GetProperty("uncertain");
+        Assert.Equal(1, uncertain.GetArrayLength());
+        Assert.Equal("colonAccess", uncertain[0].GetProperty("reason").GetString());
+    }
+
+    /// <summary>
     /// The first tree build announces itself: a workDoneProgress/create request, a begin, the
     /// answer, an end — and the client's response to the create is ignored rather than answered
     /// with a method-not-supported error.
@@ -570,7 +611,9 @@ public sealed class ServerTests : IDisposable
     public void An_unknown_method_answers_with_an_error_rather_than_silence()
     {
         Initialize();
-        Send("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/rename\",\"params\":{}}");
+        // A name no future feature will claim — textDocument/rename was the probe here until it
+        // became a real method at ABI 0.27 and this test started failing for the right reason.
+        Send("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"dm/noSuchMethod\",\"params\":{}}");
 
         List<JsonDocument> frames = Frames();
         JsonElement error = frames[^1].RootElement.GetProperty("error");

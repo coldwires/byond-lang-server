@@ -44,6 +44,7 @@ public sealed class SourceText
     /// <summary>Originating path, or null for text with no file backing it.</summary>
     public string? Path { get; }
 
+    /// <summary>Length of the text in UTF-16 code units.</summary>
     public int Length => Content.Length;
 
     /// <summary>
@@ -52,18 +53,23 @@ public sealed class SourceText
     /// </summary>
     public int LineCount => _lineStarts.Length;
 
+    /// <summary>Wraps text exactly as supplied — line endings are not normalised.</summary>
     public static SourceText From(string content, string? path = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         return new SourceText(content, path);
     }
 
+    /// <summary>The UTF-16 code unit at a zero-based offset.</summary>
     public char this[int offset] => Content[offset];
 
+    /// <summary>The text covered by a span, copied into a new string.</summary>
     public string ToString(TextSpan span) => Content.Substring(span.Start, span.Length);
 
+    /// <summary>The text covered by a span, without copying.</summary>
     public ReadOnlySpan<char> AsSpan(TextSpan span) => Content.AsSpan(span.Start, span.Length);
 
+    /// <summary>The full text, byte-for-byte as supplied.</summary>
     public override string ToString() => Content;
 
     // -- lines ------------------------------------------------------------
@@ -92,6 +98,7 @@ public sealed class SourceText
         return TextSpan.FromBounds(start, end);
     }
 
+    /// <summary>The line's text as a string, excluding its terminator.</summary>
     public string GetLineText(int line) => ToString(GetLineSpan(line));
 
     /// <summary>Zero-based line containing <paramref name="offset"/>. Offsets past the end clamp.</summary>
@@ -166,6 +173,7 @@ public sealed class SourceText
         return offset;
     }
 
+    /// <summary>Converts an offset to a line/character position with a UTF-16 character component.</summary>
     public LinePosition GetLinePosition(int offset) => GetLinePosition(offset, PositionEncoding.Utf16);
 
     /// <summary>
@@ -215,6 +223,7 @@ public sealed class SourceText
         }
     }
 
+    /// <summary>Converts a zero-based line and character to an offset. Values past the end clamp rather than throw.</summary>
     public int GetOffset(int line, int character, PositionEncoding encoding)
         => GetOffset(new LinePosition(line, character), encoding);
 

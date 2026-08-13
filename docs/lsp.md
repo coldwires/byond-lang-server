@@ -3,7 +3,7 @@
 `Dm.Lsp` over stdio. Hand-rolled JSON-RPC, spec 3.17 subset, no dependencies.
 
 > **Live document.** A method or a capability that changes belongs in this file in the same commit.
-> Last updated: 2026-08-12.
+> Last updated: 2026-08-13.
 
 **What this file is for.** `editors/vscode/README.md` is a recipe for one client and carries the
 settings in that client's spelling; everything an integrator needs was reachable only through it.
@@ -121,6 +121,7 @@ consulted for it again.
 | Sync | `didOpen`, `didChange`, `didClose` (full) |
 | Diagnostics | `publishDiagnostics` — syntax **and** the binder's semantic set |
 | Read | `completion` + `completionItem/resolve`, `hover`, `signatureHelp`, `definition`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `documentSymbol`, `workspace/symbol` |
+| Write | `rename` — **best-effort by design**: the `WorkspaceEdit` carries only sites *proven* to be the symbol, a refusal answers `null`, and both the refusal reason and the count of uncertain sites (`:` accesses, untyped receivers, string dispatch) arrive as a `window/showMessage` warning, since the standard response has no field for either. `dm/rename` below returns the full list |
 | Editor | `semanticTokens/full`, `inlayHint`, `foldingRange`, `documentLink`, `documentColor`, `colorPresentation` |
 | Server → client | `window/workDoneProgress/create` + `$/progress` |
 
@@ -155,6 +156,7 @@ ABI are listed below rather than the whole shape.
 | `dm/references` | `path`, `limit` | every use of a symbol, with `kind` and `inside` |
 | `dm/fileInProject` | `textDocument` | `{ file, inProject, environmentFile }` |
 | `dm/iconStates` | `uri` | every state in a `.dmi` |
+| `dm/rename` | `textDocument`, `position`, `newName` | the full rename answer: `refusal` word, provable `edits`, and every `uncertain` site with a `reason` (`colonAccess`, `untypedReceiver`, `stringLiteral`). Same shape as `dm_rename_at` |
 | `dm/tickFile` / `dm/untickFile` | `textDocument` | a `.dme` edit as `{ uri, text, refusal }` |
 
 **Deltas from the ABI shapes:**
@@ -182,7 +184,7 @@ Spec-only clients ignore these. They are additive and will not break a strict pa
 | Response | Field | Why |
 |---|---|---|
 | `completion` items | `inferred` | The receiver's type was worked out rather than written, which per `INTEGRATION.txt` §4 is exactly what `dm.exe` refuses. Badge, rank down, or drop |
-| | `typeFrom` | Which route produced the type: `initializer`, `assignment`, `as`, `bareTypeName`, `none`. Sent only alongside `inferred`, so `written` never appears on this surface |
+| | `typeFrom` | Which route produced the type: `initializer`, `assignment`, `as`, `none`. Sent only alongside `inferred`, so `written` never appears on this surface. `bareTypeName` left at ABI 0.26 with the fallback that produced it |
 | | `type`, `value` | The item's own declared type and its initialiser as written |
 | `documentSymbol` | `owner` | The resolved path of whatever contains the symbol |
 
@@ -197,7 +199,6 @@ unresolvable receiver here.
 
 | | |
 |---|---|
-| `textDocument/rename` | Cannot be sound in DM: `:` widens member lookup to the subtype tree, and `call()` / `text2path()` dispatch on strings. Whether it ships as a safe subset or best-effort-with-warning is an open decision |
 | `textDocument/codeAction` | Near the front of the queue, unblocked by the diagnostics work |
 | `textDocument/formatting` | Not started |
 | `workspace/didChangeWatchedFiles` | Not wired. Send `didChange` for files that change outside the editor, or restart |

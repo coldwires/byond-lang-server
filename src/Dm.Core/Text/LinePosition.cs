@@ -29,6 +29,7 @@ public enum PositionEncoding
 /// </remarks>
 public readonly struct LinePosition : IEquatable<LinePosition>, IComparable<LinePosition>
 {
+    /// <summary>Creates a position. Both components must be non-negative.</summary>
     public LinePosition(int line, int character)
     {
         if (line < 0)
@@ -40,33 +41,46 @@ public readonly struct LinePosition : IEquatable<LinePosition>, IComparable<Line
         Character = character;
     }
 
+    /// <summary>Zero-based line.</summary>
     public int Line { get; }
 
+    /// <summary>Zero-based character within the line, in whatever <see cref="PositionEncoding"/> units the producing call used.</summary>
     public int Character { get; }
 
+    /// <summary>Value equality on line and character.</summary>
     public bool Equals(LinePosition other) => Line == other.Line && Character == other.Character;
 
+    /// <summary>Value equality.</summary>
     public override bool Equals(object? obj) => obj is LinePosition other && Equals(other);
 
+    /// <summary>Hash of line and character.</summary>
     public override int GetHashCode() => HashCode.Combine(Line, Character);
 
+    /// <summary>Document order: line first, then character.</summary>
     public int CompareTo(LinePosition other)
     {
         int byLine = Line.CompareTo(other.Line);
         return byLine != 0 ? byLine : Character.CompareTo(other.Character);
     }
 
+    /// <summary>Formats as <c>line:character</c>, both zero-based.</summary>
     public override string ToString() => $"{Line}:{Character}";
 
+    /// <summary>Value equality.</summary>
     public static bool operator ==(LinePosition left, LinePosition right) => left.Equals(right);
 
+    /// <summary>Value inequality.</summary>
     public static bool operator !=(LinePosition left, LinePosition right) => !left.Equals(right);
 
+    /// <summary>Document order: line first, then character.</summary>
     public static bool operator <(LinePosition left, LinePosition right) => left.CompareTo(right) < 0;
 
+    /// <summary>Document order: line first, then character.</summary>
     public static bool operator >(LinePosition left, LinePosition right) => left.CompareTo(right) > 0;
 
+    /// <summary>Document order: line first, then character.</summary>
     public static bool operator <=(LinePosition left, LinePosition right) => left.CompareTo(right) <= 0;
 
+    /// <summary>Document order: line first, then character.</summary>
     public static bool operator >=(LinePosition left, LinePosition right) => left.CompareTo(right) >= 0;
 }

@@ -635,21 +635,20 @@ public static class CompletionService
             return tree.Find(declared);
         }
 
-        // A BARE TYPE NAME — `mob.` — and this is PLAN §1's acceptance target rather than a
-        // resolution dm.exe agrees with. It does not: `mob.loc`, `mob.hp` and `mob.sub` are all
-        // "undefined var", because a bare `mob` is neither a variable nor a path (§4a context 3
-        // needs a LEADING separator for that). Unlike the untyped-local divergence there is no
-        // edit that makes the expression legal, so nothing offered here can compile as written.
-        //
-        // It is kept because exploring a type's members by name is genuinely useful and the target
-        // was set deliberately — but it is marked so a client can badge or drop it, which is the
-        // half that was missing. Removing it is a one-line change if the target ever moves.
-        TypeSymbol? bareType = tree.Find(TypePath.Root.Append(name));
+        // A GLOBAL. Root vars are where dm.exe looks after locals and members — `world` lives here
+        // too, as a root var typed /world. This lookup replaced the bare-type-name fallback
+        // (`mob.` offering /mob's members): a bare type name is "undefined var" to dm.exe — §4a
+        // context 3 needs a LEADING separator for a path — while a global NAMED after a type
+        // (`var/mob/mob`, idiomatic DM) resolves through the var. The fallback answered that
+        // shadow case right by coincidence and hid that globals never resolved here at all:
+        // `machine.` on a root `var/obj/machine` was 0 items while dm.exe compiles the access.
+        if (tree.Root.FindVar(name) is { DeclaredType: { } globalType })
+        {
+            source = TypeSource.Written;
+            return tree.Find(globalType);
+        }
 
-        if (bareType is not null)
-            source = TypeSource.BareTypeName;
-
-        return bareType;
+        return null;
     }
 
     /// <summary>

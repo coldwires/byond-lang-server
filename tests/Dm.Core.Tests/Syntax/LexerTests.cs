@@ -52,9 +52,9 @@ public class LexerTests
     [InlineData("src", TokenKind.KeywordSrc)]
     [InlineData("in", TokenKind.KeywordIn)]
     [InlineData("as", TokenKind.KeywordAs)]
-    public void Recognises_keywords(string source, TokenKind expected)
+    public void Recognises_keywords(string source, object expected)
     {
-        Assert.Equal(new[] { expected }, Kinds(source));
+        Assert.Equal(new[] { (TokenKind)expected }, Kinds(source));
     }
 
     /// <summary>
@@ -473,9 +473,9 @@ public class LexerTests
     [InlineData("%%=", TokenKind.PercentPercentAssign)]
     [InlineData("<=>", TokenKind.Spaceship)]
     [InlineData(":=", TokenKind.ColonAssign)]
-    public void Operators_match_longest_first(string source, TokenKind expected)
+    public void Operators_match_longest_first(string source, object expected)
     {
-        Assert.Equal(new[] { expected }, Kinds(source));
+        Assert.Equal(new[] { (TokenKind)expected }, Kinds(source));
     }
 
     [Fact]
