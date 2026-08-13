@@ -310,7 +310,11 @@ internal static class Program
         {
             ["/alist"] = new[] { "len", "parent_type", "tag", "type", "vars" },
             ["/callee"] = new[] { "args", "caller", "desc", "file", "invisibility", "line", "name", "proc", "src", "type", "usr" },
-            ["/client"] = new[] { "bound_height", "bound_width", "bound_x", "bound_y", "parent_type", "tag", "type", "vars" },
+            // macro_mode: undocumented in the reference and probed 2026-08-13 on 516.1686 —
+            // `usr.client.macro_mode` compiles and `macro_mode_xyz` is "undefined var". Surfaced
+            // when 0.28's bare-name receivers turned on checking through `usr.client.` and mlaas
+            // invented 3, the fourth builtins hole a new check has exposed.
+            ["/client"] = new[] { "bound_height", "bound_width", "bound_x", "bound_y", "macro_mode", "parent_type", "tag", "type", "vars" },
             ["/image"] = new[] { "alpha", "animate_movement", "appearance", "appearance_flags", "blend_mode", "color", "contents", "density", "desc", "dir", "filters", "gender", "glide_size", "icon", "icon_state", "infra_luminosity", "invisibility", "layer", "luminosity", "maptext", "maptext_height", "maptext_width", "maptext_x", "maptext_y", "mouse_drag_pointer", "mouse_drop_pointer", "mouse_drop_zone", "mouse_opacity", "mouse_over_pointer", "name", "opacity", "overlays", "override", "pixel_w", "pixel_x", "pixel_y", "pixel_z", "plane", "render_source", "render_target", "screen_loc", "suffix", "text", "transform", "underlays", "verbs", "vis_contents", "x", "y", "z" },
             ["/list"] = new[] { "parent_type", "tag", "type", "vars" },
             ["/mutable_appearance"] = new[] { "animate_movement", "density", "glide_size", "infra_luminosity", "mouse_drop_pointer", "mouse_drop_zone", "opacity", "screen_loc", "verbs", "vis_contents", "vis_flags" },

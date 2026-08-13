@@ -66,6 +66,83 @@ public sealed class ServerTests : IDisposable
         Assert.Equal(1, capabilities.GetProperty("textDocumentSync").GetInt32());
     }
 
+    /// <summary>
+    /// A client offering only utf-8 gets utf-8 — declared in the result AND spoken in the
+    /// answers. <c>é</c> is two UTF-8 units and one UTF-16 unit, so the diagnostic's column says
+    /// which encoding the server is actually using; before negotiation this client was mis-served
+    /// silently, and only on lines like this one.
+    /// </summary>
+    [Fact]
+    public void A_utf8_only_client_gets_utf8_positions()
+    {
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"rootUri\":\"{RootUri()}\","
+            + "\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-8\"]}}}}");
+
+        Assert.Equal(
+            "utf-8",
+            Frames()[^1].RootElement.GetProperty("result").GetProperty("capabilities")
+                .GetProperty("positionEncoding").GetString());
+
+        string uri = FileUri("code.dm");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/proc/f()\\n\\tvar/x = \\\"é\\\" + /obj/nothing\\n\"}}}}}}");
+
+        JsonElement diagnostic = Frames()[^1].RootElement
+            .GetProperty("params").GetProperty("diagnostics")[0];
+        int character = diagnostic.GetProperty("range").GetProperty("start")
+            .GetProperty("character").GetInt32();
+
+        // The path starts at UTF-8 column 16 — one MORE than the UTF-16 column, because of the é.
+        Assert.Equal(16, character);
+    }
+
+    /// <summary>
+    /// The disk moving underneath the workspace — a git checkout, another editor — reaches
+    /// answers once the client says so: <c>didChangeWatchedFiles</c> invalidates, and the next
+    /// query sees what is on disk now.
+    /// </summary>
+    [Fact]
+    public void A_disk_change_reaches_answers_after_didChangeWatchedFiles()
+    {
+        Initialize();
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"dm/members\",\"params\":{{\"path\":\"/mob\"}}}}");
+
+        // The editor never sees this write; only the watcher notification announces it.
+        File.WriteAllText(Path.Combine(_root, "code.dm"), "/mob\n\tvar/hp = 1\n\tvar/mp = 2\n");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"workspace/didChangeWatchedFiles\",\"params\":{{\"changes\":[{{\"uri\":\"{FileUri("code.dm")}\",\"type\":2}}]}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"dm/members\",\"params\":{{\"path\":\"/mob\"}}}}");
+
+        // The first tree build interleaves $/progress frames, so responses are found by id.
+        List<JsonDocument> frames = Frames();
+
+        List<string?> VarNames(int id)
+        {
+            foreach (JsonDocument frame in frames)
+            {
+                if (!frame.RootElement.TryGetProperty("id", out JsonElement found)
+                    || found.ValueKind != JsonValueKind.Number
+                    || found.GetInt32() != id)
+                {
+                    continue;
+                }
+
+                List<string?> names = new();
+
+                foreach (JsonElement entry in frame.RootElement.GetProperty("result").GetProperty("vars").EnumerateArray())
+                    names.Add(entry.GetProperty("name").GetString());
+
+                return names;
+            }
+
+            throw new Xunit.Sdk.XunitException($"no response for id {id}");
+        }
+
+        Assert.DoesNotContain("mp", VarNames(40));
+        Assert.Contains("mp", VarNames(41));
+    }
+
     [Fact]
     public void A_broken_buffer_produces_diagnostics_and_a_fix_clears_them()
     {

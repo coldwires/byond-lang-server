@@ -236,6 +236,13 @@ function activate(context) {
                 environmentFile: config.get("environmentFile") || undefined,
                 defines: config.get("defines") || [],
             },
+            // Disk changes the editor did not make - a git checkout, a build step, DreamMaker
+            // saving - reach the server as workspace/didChangeWatchedFiles, which invalidates its
+            // caches and re-publishes diagnostics for open documents. Without this, stale answers
+            // survive until a buffer edit or a restart.
+            synchronize: {
+                fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{dm,dme,dmi}"),
+            },
         }
     );
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using System.Threading;
 using Dm.Core.Binding;
 using Dm.Core.Preprocessing;
@@ -54,9 +53,9 @@ public enum UncertainReason
     UntypedReceiver = 1,
 
     /// <summary>
-    /// A string literal containing the name as a whole word. <c>call()</c>, <c>text2path()</c>,
-    /// <c>params</c> lists and savefile keys dispatch on strings, so a rename can break a site no
-    /// resolver can see.
+    /// A string literal whose whole text IS the name. <c>vars["health"]</c>,
+    /// <c>call(g, "attack")</c> and savefile keys dispatch on exactly the bare name, so a rename
+    /// can break a site no resolver can see; prose that merely contains the word is not flagged.
     /// </summary>
     StringLiteral = 2,
 }
@@ -262,12 +261,14 @@ public static class RenameService
                 site => uncertain.Add(site));
         }
 
-        // The string scan. A whole-word match is the discriminator: renaming `attack` must flag
-        // call("attack") and must not flag "attack_verb".
+        // The string scan. The literal's WHOLE text equalling the name is the discriminator:
+        // string dispatch spells the bare name and nothing else — `vars["health"]`,
+        // `call(g, "attack")`, `hascall(o, "proc_name")` — while prose merely contains it.
+        // Measured before narrowed: whole-word matching flagged 8 sites on mlaas, 7 of them
+        // player-facing sentences and one an `icon_state = "health"` that shares the var's
+        // spelling; exact matching keeps that one and drops the prose.
         if (lexFor is not null)
         {
-            Regex word = new($@"\b{Regex.Escape(name)}\b");
-
             foreach ((string file, ParseResult _) in files)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -277,8 +278,11 @@ public static class RenameService
 
                 foreach (Token token in lex.Tokens)
                 {
-                    if (token.Kind == TokenKind.StringText && word.IsMatch(lex.GetText(token)))
+                    if (token.Kind == TokenKind.StringText
+                        && string.Equals(lex.GetText(token), name, StringComparison.Ordinal))
+                    {
                         uncertain.Add(new UncertainSite(file, token.Span, UncertainReason.StringLiteral));
+                    }
                 }
             }
         }

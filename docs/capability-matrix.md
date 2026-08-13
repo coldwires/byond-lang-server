@@ -20,7 +20,7 @@ work list.
 | Signature help | `SignatureHelpService` | `dm_signature_at` (0.12) | `signatureHelp`, triggers `(` and `,` |
 | Reference index (uses, kinds, enclosing symbol) | `ReferenceService` over the binder's walk | `dm_query_json` `references` (0.14) | `references`, `documentHighlight`, `dm/references` |
 | Ancestor chain in one call | `ObjectTree.InheritanceChain` | `dm_query_json` `ancestorsOf` (0.14) | `dm/ancestorsOf` |
-| Disk-change invalidation | `Workspace.Invalidate` | `dm_invalidate` (0.14) | `didChangeWatchedFiles` — ⬜ not yet wired; clients can send didChange |
+| Disk-change invalidation | `Workspace.Invalidate` | `dm_invalidate` (0.14) | `workspace/didChangeWatchedFiles` — one invalidate per notification, then a re-publish for every open document; the VS Code client watches `**/*.{dm,dme,dmi}` |
 | Readiness + warm-at-open | `Workspace.IsTreeBuilt`, `GetObjectTree` | `dm_tree_ready`, `dm_build_tree` (0.15) | `$/progress` announces the build (push, the LSP idiom for the same fact) |
 | Inlay hints (inferred local types, parameter names) | `InlayHintService` | `dm_inlay_hints` (0.16) | `textDocument/inlayHint`, with LSP's own kind numbering |
 | Lazy completion documentation | `CompleteBriefAt` + `ResolveDocumentation` | `dm_complete_brief`, `dm_complete_resolve` (0.17) | `resolveProvider` + `completionItem/resolve` |
@@ -54,10 +54,11 @@ Before that, the three editor-shaped rows — type-definition, folding, document
 blank on the reasoning that no in-process consumer had asked; the user asked, and they went in at
 0.19 alongside `dm_file_in_project`.
 
-Positions: the ABI and CLI speak both encodings by parameter; the LSP **declares** `utf-16` and
-does not negotiate — it never reads the client's `general.positionEncodings`. Every conformant 3.17
-client supports UTF-16 so this holds in practice, and a client offering only UTF-8 would be
-mis-served silently on non-ASCII lines. Corrected here 2026-08-12; this line read "negotiates".
+Positions: the ABI and CLI speak both encodings by parameter; the LSP **negotiates** from the
+client's `general.positionEncodings` since 2026-08-13 — the first entry the server speaks wins
+(`utf-16` or `utf-8`), and a client that says nothing gets UTF-16, the LSP default. This line read
+"negotiates" once before while the server declared unconditionally; it is true now because a
+protocol test pins a utf-8-only client receiving utf-8 columns on a non-ASCII line.
 CLI lines/columns are 1-based, ABI and LSP 0-based.
 
 `docs/lsp.md` is the client-facing form of this table's third column.

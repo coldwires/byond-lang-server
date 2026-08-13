@@ -91,21 +91,47 @@ public class RenameServiceTests
     }
 
     /// <summary>
-    /// <c>call("name")</c> dispatches on a string no resolver sees, so a literal carrying the
-    /// name as a whole word is reported. <c>attack_verb</c> is a different word.
+    /// <c>call("name")</c> and <c>vars["name"]</c> dispatch on strings no resolver sees, so a
+    /// literal whose WHOLE text is the name is reported. Prose containing the word and a literal
+    /// containing it as a prefix are not — string dispatch spells the bare name and nothing else,
+    /// measured on mlaas where whole-word matching flagged seven sentences of flavour text.
     /// </summary>
     [Fact]
-    public void A_string_literal_is_flagged_on_a_whole_word_only()
+    public void A_string_literal_is_flagged_on_an_exact_match_only()
     {
         const string Source =
             "/mob/guy\n\tproc/att|ack()\n\t\treturn 1\n"
             + "/proc/f()\n\tvar/mob/guy/g = new\n\tg.attack()\n"
-            + "\tcall(g, \"attack\")()\n\tworld << \"attack_verb\"\n";
+            + "\tcall(g, \"attack\")()\n\treturn g.vars[\"attack\"]\n"
+            + "/proc/noise()\n\tworld << \"attack_verb\"\n\tworld << \"we attack at dawn\"\n";
 
         RenameResult result = Rename("strike", Source);
 
-        UncertainSite site = Assert.Single(result.Uncertain);
-        Assert.Equal(UncertainReason.StringLiteral, site.Reason);
+        Assert.Equal(2, result.Uncertain.Count);
+        Assert.All(result.Uncertain, u => Assert.Equal(UncertainReason.StringLiteral, u.Reason));
+    }
+
+    /// <summary>
+    /// A bare name resolving to a TYPED MEMBER of the enclosing type, and <c>usr</c>, are both
+    /// written types in dm.exe's own resolution order — so their accesses are proven edits, not
+    /// uncertainty. Both sat in the uncertain list until 0.28, which is what the mlaas ten
+    /// turned out to be made of.
+    /// </summary>
+    [Fact]
+    public void Usr_and_enclosing_member_receivers_are_proven()
+    {
+        const string Source =
+            "/mob\n\tvar/hp = 1\n"
+            + "/obj/pill\n\tvar/mob/owner\n\tproc/show()\n\t\treturn owner.h|p + usr.hp\n";
+
+        RenameResult result = Rename("health", Source);
+
+        Assert.Equal(RenameRefusal.None, result.Refusal);
+        Assert.Equal("/mob/hp", result.Target);
+
+        // The declaration, `owner.hp`, and `usr.hp`.
+        Assert.Equal(3, result.Edits.Count);
+        Assert.Empty(result.Uncertain);
     }
 
     [Fact]

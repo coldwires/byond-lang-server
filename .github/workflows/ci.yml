@@ -319,3 +319,115 @@ jobs:
             src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.dylib
             src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/native/dm_core.lib
           if-no-files-found: error
+
+  # The CANARY: the compiler-backed suite against the NEWEST 516 build, whatever it is today.
+  # byond-fixtures answers "does this commit still agree with the compiler we develop against";
+  # this answers "has BYOND shipped something that changes what DM means" BEFORE anyone bumps the
+  # pin - the assoc-numeric-key break in 516.1686 was invisible for exactly as long as nothing
+  # compiled against the new build. Informational by construction: continue-on-error keeps a BYOND
+  # release from putting a red on commits that changed nothing, so a failure here is read, not
+  # gating. Designed 2026-08-06, built 2026-08-13.
+  byond-canary:
+    name: canary against the newest BYOND
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # The build directory is a plain listing, behind the same Cloudflare posture as the zip -
+      # see the fetch step in byond-fixtures for why the UA and the non-fatality.
+      - name: Find the newest 516 build
+        id: newest
+        shell: pwsh
+        run: |
+          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+
+          try {
+            $page = Invoke-WebRequest -Uri "https://www.byond.com/download/build/516/" -UseBasicParsing -UserAgent $ua -TimeoutSec 60
+          }
+          catch {
+            Write-Host "::warning::could not list 516 builds - $($_.Exception.Message)"
+            "fresh=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+
+          $minors = [regex]::Matches($page.Content, '516\.(\d+)_byond\.zip') |
+            ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique
+
+          if (-not $minors) {
+            Write-Host "::warning::the listing held no 516.*_byond.zip names - challenge page?"
+            "fresh=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+
+          $newest = "516.$($minors | Select-Object -Last 1)"
+          Write-Host "newest is $newest; the pin is ${env:BYOND_BUILD}"
+          "build=$newest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          if ($newest -eq $env:BYOND_BUILD) {
+            Write-Host "newest equals the pin - nothing to canary this run"
+            "fresh=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+          else {
+            "fresh=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Cache BYOND ${{ steps.newest.outputs.build }}
+        id: canary-cache
+        if: steps.newest.outputs.fresh == 'true'
+        uses: actions/cache@v4
+        with:
+          path: byond-dist
+          key: byond-${{ steps.newest.outputs.build }}
+
+      - name: Fetch BYOND ${{ steps.newest.outputs.build }}
+        if: steps.newest.outputs.fresh == 'true' && steps.canary-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $build = "${{ steps.newest.outputs.build }}"
+          $url = "https://www.byond.com/download/build/516/${build}_byond.zip"
+          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+
+          foreach ($attempt in 1..3) {
+            try {
+              Write-Host "fetching $url (attempt $attempt)"
+              Invoke-WebRequest -Uri $url -OutFile byond.zip -UseBasicParsing -UserAgent $ua -TimeoutSec 120
+
+              $size = (Get-Item byond.zip).Length
+              if ($size -lt 1MB) {
+                throw "got $size bytes, which is a challenge page rather than the archive"
+              }
+
+              Expand-Archive byond.zip -DestinationPath byond-dist -Force
+              Write-Host "expanded $size bytes"
+              exit 0
+            }
+            catch {
+              Write-Host "attempt $attempt failed: $($_.Exception.Message)"
+              if ($attempt -lt 3) { Start-Sleep -Seconds 15 }
+            }
+          }
+
+          Write-Host "::warning::could not fetch $build - the canary did not run"
+          exit 1
+
+      # The version TRIPWIRE test is excluded on purpose: against a build newer than the pin it
+      # fails by definition, and the signal wanted here is whether the GOLDENS and the probe
+      # expectations still hold - that is what a breaking language change moves first.
+      - name: Test against the newest build
+        if: steps.newest.outputs.fresh == 'true'
+        shell: pwsh
+        run: |
+          $bin = Join-Path (Get-Location) 'byond-dist\byond\bin'
+
+          if (-not (Test-Path (Join-Path $bin 'dm.exe'))) {
+            Write-Host "::warning::no dm.exe - the canary did not run"
+            exit 0
+          }
+
+          $env:DM_BYOND_BIN = $bin
+          dotnet test -c Release --verbosity normal --filter "FullyQualifiedName!~The_goldens_match_the_installed_compiler"

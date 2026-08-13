@@ -747,6 +747,7 @@ V# /client inactivity
 V# /client key
 V# /client lazy_eye
 V /client macro
+V /client macro_mode
 V# /client mob /mob
 V# /client mouse_pointer_icon
 V /client parent_type

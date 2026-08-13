@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.27** · 1,271 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.28** · 1,278 tests ·
 > Last updated: 2026-08-11
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -470,12 +470,12 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.27 and passing 258 checks on x64 and
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.28 and passing 258 checks on x64 and
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,271 today (1,209
-  core, 44 native, 18 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,278 today (1,214
+  core, 44 native, 20 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -778,8 +778,8 @@ declarations, so statement parsing slots in later without disturbing this.
   cycle-guarded because `parent_type` is an ordinary assignment that a project can point in a loop.
 - ✅ `TypeTreeBuilder`, driven off the include graph so files arrive in compile order.
 - ✅ `dmc tree`, with `--under` and `--members`.
-- ✅ `tools/builtins-gen` and `Resources/builtins.txt`, embedded in `Dm.Core`. **1,017 entries**
-  built from BYOND 516.1666's reference and `stddef.dm`: 35 types, 390 procs, 376 vars, 17
+- ✅ `tools/builtins-gen` and `Resources/builtins.txt`, embedded in `Dm.Core`. **1,018 entries**
+  built from BYOND 516.1666's reference and `stddef.dm`: 35 types, 390 procs, 377 vars, 17
   inheritance links and **199 `#define` constants**. 570 carry the reference anchor they were
   scraped from, which is what `dm_hover_at`'s `reference` link is built from — a `V#` or `P#` line
   marks one. `Builtins.Seed` puts the tree entries in before the project's own files;
@@ -1840,7 +1840,7 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.27, 39 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.28, 39 exports: version, last error, free, workspace
 open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
 pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
@@ -3461,3 +3461,31 @@ it.
   build. The comments carry facts rather than boilerplate — zero-based-ness, encoding units,
   `ChildCount` describing what exists versus what `Children` carries, `End` exclusive — drawn
   from the implementations, not the names.
+- **2026-08-13** — **ABI 0.28: bare-name receivers resolve in dm.exe's own order, and the mlaas
+  ten collapsed to one.** Decoding rename's uncertain list showed two of the "untyped receivers"
+  were ours: `usr.health` (no `usr` case in `Binder.ReceiverType`) and `clone.health` through
+  `var/mob/pc/clone` — a WRITTEN member type the resolver never consulted. `BareNameReceiverType`
+  now walks local → `usr` (always `/mob`) → enclosing members → root globals, each direction
+  probed with a failing control, and an untyped local still settles the name so shadowing cannot
+  type a receiver from the member it hides. That turned on member CHECKING through those
+  receivers everywhere, and the four-corpus re-verification immediately caught the fourth
+  builtins hole a new check has exposed: `/client/macro_mode`, undocumented in the reference,
+  probed with a control, added to `builtins.txt` (1,018 entries) and the generator's
+  verified-members table. All four corpora hold at 0/0/0. Rename's `stringLiteral` uncertainty
+  narrowed from whole-word to EXACT match in the same pass — string dispatch (`vars["health"]`,
+  `call(g, "attack")`) spells the bare name and nothing else, while whole-word matching flagged
+  seven sentences of mlaas flavour text. The mlaas rename is now 22 edits, 1 uncertain, and the
+  one is `icon_state = "health"` — the site that genuinely needs a human.
+- **2026-08-13** — Three queue items in one pass, all LSP/CI-shaped, no ABI change. **The
+  position encoding negotiates**: the client's `general.positionEncodings` is read at initialize,
+  the first entry the server speaks wins (utf-16 or utf-8), the choice is declared back and used
+  in both directions — pinned by a protocol test where a utf-8-only client reads a diagnostic
+  column after an `é`, the exact line that used to be mis-served silently.
+  **`workspace/didChangeWatchedFiles` is wired**: one `Workspace.Invalidate` per notification
+  (per-file caches revalidate by write time, so only what changed is re-read) plus a diagnostics
+  re-publish for every open document; the VS Code client now watches `**/*.{dm,dme,dmi}`, which
+  closed the last ⬜ in the capability matrix. **The BYOND canary job is built**: `byond-canary`
+  scrapes the 516 listing for the newest build, skips when it equals the pin, runs the suite
+  against it minus the version tripwire (which fails by definition on a newer build), and is
+  `continue-on-error` so a BYOND release cannot redden a commit that changed nothing — designed
+  2026-08-06 after 516.1686's assoc-key break, built today.

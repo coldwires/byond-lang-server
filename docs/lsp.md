@@ -88,13 +88,13 @@ With neither a root nor a `.dme`, analysis is off and stderr says so.
 
 ## Positions
 
-**Zero-based line and character, UTF-16 code units**, as LSP requires.
+**Zero-based line and character**, in the negotiated encoding's units.
 
-The server declares `positionEncoding: "utf-16"` in its `initialize` result and **does not read the
-client's `general.positionEncodings`**. Every conformant 3.17 client supports UTF-16, so this is
-safe in practice; a client that offers only UTF-8 will be mis-served, silently and only on lines
-containing non-ASCII text. If that is you, say so — the core takes the encoding as a parameter
-throughout and the C ABI already exposes both, so the fix is small.
+The server reads the client's `general.positionEncodings` at `initialize` and answers with the
+**first entry it speaks** — `utf-16` or `utf-8` — so the client's preference order is honoured. A
+client that sends nothing gets UTF-16, the LSP default, and the chosen encoding is declared back
+as `positionEncoding` in the result. Both directions use it: positions you send and every range
+the server answers.
 
 `dmc`, the CLI arbiter, is **1-based**. Add one when reproducing what your editor asked for.
 
@@ -118,7 +118,7 @@ consulted for it again.
 | | |
 |---|---|
 | Lifecycle | `initialize`, `initialized`, `shutdown`, `exit`, `$/setTrace`, `$/cancelRequest` |
-| Sync | `didOpen`, `didChange`, `didClose` (full) |
+| Sync | `didOpen`, `didChange`, `didClose` (full); `workspace/didChangeWatchedFiles` — send it when the disk changes outside the editor (a git checkout, a build step) and the server invalidates its caches and re-publishes diagnostics for open documents. Cheap: per-file caches revalidate by write time, so only what actually changed is re-read |
 | Diagnostics | `publishDiagnostics` — syntax **and** the binder's semantic set |
 | Read | `completion` + `completionItem/resolve`, `hover`, `signatureHelp`, `definition`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `documentSymbol`, `workspace/symbol` |
 | Write | `rename` — **best-effort by design**: the `WorkspaceEdit` carries only sites *proven* to be the symbol, a refusal answers `null`, and both the refusal reason and the count of uncertain sites (`:` accesses, untyped receivers, string dispatch) arrive as a `window/showMessage` warning, since the standard response has no field for either. `dm/rename` below returns the full list |
@@ -201,7 +201,6 @@ unresolvable receiver here.
 |---|---|
 | `textDocument/codeAction` | Near the front of the queue, unblocked by the diagnostics work |
 | `textDocument/formatting` | Not started |
-| `workspace/didChangeWatchedFiles` | Not wired. Send `didChange` for files that change outside the editor, or restart |
 | Incremental sync | See above |
 
 ---

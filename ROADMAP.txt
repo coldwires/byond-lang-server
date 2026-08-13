@@ -16,13 +16,13 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.29 MB, ABI 0.27, 39 exports, cdecl on every platform
+    dm_core.dll     2.29 MB, ABI 0.28, 39 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,271 green (1,209 core, 44 native, 18 lsp)
+    tests           1,278 green (1,214 core, 44 native, 20 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included
-    abi-smoke       258 checks from C++, reporting 0.27 on win-x64 AND win-x86
+    abi-smoke       258 checks from C++, reporting 0.28 on win-x64 AND win-x86
                     - both re-published and re-run locally 2026-08-13. FIVE of
                     six RIDs were green in CI at 0.21
                     - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
@@ -279,8 +279,8 @@ MILESTONES                                    (restructured 2026-08-02)
              declarations, expressions and statements all parse; proc bodies
              are real trees. reads the PREPROCESSED stream by default.
   [x] M5   Object tree + BYOND builtins
-             1,017 entries for 516.1666 bundled, including stddef's 199
-             #define constants. "mob." resolves loc and Move().
+             1,018 entries for 516.1666 bundled, including stddef's 199
+             #define constants. A typed receiver resolves loc and Move().
   [x] M6   Binder + completion
              "mob." and "t." work. type inference through new/as/assignment,
              which is the ONE place we knowingly disagree with dm.exe.
