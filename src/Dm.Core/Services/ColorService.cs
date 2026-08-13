@@ -24,6 +24,7 @@ public enum ColorForm
 /// </remarks>
 public sealed class ColorInformation
 {
+    /// <summary>One colour: where it sits, its 0-255 components, and how it was written.</summary>
     public ColorInformation(TextSpan span, int red, int green, int blue, int alpha, ColorForm form)
     {
         Span = span;
@@ -40,17 +41,22 @@ public sealed class ColorInformation
     /// </summary>
     public TextSpan Span { get; }
 
+    /// <summary>0-255, as DM writes it.</summary>
     public int Red { get; }
 
+    /// <summary>0-255, as DM writes it.</summary>
     public int Green { get; }
 
+    /// <summary>0-255, as DM writes it.</summary>
     public int Blue { get; }
 
     /// <summary>0 transparent, 255 opaque. 255 when none was written.</summary>
     public int Alpha { get; }
 
+    /// <summary>Literal or <c>rgb()</c> call, which decides what a presentation may offer back.</summary>
     public ColorForm Form { get; }
 
+    /// <summary>Debug rendering.</summary>
     public override string ToString() =>
         $"{Span} rgb({Red},{Green},{Blue},{Alpha}) {Form}";
 }
@@ -93,6 +99,7 @@ public sealed class ColorInformation
 /// </remarks>
 public static class ColorService
 {
+    /// <summary>The colours written in the file, in document order.</summary>
     public static IReadOnlyList<ColorInformation> ColorsIn(
         Document document, CancellationToken cancellationToken = default)
     {

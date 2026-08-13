@@ -27,6 +27,10 @@
 
 #include "dm_core.h"
 
+// <cstdint> is spelled out because MSVC's library headers pull it in transitively and libstdc++'s
+// do not — every std::int32_t below compiled on both Windows architectures and failed on every
+// Linux runner, which is how the first CI run after this header landed went red.
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -340,6 +344,17 @@ public:
     std::string signature_at(const std::string &file, std::int32_t line, std::int32_t character,
                              dm_position_encoding encoding) const {
         return at(dm_signature_at, file, line, character, encoding, "dm_signature_at");
+    }
+
+    /// Best-effort rename: the provable edits, plus the "uncertain" sites a human must check.
+    /// A refusal comes back as data ("refusal" != "none"), not as an exception.
+    std::string rename_at(const std::string &file, std::int32_t line, std::int32_t character,
+                          dm_position_encoding encoding, const std::string &new_name) const {
+        char *out = nullptr;
+        detail::check(dm_rename_at(handle_, file.c_str(), line, character, encoding,
+                                   new_name.c_str(), &out),
+                      "dm_rename_at");
+        return detail::take(out);
     }
 
     /// Inferred types for untyped locals. Lines are zero-based and inclusive, like classify.

@@ -3,7 +3,7 @@ using Dm.Core.Text;
 
 namespace Dm.Core.Syntax;
 
-public abstract class StatementSyntax : SyntaxNode
+internal abstract class StatementSyntax : SyntaxNode
 {
     protected StatementSyntax(TextSpan span) : base(span)
     {
@@ -11,7 +11,7 @@ public abstract class StatementSyntax : SyntaxNode
 }
 
 /// <summary>A group of statements, from an indented block, a brace block, or one inline statement.</summary>
-public sealed class BlockStatementSyntax : StatementSyntax
+internal sealed class BlockStatementSyntax : StatementSyntax
 {
     public BlockStatementSyntax(IReadOnlyList<StatementSyntax> statements, TextSpan span) : base(span)
         => Statements = statements;
@@ -20,7 +20,7 @@ public sealed class BlockStatementSyntax : StatementSyntax
 }
 
 /// <summary>An expression evaluated for its effect, including calls and assignments.</summary>
-public sealed class ExpressionStatementSyntax : StatementSyntax
+internal sealed class ExpressionStatementSyntax : StatementSyntax
 {
     public ExpressionStatementSyntax(ExpressionSyntax expression, TextSpan span) : base(span)
         => Expression = expression;
@@ -29,7 +29,7 @@ public sealed class ExpressionStatementSyntax : StatementSyntax
 }
 
 /// <summary>A local <c>var</c> declaration inside a proc body.</summary>
-public sealed class LocalVarStatementSyntax : StatementSyntax
+internal sealed class LocalVarStatementSyntax : StatementSyntax
 {
     public LocalVarStatementSyntax(
         string name,
@@ -75,7 +75,7 @@ public sealed class LocalVarStatementSyntax : StatementSyntax
     public IReadOnlyList<ExpressionSyntax> Dimensions { get; }
 }
 
-public sealed class IfStatementSyntax : StatementSyntax
+internal sealed class IfStatementSyntax : StatementSyntax
 {
     public IfStatementSyntax(
         ExpressionSyntax condition,
@@ -97,7 +97,7 @@ public sealed class IfStatementSyntax : StatementSyntax
     public StatementSyntax? Otherwise { get; }
 }
 
-public sealed class WhileStatementSyntax : StatementSyntax
+internal sealed class WhileStatementSyntax : StatementSyntax
 {
     public WhileStatementSyntax(ExpressionSyntax condition, StatementSyntax? body, TextSpan span) : base(span)
     {
@@ -110,7 +110,7 @@ public sealed class WhileStatementSyntax : StatementSyntax
     public StatementSyntax? Body { get; }
 }
 
-public sealed class DoWhileStatementSyntax : StatementSyntax
+internal sealed class DoWhileStatementSyntax : StatementSyntax
 {
     public DoWhileStatementSyntax(StatementSyntax? body, ExpressionSyntax? condition, TextSpan span) : base(span)
     {
@@ -124,7 +124,7 @@ public sealed class DoWhileStatementSyntax : StatementSyntax
 }
 
 /// <summary>Which of DM's four <c>for</c> shapes a header used.</summary>
-public enum ForKind
+internal enum ForKind
 {
     /// <summary>Clause form: <c>for(var/i = 1, i &lt;= 5, i++)</c>, or the same with semicolons.</summary>
     Clauses,
@@ -145,7 +145,7 @@ public enum ForKind
     Bare,
 }
 
-public sealed class ForStatementSyntax : StatementSyntax
+internal sealed class ForStatementSyntax : StatementSyntax
 {
     public ForStatementSyntax(
         ForKind kind,
@@ -194,7 +194,7 @@ public sealed class ForStatementSyntax : StatementSyntax
 /// <c>else</c>. Under <c>#pragma syntax C switch</c> they are <c>case 1:</c> and <c>default:</c>,
 /// and fall-through becomes real — a genuinely different grammar, not an alias.
 /// </remarks>
-public sealed class SwitchCaseSyntax : SyntaxNode
+internal sealed class SwitchCaseSyntax : SyntaxNode
 {
     public SwitchCaseSyntax(
         IReadOnlyList<ExpressionSyntax> values,
@@ -220,7 +220,7 @@ public sealed class SwitchCaseSyntax : SyntaxNode
     public StatementSyntax? Body { get; }
 }
 
-public sealed class SwitchStatementSyntax : StatementSyntax
+internal sealed class SwitchStatementSyntax : StatementSyntax
 {
     public SwitchStatementSyntax(
         ExpressionSyntax value,
@@ -242,7 +242,7 @@ public sealed class SwitchStatementSyntax : StatementSyntax
     public bool IsCStyle { get; }
 }
 
-public sealed class ReturnStatementSyntax : StatementSyntax
+internal sealed class ReturnStatementSyntax : StatementSyntax
 {
     public ReturnStatementSyntax(ExpressionSyntax? value, TextSpan span) : base(span) => Value = value;
 
@@ -250,7 +250,7 @@ public sealed class ReturnStatementSyntax : StatementSyntax
 }
 
 /// <summary>A <c>break</c> or <c>continue</c>, each of which takes an optional loop label.</summary>
-public sealed class BreakStatementSyntax : StatementSyntax
+internal sealed class BreakStatementSyntax : StatementSyntax
 {
     public BreakStatementSyntax(bool isContinue, string? label, TextSpan span) : base(span)
     {
@@ -264,7 +264,7 @@ public sealed class BreakStatementSyntax : StatementSyntax
 }
 
 /// <summary>A loop label, written <c>name:</c> on its own line.</summary>
-public sealed class LabelStatementSyntax : StatementSyntax
+internal sealed class LabelStatementSyntax : StatementSyntax
 {
     public LabelStatementSyntax(string name, StatementSyntax? body, TextSpan span) : base(span)
     {
@@ -277,7 +277,7 @@ public sealed class LabelStatementSyntax : StatementSyntax
     public StatementSyntax? Body { get; }
 }
 
-public sealed class GotoStatementSyntax : StatementSyntax
+internal sealed class GotoStatementSyntax : StatementSyntax
 {
     public GotoStatementSyntax(string? label, TextSpan span) : base(span) => Label = label;
 
@@ -285,7 +285,7 @@ public sealed class GotoStatementSyntax : StatementSyntax
 }
 
 /// <summary><c>spawn</c>, with an optional delay in parentheses.</summary>
-public sealed class SpawnStatementSyntax : StatementSyntax
+internal sealed class SpawnStatementSyntax : StatementSyntax
 {
     public SpawnStatementSyntax(ExpressionSyntax? delay, StatementSyntax? body, TextSpan span) : base(span)
     {
@@ -299,7 +299,7 @@ public sealed class SpawnStatementSyntax : StatementSyntax
 }
 
 /// <summary><c>del x</c> or <c>throw x</c>, both of which take a bare operand with no parentheses.</summary>
-public sealed class UnaryStatementSyntax : StatementSyntax
+internal sealed class UnaryStatementSyntax : StatementSyntax
 {
     public UnaryStatementSyntax(TokenKind keyword, ExpressionSyntax? operand, TextSpan span) : base(span)
     {
@@ -312,7 +312,7 @@ public sealed class UnaryStatementSyntax : StatementSyntax
     public ExpressionSyntax? Operand { get; }
 }
 
-public sealed class TryStatementSyntax : StatementSyntax
+internal sealed class TryStatementSyntax : StatementSyntax
 {
     public TryStatementSyntax(
         StatementSyntax? body,
@@ -335,7 +335,7 @@ public sealed class TryStatementSyntax : StatementSyntax
 }
 
 /// <summary>A <c>set</c> statement, as in <c>set category = "Debug"</c> or <c>set src in view()</c>.</summary>
-public sealed class SetStatementSyntax : StatementSyntax
+internal sealed class SetStatementSyntax : StatementSyntax
 {
     public SetStatementSyntax(string name, ExpressionSyntax? value, TextSpan span) : base(span)
     {

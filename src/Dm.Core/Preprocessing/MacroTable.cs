@@ -32,9 +32,10 @@ public sealed class MacroTable
     /// </summary>
     public int StateHash => _stateHash;
 
+    /// <summary>Names of every macro currently defined.</summary>
     public IReadOnlyCollection<string> Names => _macros.Keys;
 
-    public void Define(MacroDefinition macro)
+    internal void Define(MacroDefinition macro)
     {
         ArgumentNullException.ThrowIfNull(macro);
 
@@ -54,6 +55,7 @@ public sealed class MacroTable
         }
     }
 
+    /// <summary>Removes a macro; false if it was not defined. Mixes into the state hash either way.</summary>
     public bool Undefine(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -63,9 +65,10 @@ public sealed class MacroTable
         return removed;
     }
 
+    /// <summary>True if the name is defined here — in a workspace's table, at the end of the walk.</summary>
     public bool IsDefined(string name) => _macros.ContainsKey(name);
 
-    public bool TryGet(string name, out MacroDefinition macro) => _macros.TryGetValue(name, out macro!);
+    internal bool TryGet(string name, out MacroDefinition macro) => _macros.TryGetValue(name, out macro!);
 
     /// <summary>
     /// Seeds the compiler's predefined macros.

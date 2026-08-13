@@ -20,7 +20,7 @@ namespace Dm.Core.Syntax;
 /// libraries, so each file starts from the default.
 /// </para>
 /// </remarks>
-public sealed class SyntaxModes
+internal sealed class SyntaxModes
 {
     private readonly List<(bool CFor, bool CSwitch)> _saved = new();
 

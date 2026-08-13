@@ -15,10 +15,13 @@ public sealed class ParseResult
         Diagnostics = diagnostics;
     }
 
+    /// <summary>The source the tree was parsed from; every span indexes into it.</summary>
     public SourceText Text { get; }
 
+    /// <summary>Root of the tree. Opaque outside the assembly on purpose — the AST is not API.</summary>
     public FileSyntax Root { get; }
 
+    /// <summary>The syntax half of a file's diagnostics; a caller merges these with the binder's.</summary>
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
 }
 
@@ -62,7 +65,7 @@ internal enum BlockContext
 /// not an option.
 /// </para>
 /// </remarks>
-public sealed class DeclarationParser
+internal sealed class DeclarationParser
 {
     private static readonly HashSet<string> Modifiers =
         new(StringComparer.Ordinal) { "const", "tmp", "global", "static", "final" };

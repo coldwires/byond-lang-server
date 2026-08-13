@@ -11,8 +11,13 @@ namespace Dm.Core.Services;
 /// <summary>How a reference uses the symbol it names.</summary>
 public enum ReferenceKind
 {
+    /// <summary>The value is read, or the type path is mentioned.</summary>
     Read = 0,
+
+    /// <summary>The name is the target of an assignment, compound assignments included.</summary>
     Write = 1,
+
+    /// <summary>The name is invoked as a proc.</summary>
     Call = 2,
 
     /// <summary>A proc declaration overriding the target — the incoming half of a type hierarchy.</summary>
@@ -22,6 +27,7 @@ public enum ReferenceKind
 /// <summary>One use of a symbol somewhere in the project.</summary>
 public sealed class Reference
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public Reference(string file, TextSpan span, string target, ReferenceKind kind, string inside)
     {
         File = file;
@@ -31,6 +37,7 @@ public sealed class Reference
         Inside = inside;
     }
 
+    /// <summary>The referencing file.</summary>
     public string File { get; }
 
     /// <summary>The referencing name's span in that file.</summary>
@@ -44,6 +51,7 @@ public sealed class Reference
     /// </summary>
     public string Target { get; }
 
+    /// <summary>Read, write, call or override — how the site uses the symbol.</summary>
     public ReferenceKind Kind { get; }
 
     /// <summary>
@@ -52,20 +60,24 @@ public sealed class Reference
     /// </summary>
     public string Inside { get; }
 
+    /// <summary>Debug rendering: file, kind, target and enclosing symbol.</summary>
     public override string ToString() => $"{File}: {Kind} {Target} inside {Inside}";
 }
 
 /// <summary>A reference listing, and whether the cap cut it short.</summary>
 public sealed class ReferenceListing
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public ReferenceListing(IReadOnlyList<Reference> references, bool truncated)
     {
         References = references;
         Truncated = truncated;
     }
 
+    /// <summary>The hits, file by file in the order the caller supplied the files.</summary>
     public IReadOnlyList<Reference> References { get; }
 
+    /// <summary>True when the cap cut the list. Reported rather than left to infer from the count.</summary>
     public bool Truncated { get; }
 }
 

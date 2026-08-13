@@ -28,7 +28,7 @@ namespace Dm.Core.Preprocessing;
 /// project may redefine one of these, and the later definition wins.
 /// </para>
 /// </remarks>
-public static class BuiltinMacros
+internal static class BuiltinMacros
 {
     /// <summary>Defines every bundled constant into <paramref name="table"/>.</summary>
     public static void Seed(MacroTable table)

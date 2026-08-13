@@ -19,6 +19,7 @@ public enum FoldKind
 /// <summary>One foldable line range, inclusive of both ends.</summary>
 public sealed class FoldingRange
 {
+    /// <summary>One range; lines are zero-based.</summary>
     public FoldingRange(int startLine, int endLine, FoldKind kind)
     {
         StartLine = startLine;
@@ -26,12 +27,16 @@ public sealed class FoldingRange
         Kind = kind;
     }
 
+    /// <summary>Zero-based first line of the fold.</summary>
     public int StartLine { get; }
 
+    /// <summary>Zero-based last line, inclusive — this line folds too.</summary>
     public int EndLine { get; }
 
+    /// <summary>Region or comment, so a client can fold each separately.</summary>
     public FoldKind Kind { get; }
 
+    /// <summary>Debug rendering.</summary>
     public override string ToString() => $"{StartLine}-{EndLine} {Kind}";
 }
 
@@ -51,6 +56,7 @@ public sealed class FoldingRange
 /// </remarks>
 public static class FoldingService
 {
+    /// <summary>Foldable ranges for the file: multi-line declarations, proc bodies and comment runs.</summary>
     public static IReadOnlyList<FoldingRange> RangesFor(
         Document document, CancellationToken cancellationToken = default)
     {

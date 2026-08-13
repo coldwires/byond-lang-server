@@ -12,6 +12,7 @@ namespace Dm.Core.Services;
 /// <summary>One clickable span in a file and the path it opens.</summary>
 public sealed class DocumentLink
 {
+    /// <summary>The span a client underlines and the file it opens.</summary>
     public DocumentLink(TextSpan span, string target)
     {
         Span = span;
@@ -24,6 +25,7 @@ public sealed class DocumentLink
     /// <summary>Absolute path to the file this opens.</summary>
     public string Target { get; }
 
+    /// <summary>Debug rendering.</summary>
     public override string ToString() => $"{Span} -> {Target}";
 }
 
@@ -47,6 +49,7 @@ public sealed class DocumentLink
 /// </remarks>
 public static class DocumentLinkService
 {
+    /// <summary>The resolvable <c>#include</c> targets in the file; an unresolved include yields no link.</summary>
     public static IReadOnlyList<DocumentLink> LinksFor(
         Document document,
         string? libraryRoot = null,

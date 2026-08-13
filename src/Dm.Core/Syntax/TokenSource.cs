@@ -27,7 +27,7 @@ namespace Dm.Core.Syntax;
 /// out anyway.
 /// </para>
 /// </remarks>
-public sealed class TokenSource
+internal sealed class TokenSource
 {
     private readonly string[]? _texts;
     private readonly bool[]? _spaceBefore;

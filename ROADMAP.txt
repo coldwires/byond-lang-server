@@ -16,14 +16,14 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.23 MB, ABI 0.25, 38 exports, cdecl on every platform
+    dm_core.dll     2.29 MB, ABI 0.27, 39 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,232 green (1,171 core, 44 native, 17 lsp)
+    tests           1,271 green (1,209 core, 44 native, 18 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included
-    abi-smoke       242 checks from C++, reporting 0.24 on win-x64 AND win-x86
-                    - both re-published and re-run locally 2026-08-08. FIVE of
+    abi-smoke       258 checks from C++, reporting 0.27 on win-x64 AND win-x86
+                    - both re-published and re-run locally 2026-08-13. FIVE of
                     six RIDs were green in CI at 0.21
                     - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
                     osx-x64 was UNVERIFIED until 2026-08-07: it asked for the
@@ -133,11 +133,11 @@ WHAT'S NEXT
 
   CANDY, still unscheduled: .dmm maps, the rung-1 debugger.
 
-  ONE DEFECT FOUND AND DELIBERATELY NOT FIXED:
-    - "mob." completes what dm.exe never accepts. Kept as PLAN 1's
-      acceptance target, now marked typeFrom "bareTypeName" so a client can
-      drop it. Removing it is a product call.
-    (the ~25 non-member scrape entries were fixed 2026-08-11)
+  (RESOLVED 2026-08-13: "mob." completing what dm.exe never accepts was
+   removed at ABI 0.26, on the user's call. The bare-type-name fallback is
+   gone and typed GLOBALS resolve as receivers instead - a gap the fallback
+   had been masking. The ~25 non-member scrape entries were fixed
+   2026-08-11.)
 
   STILL THE HIGHEST-RISK UNVERIFIED THING: nobody has watched the VS Code
   client run in a real game. CI cannot cover it.

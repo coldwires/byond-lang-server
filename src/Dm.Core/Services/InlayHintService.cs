@@ -20,6 +20,7 @@ public enum InlayHintKind
 /// <summary>One rendered annotation, anchored after a position in the file.</summary>
 public sealed class InlayHint
 {
+    /// <summary>A hint at a position, its label already rendered.</summary>
     public InlayHint(LinePosition position, string label, InlayHintKind kind)
     {
         Position = position;
@@ -33,8 +34,10 @@ public sealed class InlayHint
     /// <summary>The rendered text, separator included: <c>: /obj/item</c>.</summary>
     public string Label { get; }
 
+    /// <summary>Type or parameter, so a client can style and toggle the kinds separately.</summary>
     public InlayHintKind Kind { get; }
 
+    /// <summary>Debug rendering.</summary>
     public override string ToString() => $"{Position} {Label}";
 }
 

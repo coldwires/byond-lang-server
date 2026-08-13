@@ -30,6 +30,7 @@ public sealed class SemanticContext
 {
     private readonly HashSet<string> _macros;
 
+    /// <summary>Context from whatever the caller already has; both parts are optional.</summary>
     public SemanticContext(ObjectTree? tree = null, IReadOnlyCollection<string>? macros = null)
     {
         Tree = tree;
@@ -41,6 +42,7 @@ public sealed class SemanticContext
     /// <summary>The object tree, when the caller already had one. Null is normal on a paint path.</summary>
     public ObjectTree? Tree { get; }
 
+    /// <summary>True if the name was in the macro set this context was built with.</summary>
     public bool IsMacro(string name) => _macros.Contains(name);
 
     /// <summary>

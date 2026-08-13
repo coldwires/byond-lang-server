@@ -63,9 +63,9 @@ public class ExpressionParserTests
     [Theory]
     [InlineData("*p", UnaryOperatorKind.Dereference)]
     [InlineData("&x", UnaryOperatorKind.AddressOf)]
-    public void Star_and_amp_are_pointer_operators_in_unary_position(string source, UnaryOperatorKind expected)
+    public void Star_and_amp_are_pointer_operators_in_unary_position(string source, object expected)
     {
-        Assert.Equal(expected, Assert.IsType<UnaryExpressionSyntax>(Parse(source)).Kind);
+        Assert.Equal((UnaryOperatorKind)expected, Assert.IsType<UnaryExpressionSyntax>(Parse(source)).Kind);
     }
 
     [Theory]
@@ -73,9 +73,9 @@ public class ExpressionParserTests
     [InlineData("a & b", TokenKind.Amp)]
     [InlineData("a %% b", TokenKind.PercentPercent)]
     [InlineData("a <=> b", TokenKind.Spaceship)]
-    public void The_same_glyphs_are_binary_between_operands(string source, TokenKind expected)
+    public void The_same_glyphs_are_binary_between_operands(string source, object expected)
     {
-        Assert.Equal(expected, Assert.IsType<BinaryExpressionSyntax>(Parse(source)).OperatorToken);
+        Assert.Equal((TokenKind)expected, Assert.IsType<BinaryExpressionSyntax>(Parse(source)).OperatorToken);
     }
 
     /// <summary><c>~=</c> is an equivalence test at level 10, not a compound assignment.</summary>
@@ -196,11 +196,11 @@ public class ExpressionParserTests
     [InlineData("a:b", MemberAccessKind.Colon)]
     [InlineData("a?.b", MemberAccessKind.NullDot)]
     [InlineData("a?:b", MemberAccessKind.NullColon)]
-    public void Member_access_forms_stay_distinct(string source, MemberAccessKind expected)
+    public void Member_access_forms_stay_distinct(string source, object expected)
     {
         MemberAccessExpressionSyntax access = Assert.IsType<MemberAccessExpressionSyntax>(Parse(source));
 
-        Assert.Equal(expected, access.Kind);
+        Assert.Equal((MemberAccessKind)expected, access.Kind);
         Assert.Equal("b", access.Name);
     }
 
@@ -391,9 +391,9 @@ public class ExpressionParserTests
     [InlineData("0x1F", LiteralKind.Number)]
     [InlineData("null", LiteralKind.Null)]
     [InlineData("'icons/mob.dmi'", LiteralKind.Resource)]
-    public void Literals_carry_their_kind(string source, LiteralKind expected)
+    public void Literals_carry_their_kind(string source, object expected)
     {
-        Assert.Equal(expected, Assert.IsType<LiteralExpressionSyntax>(Parse(source)).Kind);
+        Assert.Equal((LiteralKind)expected, Assert.IsType<LiteralExpressionSyntax>(Parse(source)).Kind);
     }
 
     /// <summary><c>input(...) as text|null</c> — the clause belongs to the call it follows.</summary>

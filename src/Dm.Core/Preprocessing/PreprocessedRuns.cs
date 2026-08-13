@@ -41,7 +41,7 @@ internal sealed class RunState
 }
 
 /// <summary>One file's worth of the preprocessed stream.</summary>
-public sealed class PreprocessedFile
+internal sealed class PreprocessedFile
 {
     private readonly RunState _state;
 

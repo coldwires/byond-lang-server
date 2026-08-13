@@ -49,6 +49,7 @@ public readonly struct TypePath : IEquatable<TypePath>, IComparable<TypePath>
     /// <summary>The normalised path text, always beginning with <c>/</c>.</summary>
     public string Text => _text ?? "/";
 
+    /// <summary>True for <c>/</c> itself, including the default-constructed value.</summary>
     public bool IsRoot => Text.Length == 1;
 
     /// <summary>The last segment, which is the type's own name. Empty for the root.</summary>
@@ -122,6 +123,7 @@ public readonly struct TypePath : IEquatable<TypePath>, IComparable<TypePath>
     public TypePath Append(string segment)
         => string.IsNullOrEmpty(segment) ? this : new TypePath(IsRoot ? "/" + segment : Text + "/" + segment);
 
+    /// <summary>Appends each segment in order, skipping empty ones.</summary>
     public TypePath Append(IReadOnlyList<string> segments)
     {
         TypePath path = this;
@@ -146,23 +148,31 @@ public readonly struct TypePath : IEquatable<TypePath>, IComparable<TypePath>
                && (text.Length == prefix.Length || text[prefix.Length] == '/');
     }
 
+    /// <summary>The path's segments in order, without separators. Empty for the root.</summary>
     public IReadOnlyList<string> Segments
         => IsRoot ? Array.Empty<string>() : Text[1..].Split('/');
 
     // Reference equality first: cached contributions replay the same instances every rebuild, so
     // the ordinal compare is the cold path.
+    /// <summary>Ordinal equality of the normalised text.</summary>
     public bool Equals(TypePath other)
         => ReferenceEquals(Text, other.Text) || string.Equals(Text, other.Text, StringComparison.Ordinal);
 
+    /// <summary>Value equality.</summary>
     public override bool Equals(object? obj) => obj is TypePath other && Equals(other);
 
+    /// <summary>Ordinal hash of the normalised text, computed once at construction.</summary>
     public override int GetHashCode() => _text is null ? RootHash : _hash;
 
+    /// <summary>Ordinal order of the normalised text, so a parent sorts before its descendants.</summary>
     public int CompareTo(TypePath other) => string.CompareOrdinal(Text, other.Text);
 
+    /// <summary>Value equality.</summary>
     public static bool operator ==(TypePath left, TypePath right) => left.Equals(right);
 
+    /// <summary>Value inequality.</summary>
     public static bool operator !=(TypePath left, TypePath right) => !left.Equals(right);
 
+    /// <summary>The normalised path text, same as <see cref="Text"/>.</summary>
     public override string ToString() => Text;
 }

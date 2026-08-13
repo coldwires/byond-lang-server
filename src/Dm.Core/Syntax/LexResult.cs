@@ -17,14 +17,16 @@ public sealed class LexResult
         Diagnostics = diagnostics;
     }
 
+    /// <summary>The source the tokens were lexed from; every token span indexes into it.</summary>
     public SourceText Text { get; }
 
     /// <summary>All tokens, ending with <see cref="TokenKind.EndOfFile"/>. Comments included.</summary>
-    public IReadOnlyList<Token> Tokens { get; }
+    internal IReadOnlyList<Token> Tokens { get; }
 
+    /// <summary>What went wrong while lexing; empty on a clean file.</summary>
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
 
-    public string GetText(Token token) => Text.ToString(token.Span);
+    internal string GetText(Token token) => Text.ToString(token.Span);
 
     /// <summary>
     /// Stable, diff-readable dump used by snapshot fixtures and <c>Dm.Cli dump-tokens</c>.

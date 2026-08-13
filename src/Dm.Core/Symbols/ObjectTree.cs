@@ -27,7 +27,7 @@ public sealed class ObjectTree
     /// the ABI, the LSP, the CLI and the reference index — without a signature change apiece.
     /// Null on a tree built without a walk, such as a unit test's, where nothing is suppressed.
     /// </remarks>
-    public Preprocessing.PragmaLevels? SuppressedWarnings { get; set; }
+    internal Preprocessing.PragmaLevels? SuppressedWarnings { get; set; }
 
     /// <summary>
     /// Reads the state names out of a <c>.dmi</c>, given the resource path as the source writes it
@@ -46,20 +46,26 @@ public sealed class ObjectTree
 
     private readonly Dictionary<TypePath, TypeSymbol> _types = new();
 
+    /// <summary>Creates a tree holding only the root node.</summary>
     public ObjectTree()
     {
         Root = new TypeSymbol(TypePath.Root, null);
         _types.Add(TypePath.Root, Root);
     }
 
+    /// <summary>The <c>/</c> node. Holds the global procs and vars; not part of any inheritance chain.</summary>
     public TypeSymbol Root { get; }
 
+    /// <summary>Number of nodes, the root included.</summary>
     public int Count => _types.Count;
 
+    /// <summary>Every node, the root included, in no guaranteed order.</summary>
     public IReadOnlyCollection<TypeSymbol> Types => _types.Values;
 
+    /// <summary>The node at a path, or null when nothing brought it into being.</summary>
     public TypeSymbol? Find(TypePath path) => _types.GetValueOrDefault(path);
 
+    /// <summary>Parses written text and finds its node, or null when nothing brought it into being.</summary>
     public TypeSymbol? Find(string path) => Find(TypePath.Parse(path));
 
     /// <summary>Returns the node for a path, creating it and every ancestor as needed.</summary>
@@ -155,7 +161,7 @@ public sealed class ObjectTree
     }
 
     /// <summary>Finds a var on a type or anything it inherits from.</summary>
-    public VarSymbol? ResolveVar(TypeSymbol type, string name)
+    internal VarSymbol? ResolveVar(TypeSymbol type, string name)
     {
         foreach (TypeSymbol candidate in InheritanceChain(type))
         {
@@ -167,7 +173,7 @@ public sealed class ObjectTree
     }
 
     /// <summary>Finds a proc on a type or anything it inherits from.</summary>
-    public ProcSymbol? ResolveProc(TypeSymbol type, string name)
+    internal ProcSymbol? ResolveProc(TypeSymbol type, string name)
     {
         foreach (TypeSymbol candidate in InheritanceChain(type))
         {

@@ -41,6 +41,7 @@ work list.
 | Colour swatches (`rgb()`, `"#rrggbb"`) | `ColorService` | `dm_document_colors` (0.23) | `documentColor` + `colorPresentation`, components as 0-1 floats |
 | `.dmi` icon states | `Dm.Assets.DmiReader` | `dm_icon_states` (0.24) | `dm/iconStates` + the client's **DM: Browse Icon States** command |
 | `icon_state` completion | `CompletionService`, context `IconState` | `dm_complete_at` `context: "IconState"` (0.25) | `completion` — the items, but no context word: LSP has no field for it |
+| Rename (best-effort + uncertain-site list) | `RenameService` / `Workspace.RenameAt` | `dm_rename_at` (0.27) | `rename` (provable edits only; uncertain count via `window/showMessage`) + `dm/rename` (the full list) |
 
 **No gaps remain on any surface** — M8 closed the last blank row on 2026-08-08, and the `.dmi` row
 gained a caller on 2026-08-12. That row had been recording a second kind of gap, and the one this

@@ -125,13 +125,16 @@ public class CompletionServiceTests
     // -- the acceptance target ---------------------------------------------
 
     /// <summary>
-    /// PLAN §1's target: <c>mob.</c> lists <c>/mob</c>'s members including inherited and builtin
-    /// ones. None of <c>loc</c> or <c>Move</c> appears in any source file.
+    /// PLAN §1's target, restated 2026-08-13 to what dm.exe accepts: <c>mob.</c> lists
+    /// <c>/mob</c>'s members — inherited and builtin included — when <c>mob</c> is a VAR, here
+    /// the idiomatic global <c>var/mob/mob</c>. None of <c>loc</c> or <c>Move</c> appears in any
+    /// source file.
     /// </summary>
     [Fact]
-    public void Mob_dot_lists_inherited_and_builtin_members()
+    public void Mob_dot_lists_inherited_and_builtin_members_through_a_var()
     {
-        CompletionResult result = Complete("/mob\n\tvar/hp = 1\n/proc/f()\n\tmob.|\n", withBuiltins: true);
+        CompletionResult result = Complete(
+            "var/mob/mob\n/mob\n\tvar/hp = 1\n/proc/f()\n\tmob.|\n", withBuiltins: true);
 
         Assert.Equal(CompletionContext.Member, result.Context);
 
@@ -238,13 +241,14 @@ public class CompletionServiceTests
 
     /// <summary>
     /// Globals are offered for a bare identifier but never after <c>.</c> — <c>istype(x)</c> is a
-    /// call, while <c>mob.istype()</c> is not valid DM.
+    /// call, while <c>m.istype()</c> is not valid DM. The root is not in the inheritance chain.
     /// </summary>
     [Fact]
     public void Globals_are_offered_bare_but_not_after_a_dot()
     {
         Assert.Contains("istype", Names(Complete("/proc/f()\n\t|\n", withBuiltins: true)));
-        Assert.DoesNotContain("istype", Names(Complete("/mob\n/proc/f()\n\tmob.|\n", withBuiltins: true)));
+        Assert.DoesNotContain("istype", Names(Complete(
+            "/mob\n/proc/f()\n\tvar/mob/m\n\tm.|\n", withBuiltins: true)));
     }
 
     // -- paths and partial words -------------------------------------------
@@ -285,26 +289,43 @@ public class CompletionServiceTests
     }
 
     /// <summary>
-    /// A bare type name is kept as PLAN §1's acceptance target and marked, because dm.exe does not
-    /// agree with it: <c>mob.loc</c>, <c>mob.hp</c> and <c>mob.sub</c> are all "undefined var",
-    /// since a bare <c>mob</c> is neither a variable nor a path. Unlike an untyped local there is
-    /// no edit that makes it legal, so the flag is the only honest part.
+    /// A bare type name offers NOTHING. <c>mob.loc</c>, <c>mob.hp</c> and <c>mob.sub</c> are all
+    /// "undefined var" — a bare <c>mob</c> is neither a variable nor a path, and no edit makes the
+    /// expression legal. The fallback that offered members here anyway (marked
+    /// <c>bareTypeName</c>) was removed 2026-08-13; the spelling completes only when a var of
+    /// that name is in scope, which is the var resolving, not the type.
     /// </summary>
     [Fact]
-    public void A_bare_type_name_still_offers_members_but_is_marked()
+    public void A_bare_type_name_offers_nothing()
     {
         CompletionResult result = Complete("/mob\n\tvar/hp = 1\n/proc/f()\n\tmob.|\n");
 
-        Assert.Contains("hp", Names(result));
-        Assert.All(result.Items, i => Assert.Equal(TypeSource.BareTypeName, i.TypeSource));
-        Assert.All(result.Items, i => Assert.True(i.Inferred));
+        Assert.Equal(CompletionContext.Member, result.Context);
+        Assert.Empty(result.Items);
+    }
+
+    /// <summary>
+    /// A typed GLOBAL resolves as a receiver — dm.exe compiles <c>machine.name</c> through a root
+    /// <c>var/obj/machine</c>. The bare-type-name fallback had been masking that this lookup did
+    /// not exist: the resolver checked locals and the enclosing type's vars and never root vars,
+    /// so this exact shape answered 0 items while the fallback made `mob.` answer plenty.
+    /// </summary>
+    [Fact]
+    public void A_typed_global_resolves_as_a_receiver()
+    {
+        CompletionResult result = Complete(
+            "var/obj/machine = new\n/obj\n\tvar/wattage = 100\n/proc/f()\n\tmachine.|\n");
+
+        Assert.Contains("wattage", Names(result));
+        Assert.All(result.Items, i => Assert.Equal(TypeSource.Written, i.TypeSource));
     }
 
     /// <summary>A partly typed word is not the trigger; what precedes it is.</summary>
     [Fact]
     public void A_partial_word_still_completes_against_the_receiver()
     {
-        CompletionResult result = Complete("/mob\n\tvar/health = 1\n/proc/f()\n\tmob.he|\n");
+        CompletionResult result = Complete(
+            "/mob\n\tvar/health = 1\n/proc/f()\n\tvar/mob/m\n\tm.he|\n");
 
         Assert.Equal(CompletionContext.Member, result.Context);
         Assert.Contains("health", Names(result));
@@ -322,7 +343,8 @@ public class CompletionServiceTests
     [Fact]
     public void Builtin_items_are_marked_as_such()
     {
-        CompletionResult result = Complete("/mob\n\tvar/hp = 1\n/proc/f()\n\tmob.|\n", withBuiltins: true);
+        CompletionResult result = Complete(
+            "/mob\n\tvar/hp = 1\n/proc/f()\n\tvar/mob/m\n\tm.|\n", withBuiltins: true);
 
         Assert.True(result.Items.Single(i => i.Name == "Login").IsBuiltin);
         Assert.False(result.Items.Single(i => i.Name == "hp").IsBuiltin);

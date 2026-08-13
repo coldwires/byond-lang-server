@@ -12,6 +12,7 @@ namespace Dm.Core.Services;
 /// <summary>What to show when the pointer rests on a symbol.</summary>
 public sealed class HoverResult
 {
+    /// <summary>A hover; a part with nothing to show is passed as an empty string.</summary>
     public HoverResult(string detail, string signature, string documentation, TextSpan span,
         string reference = "")
     {
@@ -59,6 +60,7 @@ public sealed class HoverResult
 /// </remarks>
 public static class HoverService
 {
+    /// <summary>The hover for the symbol at a position, or null when nothing resolves there.</summary>
     public static HoverResult? HoverAt(
         ObjectTree tree,
         Document document,

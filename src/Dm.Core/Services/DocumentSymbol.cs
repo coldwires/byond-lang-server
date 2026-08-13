@@ -39,6 +39,7 @@ public enum SymbolKind
 /// </remarks>
 public sealed class DocumentSymbol
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public DocumentSymbol(
         string name,
         string detail,
@@ -61,6 +62,7 @@ public sealed class DocumentSymbol
         Owner = owner;
     }
 
+    /// <summary>The name as the outline shows it, without any path.</summary>
     public string Name { get; }
 
     /// <summary>
@@ -82,11 +84,13 @@ public sealed class DocumentSymbol
     /// </remarks>
     public string Owner { get; }
 
+    /// <summary>What the symbol is, so a client can pick an icon.</summary>
     public SymbolKind Kind { get; }
 
     /// <summary>Start of the whole declaration, including any members beneath it.</summary>
     public LinePosition Start { get; }
 
+    /// <summary>End of the whole declaration, pairing with <see cref="Start"/>.</summary>
     public LinePosition End { get; }
 
     /// <summary>
@@ -95,9 +99,12 @@ public sealed class DocumentSymbol
     /// </summary>
     public LinePosition SelectionStart { get; }
 
+    /// <summary>End of the name alone, closing the range <see cref="SelectionStart"/> opens.</summary>
     public LinePosition SelectionEnd { get; }
 
+    /// <summary>Nested symbols, in source order. Empty for a leaf.</summary>
     public IReadOnlyList<DocumentSymbol> Children { get; }
 
+    /// <summary>Debug rendering: kind and name.</summary>
     public override string ToString() => $"{Kind} {Name}";
 }

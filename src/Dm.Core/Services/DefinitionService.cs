@@ -11,6 +11,7 @@ namespace Dm.Core.Services;
 /// <summary>One place a symbol is declared.</summary>
 public sealed class DefinitionLocation
 {
+    /// <summary>One location; a builtin passes an empty file and a rendered signature instead.</summary>
     public DefinitionLocation(string file, TextSpan span, TextSpan nameSpan, string detail,
         string signature = "", string reference = "")
     {
@@ -64,6 +65,7 @@ public sealed class DefinitionLocation
         return $"https://www.byond.com/docs/ref/info.html#{prefix}/{segment}/{name}";
     }
 
+    /// <summary>Debug rendering.</summary>
     public override string ToString() => $"{Detail} at {File}{NameSpan}";
 }
 

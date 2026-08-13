@@ -18,9 +18,16 @@ public enum ClassificationKind
     /// <summary>Unclassified. Clients render with the default foreground.</summary>
     None = 0,
 
+    /// <summary>A line or block comment.</summary>
     Comment = 1,
+
+    /// <summary>A DM keyword.</summary>
     Keyword = 2,
+
+    /// <summary>A plain name; the semantic pass may refine it.</summary>
     Identifier = 3,
+
+    /// <summary>A numeric literal.</summary>
     Number = 4,
 
     /// <summary>String content and its delimiters, including <c>{"</c> and <c>"}</c>.</summary>
@@ -35,7 +42,10 @@ public enum ClassificationKind
     /// <summary>A resource literal in single quotes, such as <c>'icons/mob.dmi'</c>.</summary>
     Resource = 7,
 
+    /// <summary>An operator.</summary>
     Operator = 8,
+
+    /// <summary>Structural punctuation: brackets, commas, semicolons.</summary>
     Punctuation = 9,
 
     /// <summary>A <c>#</c> and its directive name.</summary>

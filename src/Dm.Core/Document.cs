@@ -47,6 +47,7 @@ public sealed class Document
     /// <summary>Normalised absolute path.</summary>
     public string Path { get; }
 
+    /// <summary>The authoritative text: a pushed buffer wins over whatever is on disk.</summary>
     public SourceText Text { get; }
 
     /// <summary>

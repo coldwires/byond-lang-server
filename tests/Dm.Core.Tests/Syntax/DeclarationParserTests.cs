@@ -43,9 +43,9 @@ public class DeclarationParserTests
     [Theory]
     [InlineData("/obj\n", PathAnchor.Absolute)]
     [InlineData("obj\n", PathAnchor.Relative)]
-    public void The_leading_separator_is_recorded(string source, PathAnchor expected)
+    public void The_leading_separator_is_recorded(string source, object expected)
     {
-        Assert.Equal(expected, Single(source).Path.Anchor);
+        Assert.Equal((PathAnchor)expected, Single(source).Path.Anchor);
     }
 
     [Fact]

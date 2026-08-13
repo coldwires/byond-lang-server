@@ -99,3 +99,19 @@
 // moment ReceiverType learned to walk a chain. Completion, definition and hover
 // all answered at 56 the whole time - the index was the one surface that did not.
 //? references 81:22 => types.dm:20 write, code.dm:56 write, code.dm:59 read, code.dm:81 read, code.dm:85 read, code.dm:88 read, code.dm:89 read
+
+// A typed GLOBAL is a receiver - dm.exe compiles `armory.reload()` through
+// the root var. The bare-type-name fallback had been masking that this
+// lookup did not exist: typed globals answered 0 items until ABI 0.26. The
+// idiomatic shadow - a root global NAMED `mob` - resolves through the VAR,
+// dm.exe's own mechanism. A bare type name resolves to nothing at all; that
+// half is errors/bare_type_receiver, where the compiler itself rejects it.
+var/obj/gun/armory = new
+var/mob/test/mob = new
+/proc/quartermaster()
+	armory.reload()
+	//? complete 112:9 => reload, ammo, !hp
+	var/w = mob.weapon
+	//? complete 114:14 => weapon, hp, heal, !ammo
+	//? definition 114:14 => types.dm:9
+	return w

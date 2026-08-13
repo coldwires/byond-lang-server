@@ -7,7 +7,7 @@ namespace Dm.Core.Preprocessing;
 /// <summary>
 /// The preprocessed form of a whole project.
 /// </summary>
-public sealed class PreprocessResult
+internal sealed class PreprocessResult
 {
     private readonly RunCollector _runs;
     private IReadOnlyList<ExpandedToken>? _flattened;
@@ -58,7 +58,7 @@ public sealed class PreprocessResult
 ///
 /// The output is what M4's parser consumes.
 /// </remarks>
-public static class Preprocessor
+internal static class Preprocessor
 {
     public static PreprocessResult Run(string dmePath, IncludeOptions? options = null)
     {

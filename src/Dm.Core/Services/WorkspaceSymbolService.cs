@@ -8,6 +8,7 @@ namespace Dm.Core.Services;
 /// <summary>One hit from a workspace-wide symbol search.</summary>
 public sealed class WorkspaceSymbol
 {
+    /// <summary>Bundles the parts; each argument lands in the same-named property.</summary>
     public WorkspaceSymbol(
         string name, string detail, SymbolKind kind, string file, Text.TextSpan span, Text.TextSpan nameSpan)
     {
@@ -19,20 +20,25 @@ public sealed class WorkspaceSymbol
         NameSpan = nameSpan;
     }
 
+    /// <summary>The bare name the query matched against.</summary>
     public string Name { get; }
 
     /// <summary>The owning path, so two <c>New</c>s are distinguishable in a picker.</summary>
     public string Detail { get; }
 
+    /// <summary>What the symbol is, for the picker's icon.</summary>
     public SymbolKind Kind { get; }
 
+    /// <summary>The declaring file. A type declared in several files yields one hit per site.</summary>
     public string File { get; }
 
+    /// <summary>The whole declaration's span in that file.</summary>
     public Text.TextSpan Span { get; }
 
     /// <summary>The name alone, which is where a caret should land.</summary>
     public Text.TextSpan NameSpan { get; }
 
+    /// <summary>Debug rendering: owning path and kind.</summary>
     public override string ToString() => $"{Detail} ({Kind})";
 }
 
@@ -55,6 +61,10 @@ public static class WorkspaceSymbolService
     /// <summary>How many hits to return when the caller does not say.</summary>
     public const int DefaultLimit = 200;
 
+    /// <summary>
+    /// Every declared symbol whose name matches, ranked — exact over prefix over substring — and
+    /// capped at the limit, because a short query matches too much to show unranked.
+    /// </summary>
     public static IReadOnlyList<WorkspaceSymbol> Search(
         ObjectTree tree,
         string query,

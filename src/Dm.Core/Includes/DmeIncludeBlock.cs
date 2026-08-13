@@ -8,6 +8,7 @@ namespace Dm.Core.Includes;
 /// <summary>Why an edit could not be produced, so a caller can say which.</summary>
 public enum DmeEditRefusal
 {
+    /// <summary>Not refused; the edit exists.</summary>
     None = 0,
 
     /// <summary>No <c>// BEGIN_INCLUDE</c> … <c>// END_INCLUDE</c> pair.</summary>
@@ -34,16 +35,20 @@ public enum DmeEditRefusal
 /// </remarks>
 public sealed class DmeEdit
 {
+    /// <summary>The span to replace and the text that goes there.</summary>
     public DmeEdit(TextSpan span, string replacement)
     {
         Span = span;
         Replacement = replacement;
     }
 
+    /// <summary>What to replace in the <c>.dme</c>'s text; zero-length for a pure insert.</summary>
     public TextSpan Span { get; }
 
+    /// <summary>Text that goes in place of the span; empty for a pure delete.</summary>
     public string Replacement { get; }
 
+    /// <summary>Debug rendering.</summary>
     public override string ToString()
         => Replacement.Length == 0 ? $"delete {Span}" : $"insert at {Span.Start}";
 }
@@ -75,13 +80,13 @@ public sealed class DmeEdit
 /// <c>AI.dm</c>, which is only correct lowercased first.</description></item>
 /// </list>
 /// </remarks>
-public static class DmeIncludeBlock
+internal static class DmeIncludeBlock
 {
     private const string BeginMarker = "// BEGIN_INCLUDE";
     private const string EndMarker = "// END_INCLUDE";
 
     /// <summary>One entry inside the block.</summary>
-    public readonly struct Entry
+    internal readonly struct Entry
     {
         public Entry(string path, TextSpan lineSpan)
         {

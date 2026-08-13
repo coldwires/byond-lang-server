@@ -28,7 +28,7 @@ namespace Dm.Core.Text;
 /// already caches its own lex, so the one file being typed in is handled where it belongs.
 /// </para>
 /// </remarks>
-public sealed class SourceCache
+internal sealed class SourceCache
 {
     private readonly Dictionary<string, Entry> _entries;
 

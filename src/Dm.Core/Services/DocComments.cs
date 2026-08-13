@@ -15,7 +15,7 @@ namespace Dm.Core.Services;
 /// run ends at the first line that is not one. A blank line or a plain <c>//</c> therefore separates
 /// a comment from the declaration below it, which is what a reader assumes.
 /// </remarks>
-public static class DocComments
+internal static class DocComments
 {
     /// <summary>
     /// The doc comment directly above a line, markers stripped. Both DM forms are recognised.

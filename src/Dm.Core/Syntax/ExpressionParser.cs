@@ -29,7 +29,7 @@ namespace Dm.Core.Syntax;
 /// every keystroke.
 /// </para>
 /// </remarks>
-public sealed class ExpressionParser
+internal sealed class ExpressionParser
 {
     private readonly IReadOnlyList<Token> _tokens;
     private readonly TokenSource _source;
