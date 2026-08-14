@@ -1,0 +1,4 @@
+# dm.exe echoes the offending text with whitespace stripped, so line 14 prints
+# as "returnf: undefined var"; the row below is the substring that matters.
+12 error missing_name: undefined var
+14 error f: undefined var

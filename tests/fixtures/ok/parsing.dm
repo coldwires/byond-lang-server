@@ -297,6 +297,112 @@
 /datum/parsing/!
 	var/marker = "bang"
 
+// The 2026-08-13 batch: constructs the bare-identifier undefined-var check
+// exposed as silently-misparsed on projects dm.exe compiles clean. Each was
+// invisible while nothing resolved bare names.
+
+#define PARSING_PASTE(owner, leaf) /datum/parsing##owner/##leaf
+
+/datum/parsing/throw/glued
+
+/datum/parsing
+	// `var/a = 1, b = 2, c = 3` and the space form `var x, y, z` - every comma
+	// sibling is declared, however long the tail. Nested-instead-of-flat
+	// sibling parsing declared the first two and lost the rest; mlaas's
+	// check_new_rank writes the space form with three names.
+	proc/comma_sibling_tail()
+		var/a = 1, b = 2, c = 3
+		var x, y, z
+		x = 4
+		y = 5
+		z = 6
+		return a + b + c + x + y + z
+
+	// A TYPED local var block: the children are locals OF that type. mlaas's
+	// nerf_clothes writes this shape and reads both names in `for` headers.
+	proc/typed_var_block()
+		var/datum/parsing
+			first_child
+			second_child
+		first_child = new
+		second_child = new
+		return istype(first_child, /datum/parsing) + istype(second_child, /datum/parsing)
+
+	// `var{a = 3; b = 4}` declares locals - warklan's admin HTML builders.
+	proc/brace_group_locals()
+		var{bg_one = 3; bg_two = 4}
+		return bg_one + bg_two
+
+	// A lone identifier line is a LABEL - the colon is optional. warklan's
+	// combat code writes `goto Next` ... `Next` throughout, and a bare
+	// unreferenced name compiles with dm.exe's own unused_label warning.
+	proc/bare_label(n)
+		if(n)
+			goto skip_ahead
+		return "fell"
+		skip_ahead
+		return "jumped"
+
+	// The prob-PREFIX pick weight pairs across a line break; the same-line
+	// spellings stay what they are - `prob(50) "a"` is "missing comma" and
+	// `prob(50) / 2` is division (probed). mlaas's random-object table.
+	proc/prob_prefix_pick()
+		var/choice = pick (
+			prob(1000)
+				"heavy",
+			prob(1)
+				"light")
+		return (choice == "heavy" || choice == "light") ? 1 : 0
+
+	// A `set` BLOCK: the indented children are settings, not statements.
+	// madridspy's movement verbs write hidden and instant this way. The values
+	// are non-defaults on purpose: `waitfor = 1` drew dm.exe's
+	// redundant_waitfor warning — a warning name nothing had recorded — on this
+	// fixture's first run.
+	proc/set_block()
+		set
+			waitfor = 0
+			background = 0
+		return 12
+
+	// `##` means NO SPACE at the boundary even when nothing can glue into one
+	// token: called with `, /throw`, the argument's spaced `/` split the path
+	// at the paste boundary and the tail read as division.
+	proc/paste_keeps_the_path_whole()
+		return PARSING_PASTE(/throw, glued) == /datum/parsing/throw/glued
+
+	// The whole `set` vocabulary, in a PROC - probed to be identical to the
+	// verb list, all ten accepted (src's `in` form aside, which needs a verb).
+	proc/set_vocabulary()
+		set name = "n"
+		set desc = "d"
+		set category = "c"
+		set hidden = 1
+		set instant = 1
+		set invisibility = 1
+		set popup_menu = 0
+		set background = 1
+		set waitfor = 0
+		return 1
+
+	// `new` through a VAR holding the type: the name is a value read and the
+	// parens are constructor arguments - reading it as a call reported
+	// dm.exe-clean sites as undefined procs across three corpora.
+	proc/new_through_a_var()
+		var/t = /datum/parsing/throw
+		var/datum/parsing/throw/made = new t (null)
+		return istype(made, /datum/parsing/throw) ? 1 : 0
+
+	// __LINE__ advances per line and __FILE__ names this file - the values
+	// dm.exe computes, which our expander now mirrors at the use site.
+	proc/line_macro_delta()
+		var/l1 = __LINE__
+		var/l2 = __LINE__
+		return l2 - l1
+
+	proc/file_macro_names_this_file()
+		return findtext("[__FILE__]", "parsing.dm") ? 1 : 0
+
 /proc/run_parsing()
 	var/datum/parsing/P = new
 
@@ -347,3 +453,16 @@
 	var/datum/parsing/!/B = new
 	CHECK("! as a type segment", B.marker, "bang")
 	CHECK("! type via istype", istype(B, /datum/parsing/!), 1)
+
+	CHECK("every comma sibling is declared", P.comma_sibling_tail(), 21)
+	CHECK("typed local var block declares its children", P.typed_var_block(), 2)
+	CHECK("var brace group declares locals", P.brace_group_locals(), 7)
+	CHECK("bare label line jumps", P.bare_label(1), "jumped")
+	CHECK("bare label line falls through", P.bare_label(0), "fell")
+	CHECK("prob-prefix pick pairs across the break", P.prob_prefix_pick(), 1)
+	CHECK("set block parses as settings", P.set_block(), 12)
+	CHECK("## keeps a pasted path whole", P.paste_keeps_the_path_whole(), 1)
+	CHECK("the set vocabulary, in a proc", P.set_vocabulary(), 1)
+	CHECK("new through a var", P.new_through_a_var(), 1)
+	CHECK("__LINE__ advances per line", P.line_macro_delta(), 1)
+	CHECK("__FILE__ names this file", P.file_macro_names_this_file(), 1)

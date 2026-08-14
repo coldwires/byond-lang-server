@@ -22,10 +22,14 @@ this folder itself, not the repo root. In the new window that appears, open
 your game's folder and open any `.dm` file; the server activates on the first
 one.
 
-The server picks the first `.dme` in the workspace root. If your project has
-several, or your build passes `-D` flags, set them in the host window's
-settings — analysing without your build's defines analyses a different
-program:
+With nothing configured, the server picks the first `.dme` in the workspace
+root, and the first `.dm` file you open can refine that to the **nearest**
+`.dme` above it — so a game nested somewhere below the folder you opened is
+found from its own files. The status bar shows what was picked, and the server
+posts one note if it picked a `.dme` with no `-D` defines configured. If your
+project has several `.dme` files, or your build passes `-D` flags, set them in
+the host window's settings — analysing without your build's defines analyses a
+different program:
 
 ```json
 {
@@ -63,10 +67,11 @@ than as an empty list. Both exist in shipped games.
 
 ## Which `.dme` is being analysed
 
-The status bar shows it, right-hand side. Click it to pick another — the picker
-lists every `.dme` in the workspace. This matters more than it looks: which `.dme`
-is analysed decides every answer the server gives, and until now it was invisible
-unless something resolved wrongly.
+The status bar shows it, right-hand side — a check mark for one you configured,
+a magnifier for one the server auto-discovered. Click it to pick another — the
+picker lists every `.dme` in the workspace. This matters more than it looks:
+which `.dme` is analysed decides every answer the server gives, and until now
+it was invisible unless something resolved wrongly.
 
 Changing it writes `dm.environmentFile` to workspace settings. The `.dme` is read
 once at startup, so reload the window to apply it.

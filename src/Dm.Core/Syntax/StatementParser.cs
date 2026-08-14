@@ -520,6 +520,17 @@ internal sealed class StatementParser
                     return new LabelStatementSyntax(name, body, SpanFrom(start));
                 }
 
+                // The colon is OPTIONAL: a lone identifier on its own line is a label too.
+                // Probed 2026-08-13 — a bare `blah` statement compiles with dm.exe's own
+                // `unused_label` warning, and warklan writes `goto Next` ... `Next` throughout
+                // its combat code. Read as an expression it was a bare name resolving nowhere.
+                if (IsNameLike(Current) && IsLineEnd(_position + 1))
+                {
+                    string name = CurrentText;
+                    _position++;
+                    return new LabelStatementSyntax(name, null, SpanFrom(start));
+                }
+
                 ExpressionSyntax expression = ParseExpression();
                 return new ExpressionStatementSyntax(expression, SpanFrom(start));
             }
@@ -683,13 +694,66 @@ internal sealed class StatementParser
         int start = _position;
         _position++;
 
-        // `set` alone on a line heads an indented block of settings.
+        // `set` alone on a line heads an indented block of SETTINGS:
+        //
+        //     set
+        //         hidden = 1
+        //         instant = 1
+        //
+        // madridspy writes its movement verbs this way. Each child line is a setting, not a
+        // statement — parsed through ParseBody they became ordinary assignments, and `hidden`
+        // reached the expression walk as a bare identifier that resolves nowhere, which the
+        // undefined-var check then reported on a project that compiles clean (2026-08-13).
         if (IsLineEnd(_position))
         {
-            StatementSyntax? block = ParseBody();
-            return block ?? new BlockStatementSyntax(Array.Empty<StatementSyntax>(), SpanFrom(start));
+            List<StatementSyntax> settings = new();
+
+            if (Current == TokenKind.Newline)
+                _position++;
+
+            SkipNewlinesAndDirectives();
+
+            if (Current == TokenKind.Indent)
+            {
+                _position++;
+
+                while (!AtEnd && Current != TokenKind.Dedent)
+                {
+                    if (Current is TokenKind.Newline or TokenKind.Semicolon)
+                    {
+                        _position++;
+                        continue;
+                    }
+
+                    if (Current == TokenKind.Hash)
+                    {
+                        ConsumeDirective();
+                        continue;
+                    }
+
+                    if (!IsNameLike(Current))
+                    {
+                        Report(CurrentSpan, "expected a setting name after 'set'");
+                        break;
+                    }
+
+                    settings.Add(ParseSetting());
+                }
+
+                if (Current == TokenKind.Dedent)
+                    _position++;
+            }
+
+            return new BlockStatementSyntax(settings, SpanFrom(start));
         }
 
+        return ParseSetting(start);
+    }
+
+    /// <summary>One <c>name = value</c> / <c>name in choices</c> setting, name alone allowed.</summary>
+    private SetStatementSyntax ParseSetting(int? headerStart = null)
+    {
+        int start = headerStart ?? _position;
         string name = IsNameLike(Current) ? CurrentText : string.Empty;
 
         if (IsNameLike(Current))
@@ -737,17 +801,144 @@ internal sealed class StatementParser
             return ParseVarBlock(start, blockModifiers);
         }
 
-        // The brace-group form, `var{html = X; extra = Y}`.
+        // The brace-group form, `var{html = X; extra = Y}` — each entry DECLARES a local, so the
+        // entries go through the same name parsing as any other declaration. Read through
+        // ParseBraceBlock they were assignment STATEMENTS that declared nothing, and every later
+        // `html +=` was a bare name resolving nowhere — invisible until the undefined-var check
+        // reported it across warklan's admin HTML builders (2026-08-13).
         if (_tokens[probe].Kind == TokenKind.OpenBrace)
         {
-            _position = probe;
-            return ParseBraceBlock();
+            _position = probe + 1;
+
+            List<StatementSyntax> declared = new();
+
+            while (!AtEnd && Current != TokenKind.CloseBrace)
+            {
+                if (Current is TokenKind.Newline or TokenKind.Indent or TokenKind.Dedent
+                    or TokenKind.Semicolon)
+                {
+                    _position++;
+                    continue;
+                }
+
+                if (!IsDeclarationName(Current))
+                {
+                    Report(CurrentSpan, "expected a variable name");
+                    break;
+                }
+
+                declared.Add(ParseLocalVarNames(_position, allowSiblings: false));
+            }
+
+            if (Current == TokenKind.CloseBrace)
+                _position++;
+            else
+                Report(CurrentSpan, "expected '}'");
+
+            return new BlockStatementSyntax(declared, SpanFrom(start));
+        }
+
+        // `var/obj/small/clothing` at line end with an indented block declares each child name AS
+        // that type — the statement-level face of the declaration parser's `var/list` block
+        // header. mlaas writes
+        //     var/obj/small/clothing
+        //         this_C
+        //         that_C
+        // and reads both in `for` headers. Parsed as a var NAMED clothing, the children were bare
+        // expression statements resolving nowhere (2026-08-13). Per §8 the type needs no
+        // resolution here — dm.exe accepts an undeclared type path silently until a use.
+        int pathProbe = probe;
+        List<string> typeSegments = new();
+        List<TextSpan> typeSpans = new();
+
+        while (pathProbe + 1 < _tokens.Count
+               && _tokens[pathProbe].Kind is TokenKind.Slash or TokenKind.Dot
+               && IsNameLike(_tokens[pathProbe + 1].Kind))
+        {
+            typeSegments.Add(TextOf(pathProbe + 1));
+            typeSpans.Add(_tokens[pathProbe + 1].Span);
+            pathProbe += 2;
+        }
+
+        if (typeSegments.Count > 0 && IsLineEnd(pathProbe))
+        {
+            int save = _position;
+            _position = pathProbe;
+
+            if (Current == TokenKind.Newline)
+                _position++;
+
+            SkipNewlinesAndDirectives();
+
+            if (Current == TokenKind.Indent)
+            {
+                _position++;
+
+                PathSyntax declaredType = new(
+                    PathAnchor.Absolute,
+                    typeSegments,
+                    TextSpan.FromBounds(typeSpans[0].Start, typeSpans[^1].End),
+                    typeSpans);
+
+                List<StatementSyntax> children = new();
+
+                while (!AtEnd && Current != TokenKind.Dedent)
+                {
+                    if (Current is TokenKind.Newline or TokenKind.Semicolon)
+                    {
+                        _position++;
+                        continue;
+                    }
+
+                    if (Current == TokenKind.Hash)
+                    {
+                        ConsumeDirective();
+                        continue;
+                    }
+
+                    if (!IsDeclarationName(Current)
+                        || ParseLocalVarNames(_position, inherited: blockModifiers)
+                            is not LocalVarStatementSyntax child)
+                    {
+                        break;
+                    }
+
+                    children.Add(WithDeclaredType(child, declaredType));
+                }
+
+                if (Current == TokenKind.Dedent)
+                    _position++;
+
+                return new BlockStatementSyntax(children, SpanFrom(start));
+            }
+
+            _position = save;
         }
 
         if (Current is TokenKind.Slash or TokenKind.Dot)
             _position++;
 
         return ParseLocalVarNames(start);
+    }
+
+    /// <summary>A copy carrying the block header's type where the child wrote none, siblings too.</summary>
+    private static LocalVarStatementSyntax WithDeclaredType(
+        LocalVarStatementSyntax child, PathSyntax declaredType)
+    {
+        List<LocalVarStatementSyntax> siblings = new(child.Siblings.Count);
+
+        foreach (LocalVarStatementSyntax sibling in child.Siblings)
+            siblings.Add(WithDeclaredType(sibling, declaredType));
+
+        return new LocalVarStatementSyntax(
+            child.Name,
+            child.NameSpan,
+            child.DeclaredType ?? declaredType,
+            child.Modifiers,
+            child.Initializer,
+            siblings,
+            child.Span,
+            child.Dimensions);
     }
 
     /// <summary>Parses the indented children of a bare <c>var</c> block, each one a declaration.</summary>
@@ -934,12 +1125,17 @@ internal sealed class StatementParser
 
         List<LocalVarStatementSyntax> siblings = new();
 
+        // Each sibling is parsed WITHOUT its own comma tail — this loop is what walks the tail,
+        // so the list stays flat. Left to recurse, `var/a, b, c` put c inside b's siblings, and
+        // every consumer iterates one level: the binder declared a and b and never saw c, which
+        // sat invisible until the undefined-var check met mlaas's `var skill, the_skill,
+        // total_points` and warklan's `var/X,Y=1,W=2,P=3,L[0],pre=...` (2026-08-13).
         while (allowSiblings && Current == TokenKind.Comma && IsNameLike(Peek()))
         {
             _position++;
             int siblingStart = _position;
 
-            if (ParseLocalVarNames(siblingStart, inherited, inForHeader: inForHeader)
+            if (ParseLocalVarNames(siblingStart, inherited, allowSiblings: false, inForHeader: inForHeader)
                 is LocalVarStatementSyntax sibling)
             {
                 siblings.Add(sibling);
@@ -1124,7 +1320,7 @@ internal sealed class StatementParser
                 case TokenKind.Comma:
                 case TokenKind.Semicolon:
                     kind = ForKind.Clauses;
-                    ParseForClauses(initializers, ref condition, increments);
+                    ParseForClauses(_tokens[start].Span, initializers, ref condition, increments);
                     break;
             }
         }
@@ -1150,11 +1346,14 @@ internal sealed class StatementParser
     /// Semicolons work in both modes.
     /// </remarks>
     private void ParseForClauses(
+        TextSpan forSpan,
         List<StatementSyntax> initializers,
         ref ExpressionSyntax? condition,
         List<StatementSyntax> increments)
     {
         int clause = 0;
+        bool semicolon = false;
+        bool chained = false;
 
         while (!AtEnd && Current != TokenKind.CloseParen)
         {
@@ -1164,6 +1363,8 @@ internal sealed class StatementParser
             if (!chaining && !separating)
                 break;
 
+            semicolon |= Current == TokenKind.Semicolon;
+            chained |= chaining;
             _position++;
 
             if (separating)
@@ -1187,6 +1388,18 @@ internal sealed class StatementParser
                     break;
             }
         }
+
+        // dm.exe's two for-header shape errors, established as a probe matrix on 516.1686 rather
+        // than reasoned about (PLAN §8): a FOURTH clause is "too many args" in both modes — which
+        // rejects the C idiom `for(i = 0; i < 3; i++, j++)` under the default grammar, where that
+        // comma separates a fourth clause — and a header built only from commas under
+        // `#pragma syntax C for`, where a comma chains statements instead of separating clauses,
+        // is "malformed for statement" however few commas it has. A chained comma BESIDE
+        // semicolons is the C idiom working as designed and stays silent, as does dm.exe.
+        if (clause > 2)
+            Report(forSpan, "for: too many args");
+        else if (chained && !semicolon)
+            Report(forSpan, "for: malformed for statement");
     }
 
     private StatementSyntax ParseForClause()

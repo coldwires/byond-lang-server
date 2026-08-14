@@ -47,6 +47,22 @@ internal static class SyntaxFacts
         "movable", "atom",
     };
 
+    /// <summary>
+    /// The names a <c>set</c> statement accepts. A name outside this list is dm.exe's plain
+    /// <i>"X: undefined var"</i> on the <c>set</c> line.
+    /// </summary>
+    /// <remarks>
+    /// Probed 2026-08-13, all ten in one verb AND the same ten in a global proc — both compile
+    /// clean on 516.1686, so there is no verb/proc split to model. <c>loop_checks</c>, which the
+    /// reference once documented, now errors as undefined (probe <c>w3012_loop_checks</c>), so it
+    /// is deliberately not here.
+    /// </remarks>
+    internal static readonly string[] SetNames =
+    {
+        "name", "desc", "category", "hidden", "instant", "invisibility",
+        "popup_menu", "background", "waitfor", "src",
+    };
+
     internal static bool IsPathSegmentKeyword(TokenKind kind) => kind
         is TokenKind.KeywordThrow
         or TokenKind.KeywordSet

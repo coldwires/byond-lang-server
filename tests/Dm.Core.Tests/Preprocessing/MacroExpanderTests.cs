@@ -64,6 +64,47 @@ public class MacroExpanderTests
         Assert.Equal("7", Expand("OUTER", "INNER 7", "OUTER INNER"));
     }
 
+    // -- __FILE__ / __LINE__ -----------------------------------------------
+    // Position-dependent, so no table entry can carry them; the expander makes them at the use.
+
+    [Fact]
+    public void Line_expands_to_the_use_line()
+    {
+        Assert.Equal("x 2 y", Expand("x\n__LINE__ y"));
+    }
+
+    /// <summary>A body token reports at the invocation, which is dm.exe's value too.</summary>
+    [Fact]
+    public void Line_in_a_macro_body_is_the_invocation_line()
+    {
+        Assert.Equal("a b 3", Expand("a\nb\nWHERE", "WHERE __LINE__"));
+    }
+
+    /// <summary>The harness's SourceText has no path, so the value is an empty string literal.</summary>
+    [Fact]
+    public void File_expands_to_a_string_literal()
+    {
+        Assert.Equal("\" \"", Expand("__FILE__"));
+    }
+
+    /// <summary>
+    /// The tgstation shape: `__LINE__` inside a macro-body string's interpolation hole. These
+    /// flowed to the parser as identifiers until 2026-08-13 — 5,878 of them at once when the
+    /// bare-identifier check first ran there.
+    /// </summary>
+    [Fact]
+    public void Line_expands_inside_a_macro_body_string_hole()
+    {
+        Assert.Contains(" 1 ", Expand("A(x)", "A(m) f(\"[__LINE__]\")"));
+    }
+
+    /// <summary>A project define wins over the built-in reading.</summary>
+    [Fact]
+    public void A_project_define_of_line_wins()
+    {
+        Assert.Equal("9", Expand("__LINE__", "__LINE__ 9"));
+    }
+
     [Fact]
     public void An_empty_macro_expands_to_nothing()
     {

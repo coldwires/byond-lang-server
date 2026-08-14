@@ -32,6 +32,13 @@
       PLAN.md's §3 sync rule, and dmc seeing past it is the point of dmc.
     -->
     <InternalsVisibleTo Include="dmc" />
+    <!--
+      The builtins generator parses stddef.dm with the real parser and renders proc signatures off
+      the symbol types - the same past-the-API reach dmc has. It silently stopped compiling when
+      the surface went internal on 2026-08-13, and nothing noticed until the next regeneration was
+      needed the same day: a tool with no CI build is a tool that breaks quietly.
+    -->
+    <InternalsVisibleTo Include="builtins-gen" />
   </ItemGroup>
 
   <ItemGroup>

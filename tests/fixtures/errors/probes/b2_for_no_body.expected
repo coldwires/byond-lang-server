@@ -1,4 +1,4 @@
 # Mined from the diagnostic lab by tools/mine_probes.py.
 # Recompiled here, so this records what dm.exe said on this machine.
-# probe: b2_call_bad_syntax
-2 error : invalid expression
+# probe: b2_for_no_body
+3 error : invalid expression

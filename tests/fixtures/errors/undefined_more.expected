@@ -1,0 +1,7 @@
+# dm.exe also cascades "=: expected a constant expression" on line 12; the
+# usr line is the finding and the cascade is left unmatched on purpose.
+12 error usr: undefined var
+15 error bogus_setting: undefined var
+20 error x: undefined proc
+19 warning x: variable defined but not used
+24 error no_such_global_xyz: undefined proc

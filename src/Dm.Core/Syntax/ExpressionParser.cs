@@ -394,6 +394,17 @@ internal sealed class ExpressionParser
             if (precedence == 0 || precedence < minPrecedence)
                 break;
 
+            // A `/` that begins a NEW LINE inside a group and is followed by a name is a path
+            // literal starting a fresh expression, not division. dm.exe agrees only across the
+            // line break — probed 2026-08-13: `pick(prob(3500)` newline `/obj/x)` compiles while
+            // the same-line `pick(prob(50) "a")` is "missing comma" and same-line `prob(50) / 2`
+            // stays division. The break is invisible here because a group suppresses newlines, so
+            // it is read back off the token positions; a macro expansion collapses onto one span
+            // and can never fake it. Without this, mlaas's prob-weighted pick parsed as division
+            // over three bare identifiers per path.
+            if (Current == TokenKind.Slash && _groupDepth > 0 && StartsPathOnNewLine())
+                break;
+
             TokenKind op = Current;
             _position++;
             SkipLayoutInGroup();
@@ -404,6 +415,24 @@ internal sealed class ExpressionParser
         }
 
         return left;
+    }
+
+    /// <summary>
+    /// Whether the current <c>/</c> opens a path literal on a line of its own: the token sits on
+    /// a later line than the one before it, and a name follows. Line positions come off the
+    /// spans, which an expanded run collapses per invocation, so a macro cannot fake a break.
+    /// </summary>
+    private bool StartsPathOnNewLine()
+    {
+        if (_position == 0 || !IsNameLike(Peek()))
+            return false;
+
+        int previousLine = _source.Text.GetLinePosition(
+            _tokens[_position - 1].Span.End, PositionEncoding.Utf16).Line;
+        int currentLine = _source.Text.GetLinePosition(
+            _tokens[_position].Span.Start, PositionEncoding.Utf16).Line;
+
+        return currentLine > previousLine;
     }
 
     private ExpressionSyntax ParseUnary()
@@ -680,6 +709,18 @@ internal sealed class ExpressionParser
             {
                 _position++;
                 SkipLayoutInGroup();
+                weight = value;
+                value = ParseExpression();
+            }
+
+            // The prob-PREFIX weight form pairs across a line break (see ParseBinary's note):
+            // `prob(3500)` on its own line weights the item on the next — mlaas's random-object
+            // table. Modelled as the same weight/value pair the `20;"x"` spelling produces.
+            if (weight is null
+                && Current == TokenKind.Slash
+                && value is InvocationExpressionSyntax { Target: IdentifierExpressionSyntax { Name: "prob" } }
+                && StartsPathOnNewLine())
+            {
                 weight = value;
                 value = ParseExpression();
             }

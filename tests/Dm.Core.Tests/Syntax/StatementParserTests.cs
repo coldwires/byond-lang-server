@@ -41,6 +41,62 @@ public class StatementParserTests
     private static T Single<T>(string statements) where T : StatementSyntax
         => Assert.IsType<T>(Assert.Single(InProc(statements).Statements));
 
+    // -- the for-header shape checks ---------------------------------------
+
+    /// <summary>
+    /// dm.exe rejects a FOURTH clause under the default grammar — including the C idiom
+    /// <c>i++, j++</c>, where the comma separates a clause rather than chaining. Probed as a
+    /// matrix on 516.1686 (PLAN §8).
+    /// </summary>
+    [Theory]
+    [InlineData("\tfor(i = 0; i < 3; i++; j++)\n\t\tr++\n")]
+    [InlineData("\tfor(i = 0; i < 3; i++, j++)\n\t\tr++\n")]
+    [InlineData("\tfor(i = 0, j = 9, i < 3, i++)\n\t\tr++\n")]
+    public void A_fourth_for_clause_is_too_many_args(string statements)
+    {
+        Body("/mob/proc/F()\n\tvar/i\n\tvar/j\n\tvar/r\n" + statements,
+            out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.Contains(diagnostics, d => d.Message == "for: too many args");
+    }
+
+    /// <summary>Up to three clauses are fine with either separator, mixed included.</summary>
+    [Theory]
+    [InlineData("\tfor(i = 0, i < 3, i++)\n\t\tr++\n")]
+    [InlineData("\tfor(i = 0; i < 3; i++)\n\t\tr++\n")]
+    [InlineData("\tfor(i = 0; i < 3)\n\t\tr++\n")]
+    [InlineData("\tfor(i = 0, j = 9, i < 3)\n\t\tr++\n")]
+    public void Three_for_clauses_stay_silent(string statements)
+    {
+        Body("/mob/proc/F()\n\tvar/i\n\tvar/j\n\tvar/r\n" + statements,
+            out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.DoesNotContain(diagnostics, d => d.Message.StartsWith("for:"));
+    }
+
+    /// <summary>
+    /// Under <c>#pragma syntax C for</c> a comma chains statements instead of separating
+    /// clauses, so a header built ONLY from commas is malformed however few it has — while
+    /// chained commas beside semicolons are the C idiom working, and stay silent.
+    /// </summary>
+    [Fact]
+    public void A_comma_only_header_under_C_for_is_malformed()
+    {
+        Body(
+            "/mob/proc/F()\n\tvar/i\n\tvar/r\n\t#pragma syntax C for\n"
+            + "\tfor(i = 0, i < 3, i++)\n\t\tr++\n",
+            out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.Contains(diagnostics, d => d.Message == "for: malformed for statement");
+
+        Body(
+            "/mob/proc/F()\n\tvar/i\n\tvar/j\n\tvar/r\n\t#pragma syntax C for\n"
+            + "\tfor(i = 0, j = 0; i < 3; i++, j++)\n\t\tr++\n",
+            out IReadOnlyList<Diagnostic> clean);
+
+        Assert.DoesNotContain(clean, d => d.Message.StartsWith("for:"));
+    }
+
     // -- control flow ------------------------------------------------------
 
     [Fact]

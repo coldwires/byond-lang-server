@@ -1,0 +1,3 @@
+#include "thing.foo"
+/proc/t()
+	return 1

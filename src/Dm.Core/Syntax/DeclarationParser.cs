@@ -375,7 +375,16 @@ internal sealed class DeclarationParser
         }
 
         bool endsWithVar = path.Segments[^1] == "var";
-        bool endsWithProc = path.Segments[^1] is "proc" or "verb";
+
+        // `proc`/`verb` after a `var` is a group marker only when the line ends there — the same
+        // rule as the modifier words below. With a value on the same line it is a variable NAMED
+        // proc or verb, which dm.exe accepts with uses: `var/proc = 3` then `return proc` runs.
+        // The group-header reading silently dropped both the name and the value, which sat
+        // invisible until the bare-identifier check tried to resolve the reads (2026-08-13).
+        // Without a `var` in the path the old rule stands untouched: `mob/proc` headers, and a
+        // bare `proc` line inside a var block (the DM0300 shape), behave as before.
+        bool endsWithProc = (path.Segments[^1] is "proc" or "verb")
+            && (IndexOfSegment(path, "var") < 0 || AtLineEnd);
 
         // `var/const` and friends head a block too: the trailing segment is a modifier, not a name.
         // stddef.dm is full of these, declaring whole groups of constants at once. Only when the

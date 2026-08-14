@@ -890,8 +890,141 @@ internal sealed class IncludeGraph
             if (pending.Count == 0 || Runs is null)
                 return;
 
-            Emit(text, MacroExpander.Expand(text, pending, Macros, Diagnostics));
+            // dm.exe RE-PROCESSES macro expansions for directives: `#define int #define` then
+            // `int DEAD 2` defines DEAD, and madridspy builds its whole status-flag vocabulary
+            // this way — probed 2026-08-13, with macro-made #undef and a macro carrying a
+            // COMPLETE directive both confirmed. A line-starting object-like macro whose body
+            // begins with `#` splits the run: code before it is expanded under the state that
+            // applied to it, the line itself becomes a directive, and the remainder is expanded
+            // after — which is what lets a later line of the same run use the macro this one
+            // just made.
+            int from = 0;
+            bool lineHasCode = false;
+
+            for (int i = 0; i < pending.Count; i++)
+            {
+                Token token = pending[i];
+
+                if (token.Kind == TokenKind.Newline)
+                {
+                    lineHasCode = false;
+                    continue;
+                }
+
+                if (token.Kind is TokenKind.Indent or TokenKind.Dedent)
+                    continue;
+
+                bool starts = !lineHasCode;
+                lineHasCode = true;
+
+                if (!starts
+                    || token.Kind != TokenKind.Identifier
+                    || !Macros.TryGet(text.ToString(token.Span), out MacroDefinition head)
+                    || head.Parameters is not null
+                    || head.Body.Count == 0
+                    || head.Body[0].Kind != TokenKind.Hash)
+                {
+                    continue;
+                }
+
+                int end = i;
+                while (end < pending.Count && pending[end].Kind != TokenKind.Newline)
+                    end++;
+
+                if (i > from)
+                    Emit(text, MacroExpander.Expand(text, pending.GetRange(from, i - from), Macros, Diagnostics));
+
+                ProcessMacroMadeDirective(text, pending.GetRange(i, end - i));
+
+                // The newline stays with the next segment, as layout.
+                from = end;
+                i = end - 1;
+            }
+
+            List<Token> tail = from == 0 ? pending : pending.GetRange(from, pending.Count - from);
+
+            if (tail.Count > 0)
+                Emit(text, MacroExpander.Expand(text, tail, Macros, Diagnostics));
+
             pending.Clear();
+        }
+
+        /// <summary>
+        /// Expands one line whose leading macro produces a <c>#</c>, and runs the result as a
+        /// directive — the re-processing <c>dm.exe</c> does for every expansion.
+        /// </summary>
+        /// <remarks>
+        /// The expanded tokens are rendered to synthetic text and put through the same lexer,
+        /// scanner and <see cref="MacroDefinition.Parse"/> a real directive line uses — the
+        /// <see cref="CommandLineDefine"/> pattern — so the define that comes out is
+        /// indistinguishable from a written one, effect recording included. Kinds beyond
+        /// define/undef keep the old behaviour and flow into the stream as code: a macro-made
+        /// <c>#if</c> would need conditional-stack surgery mid-run, and nothing observed asks
+        /// for it.
+        /// </remarks>
+        private void ProcessMacroMadeDirective(SourceText text, List<Token> lineTokens)
+        {
+            // Only the HEAD macro expands. A directive's arguments are raw to dm.exe — `#undef
+            // FOO` names FOO, it does not expand it — and the first version expanded the whole
+            // line, so `U FOO` rendered as `#undef 2` and undefined nothing. The rest of the
+            // line joins as written.
+            IReadOnlyList<ExpandedToken> produced =
+                MacroExpander.Expand(text, lineTokens.GetRange(0, 1), Macros, Diagnostics);
+
+            System.Text.StringBuilder rendered = new();
+
+            foreach (ExpandedToken token in produced)
+            {
+                if (token.Kind == TokenKind.Newline)
+                    continue;
+
+                rendered.Append(token.Source.ToString(token.Span));
+
+                // The hash glues to the keyword after it; everything else separates.
+                if (token.Kind != TokenKind.Hash)
+                    rendered.Append(' ');
+            }
+
+            for (int i = 1; i < lineTokens.Count; i++)
+            {
+                rendered.Append(text.ToString(lineTokens[i].Span));
+                rendered.Append(' ');
+            }
+
+            SourceText synthetic = SourceText.From(rendered.ToString() + "\n", "<macro-made-directive>");
+            LexResult lex = Lexer.Lex(synthetic);
+            IReadOnlyList<Directive> directives = DirectiveScanner.Scan(lex);
+            TextSpan at = lineTokens[0].Span;
+
+            switch (directives.Count > 0 ? directives[0].Kind : DirectiveKind.Unknown)
+            {
+                case DirectiveKind.Define:
+                {
+                    // Parse errors land at the USE line rather than inside the synthetic text.
+                    List<Diagnostic> scratch = new();
+
+                    if (MacroDefinition.Parse(lex, directives[0], scratch) is { } macro)
+                    {
+                        Macros.Define(macro);
+                        _recording?.Add(EffectStep.ForDefine(macro));
+                    }
+
+                    foreach (Diagnostic diagnostic in scratch)
+                        Diagnostics.Add(new Diagnostic(diagnostic.Id, diagnostic.Severity, at, diagnostic.Message));
+
+                    break;
+                }
+
+                case DirectiveKind.Undef when directives[0].HasArguments:
+                    string undefined = lex.GetText(lex.Tokens[directives[0].ArgumentStart]);
+                    Macros.Undefine(undefined);
+                    _recording?.Add(EffectStep.ForUndef(undefined));
+                    break;
+
+                default:
+                    Emit(text, produced);
+                    break;
+            }
         }
 
         /// <summary>

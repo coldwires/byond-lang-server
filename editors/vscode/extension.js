@@ -163,12 +163,30 @@ function registerEnvironmentPicker(context) {
     item.command = "dm.selectEnvironmentFile";
     context.subscriptions.push(item);
 
+    // What the server announced through dm/environment when nothing was configured: the .dme it
+    // auto-discovered (nearest to the first opened file), or null. Without this the status bar
+    // read "no .dme" while the server was analysing one - invisible until something resolved
+    // wrongly, which is the exact problem this bar exists to fix.
+    let discovered = null;
+
     const show = () => {
         const configured = vscode.workspace.getConfiguration("dm").get("environmentFile");
-        item.text = configured ? `$(check) ${path.basename(configured)}` : "$(question) no .dme";
-        item.tooltip = configured
-            ? `Analysing ${configured}. Click to change.`
-            : "No .dme chosen; the server picks the first one it finds. Click to choose.";
+
+        if (configured) {
+            item.text = `$(check) ${path.basename(configured)}`;
+            item.tooltip = `Analysing ${configured}. Click to change.`;
+        } else if (discovered) {
+            item.text = `$(search) ${path.basename(discovered)}`;
+            item.tooltip =
+                `Analysing ${discovered} - auto-discovered, the nearest .dme to the first ` +
+                "opened file. Click to pin one.";
+        } else {
+            item.text = "$(question) no .dme";
+            item.tooltip =
+                "No .dme chosen; the server picks the nearest one to the first file you open. " +
+                "Click to choose.";
+        }
+
         item.show();
     };
 
@@ -218,13 +236,20 @@ function registerEnvironmentPicker(context) {
     );
 
     show();
+
+    return {
+        setDiscovered(environmentFile) {
+            discovered = environmentFile;
+            show();
+        },
+    };
 }
 
 function activate(context) {
     const config = vscode.workspace.getConfiguration("dm");
 
     registerCompileTask(context);
-    registerEnvironmentPicker(context);
+    const environmentPicker = registerEnvironmentPicker(context);
 
     client = new LanguageClient(
         "dm",
@@ -248,6 +273,12 @@ function activate(context) {
 
     client.start();
     context.subscriptions.push({ dispose: () => client && client.stop() });
+
+    // The server says which .dme discovery settled on (sent only when dm.environmentFile is not
+    // set), so the status bar shows the project actually being analysed.
+    client.onNotification("dm/environment", (params) =>
+        environmentPicker.setDiscovered(params && params.environmentFile)
+    );
 
     // Tick or untick the active file in the .dme, the way DreamMaker's file tree does. The server
     // returns an EDIT rather than writing the .dme, so this applies as a WorkspaceEdit and is safe

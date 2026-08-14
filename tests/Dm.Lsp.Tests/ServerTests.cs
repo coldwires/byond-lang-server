@@ -697,4 +697,172 @@ public sealed class ServerTests : IDisposable
 
         Assert.Equal(-32601, error.GetProperty("code").GetInt32());
     }
+
+    private void WriteNestedProject()
+    {
+        string game = Path.Combine(_root, "sub", "game");
+        Directory.CreateDirectory(game);
+        File.WriteAllText(Path.Combine(game, "nested.dme"), "#include \"types.dm\"\n#include \"play.dm\"\n");
+        File.WriteAllText(Path.Combine(game, "types.dm"), "/mob/pet\n\tvar/tricks = 1\n");
+        File.WriteAllText(Path.Combine(game, "play.dm"), "/proc/g()\n\treturn 1\n");
+    }
+
+    private void DidOpen(string name, string text = "/proc/opened()\\n\\treturn 1\\n")
+        => Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{FileUri(name)}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"{text}\"}}}}}}");
+
+    private JsonElement ResponseTo(int id)
+    {
+        foreach (JsonDocument frame in Frames())
+        {
+            if (frame.RootElement.TryGetProperty("id", out JsonElement found)
+                && found.ValueKind == JsonValueKind.Number
+                && found.GetInt32() == id)
+            {
+                return frame.RootElement;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"no response for id {id}");
+    }
+
+    /// <summary>
+    /// With nothing configured, the FIRST opened document picks the project by proximity: the
+    /// nearest .dme walking up from the file wins over the workspace root's — which is what a
+    /// game nested below the root needs, and what the root-level scan can never find. The swap
+    /// is announced through dm/environment so a client's status bar shows the project actually
+    /// analysed, and the auto-discovered-without-defines note arrives as a window/showMessage.
+    /// </summary>
+    [Fact]
+    public void The_first_opened_file_picks_the_nearest_dme()
+    {
+        WriteNestedProject();
+        Initialize();
+        DidOpen("sub/game/play.dm", "/proc/g()\\n\\treturn 1\\n");
+
+        // /mob/pet lives in a file only nested.dme includes, so answering it proves the nested
+        // project was adopted — the root's game.dme knows nothing of it.
+        Send("{\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"dm/members\",\"params\":{\"path\":\"/mob/pet\"}}");
+
+        List<string?> names = new();
+
+        foreach (JsonElement entry in ResponseTo(60).GetProperty("result").GetProperty("vars").EnumerateArray())
+            names.Add(entry.GetProperty("name").GetString());
+
+        Assert.Contains("tricks", names);
+
+        List<JsonDocument> frames = Frames();
+
+        JsonDocument environment = Assert.Single(frames, f =>
+            f.RootElement.TryGetProperty("method", out JsonElement m)
+            && m.GetString() == "dm/environment");
+        JsonElement announced = environment.RootElement.GetProperty("params");
+
+        Assert.EndsWith("nested.dme", announced.GetProperty("environmentFile").GetString());
+        Assert.True(announced.GetProperty("autoDiscovered").GetBoolean());
+
+        JsonDocument note = Assert.Single(frames, f =>
+            f.RootElement.TryGetProperty("method", out JsonElement m)
+            && m.GetString() == "window/showMessage");
+
+        Assert.Equal(3, note.RootElement.GetProperty("params").GetProperty("type").GetInt32());
+        Assert.Contains("dm.defines", note.RootElement.GetProperty("params").GetProperty("message").GetString());
+    }
+
+    /// <summary>
+    /// An explicit environmentFile is never second-guessed: opening a file beside a nearer .dme
+    /// swaps nothing, no dm/environment is announced — the client configured the value and
+    /// already knows it — and no defines note nags a client that has engaged with its settings.
+    /// </summary>
+    [Fact]
+    public void An_explicit_environmentFile_is_never_second_guessed()
+    {
+        WriteNestedProject();
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"rootUri\":\"{RootUri()}\","
+            + "\"initializationOptions\":{\"environmentFile\":\"game.dme\"}}}");
+        DidOpen("sub/game/play.dm", "/proc/g()\\n\\treturn 1\\n");
+
+        // The nested project stayed unadopted, so its type is a missing path...
+        Send("{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"dm/members\",\"params\":{\"path\":\"/mob/pet\"}}");
+        Assert.Equal(-32803, ResponseTo(61).GetProperty("error").GetProperty("code").GetInt32());
+
+        // ...while the configured project answers.
+        Send("{\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"dm/members\",\"params\":{\"path\":\"/mob\"}}");
+        Assert.True(ResponseTo(62).TryGetProperty("result", out _));
+
+        Assert.DoesNotContain(Frames(), f =>
+            f.RootElement.TryGetProperty("method", out JsonElement m)
+            && (m.GetString() == "dm/environment" || m.GetString() == "window/showMessage"));
+    }
+
+    /// <summary>Configured defines are the client engaging with its settings; no note.</summary>
+    [Fact]
+    public void Configured_defines_suppress_the_auto_discovery_note()
+    {
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"rootUri\":\"{RootUri()}\","
+            + "\"initializationOptions\":{\"defines\":[\"CBT\"]}}}");
+        DidOpen("code.dm", "/mob\\n\\tvar/hp = 1\\n");
+
+        List<JsonDocument> frames = Frames();
+
+        Assert.DoesNotContain(frames, f =>
+            f.RootElement.TryGetProperty("method", out JsonElement m)
+            && m.GetString() == "window/showMessage");
+
+        // Discovery still announces itself — the .dme was still auto-picked.
+        Assert.Contains(frames, f =>
+            f.RootElement.TryGetProperty("method", out JsonElement m)
+            && m.GetString() == "dm/environment");
+    }
+
+    /// <summary>
+    /// A 3.17 client may send only workspaceFolders — rootUri is deprecated — and a multi-root
+    /// window sends several. One server holds one workspace, so the FIRST folder wins: the
+    /// documented contract, pinned here so it cannot regress into "no root found".
+    /// </summary>
+    [Fact]
+    public void The_first_workspace_folder_wins()
+    {
+        string second = Directory.CreateTempSubdirectory("dm-lsp-second-").FullName;
+
+        try
+        {
+            File.WriteAllText(Path.Combine(second, "other.dme"), "#include \"other.dm\"\n");
+            File.WriteAllText(Path.Combine(second, "other.dm"), "/mob/stranger\n\tvar/unseen = 1\n");
+
+            Send($"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"workspaceFolders\":[{{\"uri\":\"{RootUri()}\",\"name\":\"first\"}},{{\"uri\":\"{new Uri(second).AbsoluteUri}\",\"name\":\"second\"}}]}}}}");
+
+            // The first folder's project answers; the second folder's type does not exist.
+            Send("{\"jsonrpc\":\"2.0\",\"id\":70,\"method\":\"dm/members\",\"params\":{\"path\":\"/mob\"}}");
+            Assert.True(ResponseTo(70).TryGetProperty("result", out _));
+
+            Send("{\"jsonrpc\":\"2.0\",\"id\":71,\"method\":\"dm/members\",\"params\":{\"path\":\"/mob/stranger\"}}");
+            Assert.Equal(-32803, ResponseTo(71).GetProperty("error").GetProperty("code").GetInt32());
+        }
+        finally
+        {
+            Directory.Delete(second, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A single-file window — no workspace root at all — used to mean analysis off. The first
+    /// opened file now finds the project above it, so cross-file resolution works with nothing
+    /// configured anywhere.
+    /// </summary>
+    [Fact]
+    public void A_single_file_window_finds_the_project_above_it()
+    {
+        WriteNestedProject();
+        Send("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}");
+        DidOpen("sub/game/play.dm", "/proc/g()\\n\\treturn 1\\n");
+
+        Send("{\"jsonrpc\":\"2.0\",\"id\":63,\"method\":\"dm/members\",\"params\":{\"path\":\"/mob/pet\"}}");
+
+        List<string?> names = new();
+
+        foreach (JsonElement entry in ResponseTo(63).GetProperty("result").GetProperty("vars").EnumerateArray())
+            names.Add(entry.GetProperty("name").GetString());
+
+        Assert.Contains("tricks", names);
+    }
 }

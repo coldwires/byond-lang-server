@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.29 MB, ABI 0.28, 39 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,278 green (1,214 core, 44 native, 20 lsp)
+    tests           1,338 green (1,269 core, 44 native, 25 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included
@@ -40,7 +40,8 @@ WHERE WE ARE
     diagnostics     ZERO INVENTED EVERYWHERE - mlaas 0, madridspy 0, and
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
-    fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 252-probe ratchet
+    fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 255-probe ratchet
+                    at 74/255 agreed
                     - and it now runs IN CI against the real compiler, which it
                     never did before: the byond-fixtures job fetches the
                     standalone zip, so a BYOND release that changes what DM
@@ -445,10 +446,9 @@ WHERE THE DETAIL LIVES
 
 OPEN QUESTIONS
 --------------------------------------------------------------------------------
-  - What language is the third IDE in?
-  - What are SpacemanDMM's terms, if we ever borrow from it?
-
-  Everything else is answered - full table with evidence in PLAN.md 10.
+  None. The last two were dropped 2026-08-13 by the user: the third IDE's dev
+  is not active, and nothing SpacemanDMM-related will be borrowed, so neither
+  question has a consumer. Full table with evidence in PLAN.md 10.
 
 
 CONVENTIONS
