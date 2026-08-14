@@ -42,6 +42,18 @@ internal sealed class LspServer
     // client that says nothing gets.
     private PositionEncoding _encoding = PositionEncoding.Utf16;
 
+    // .dme discovery. With no environmentFile configured, initialize takes the first .dme in the
+    // workspace root, and the FIRST opened DM document can refine that by proximity: the nearest
+    // .dme walking up from the file wins (directory reads, no parsing). One workspace, so the
+    // first open decides; an explicit environmentFile is never second-guessed. Verification is
+    // structural rather than a walk per candidate: a file the chosen .dme never includes already
+    // analyses as builtins-plus-itself through GetTreeFor.
+    private bool _discoveryPending;
+    private bool _autoDiscovered;
+    private bool _definesConfigured;
+    private string? _rootDirectory;
+    private IReadOnlyList<string>? _defines;
+
     // Paths with an open buffer, so an Invalidate can re-publish every document a user is looking
     // at. The buffers themselves live in the workspace; this is only the guest list.
     private readonly HashSet<string> _open = new(StringComparer.OrdinalIgnoreCase);
@@ -108,6 +120,7 @@ internal sealed class LspServer
                 {
                     string path = PathOf(params_.GetProperty("textDocument"));
                     string text = params_.GetProperty("textDocument").GetProperty("text").GetString() ?? "";
+                    DiscoverFromFirstOpen(path);
                     _workspace?.SetBuffer(path, text);
                     _open.Add(path);
                     PublishDiagnostics(path);
@@ -442,22 +455,30 @@ internal sealed class LspServer
     private void WriteInitializeResult(Utf8JsonWriter json, JsonElement params_)
     {
         string? root = RootDirectoryOf(params_);
-        string? dme = FindDme(params_, root);
+        _rootDirectory = root;
+        _defines = DefinesOf(params_);
+        _definesConfigured = _defines is { Count: > 0 };
+
+        string? dme = FindDme(params_, root, out bool explicitlyConfigured);
+        _autoDiscovered = dme is not null && !explicitlyConfigured;
+        _discoveryPending = !explicitlyConfigured;
 
         if (dme is not null)
         {
             _workspace = Workspace.Open(dme);
             _workspace.IconStateReader = DmiReader.StateNames;
 
-            if (DefinesOf(params_) is { Count: > 0 } defines)
-                _workspace.SetDefines(defines);
+            if (_definesConfigured)
+                _workspace.SetDefines(_defines!);
         }
         else if (root is not null)
         {
             // No project to point at — a folder with no .dme, or single-file mode. Analysis stays
             // ON: every file becomes its own compilation unit of the builtins plus itself, which
             // is far better than the nothing this used to return. Cross-file resolution is what
-            // is lost, and dm/fileInProject reports every file as outside a project.
+            // is lost, and dm/fileInProject reports every file as outside a project. The first
+            // opened document may still find a project by proximity — a .dme nested BELOW the
+            // root is invisible to the top-level scan and findable from a file beside it.
             _workspace = Workspace.OpenStandalone(root);
             _workspace.IconStateReader = DmiReader.StateNames;
 
@@ -467,7 +488,8 @@ internal sealed class LspServer
         }
         else
         {
-            Console.Error.WriteLine("dm-lsp: no workspace root and no .dme; analysis is off.");
+            Console.Error.WriteLine(
+                "dm-lsp: no workspace root and no .dme; the first opened file picks the nearest project.");
         }
 
         _encoding = NegotiateEncoding(params_);
@@ -534,6 +556,11 @@ internal sealed class LspServer
         json.WriteEndObject();
     }
 
+    /// <summary>
+    /// The workspace root, from any of the three spellings a client may use. One server holds
+    /// ONE workspace, so in a multi-root window the FIRST folder wins — the documented contract,
+    /// not an accident of which field arrived. A multi-game setup runs one server per game.
+    /// </summary>
     private static string? RootDirectoryOf(JsonElement params_)
     {
         if (params_.TryGetProperty("rootUri", out JsonElement rootUri)
@@ -548,14 +575,25 @@ internal sealed class LspServer
             return rootPath.GetString();
         }
 
+        // rootUri is deprecated in 3.17 and a newer client may send only workspaceFolders —
+        // ignoring those read as "no root" and analysis limped into single-file mode.
+        if (params_.TryGetProperty("workspaceFolders", out JsonElement folders)
+            && folders.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement folder in folders.EnumerateArray())
+            {
+                if (folder.ValueKind == JsonValueKind.Object
+                    && folder.TryGetProperty("uri", out JsonElement uri)
+                    && uri.ValueKind == JsonValueKind.String)
+                {
+                    return UriToPath(uri.GetString()!);
+                }
+            }
+        }
+
         return null;
     }
 
-    /// <summary>
-    /// The project file: <c>initializationOptions.environmentFile</c> when the client says, else
-    /// the first <c>.dme</c> in the workspace root. Real projects keep it at the top — a `.dme`
-    /// IS the project — so no recursive search.
-    /// </summary>
     /// <summary>
     /// The client's <c>general.positionEncodings</c> is an ordered preference list, and the first
     /// entry this server speaks wins. A client that says nothing gets UTF-16, the LSP default.
@@ -586,19 +624,34 @@ internal sealed class LspServer
         return PositionEncoding.Utf16;
     }
 
-    private static string? FindDme(JsonElement params_, string? root)
+    /// <summary>
+    /// The project file: <c>initializationOptions.environmentFile</c> when the client says, else
+    /// the first <c>.dme</c> in the workspace root. Real projects keep it at the top — a `.dme`
+    /// IS the project — so no recursive search; a nested project is instead found by proximity
+    /// from the first opened document (<see cref="DiscoverFromFirstOpen"/>).
+    /// </summary>
+    private static string? FindDme(JsonElement params_, string? root, out bool explicitlyConfigured)
     {
+        explicitlyConfigured = false;
+
         if (params_.TryGetProperty("initializationOptions", out JsonElement options)
             && options.ValueKind == JsonValueKind.Object
             && options.TryGetProperty("environmentFile", out JsonElement configured)
             && configured.ValueKind == JsonValueKind.String)
         {
+            explicitlyConfigured = true;
             string file = configured.GetString()!;
 
             if (!Path.IsPathRooted(file) && root is not null)
                 file = Path.Combine(root, file);
 
-            return File.Exists(file) ? file : null;
+            if (File.Exists(file))
+                return file;
+
+            // A configured path the disk does not have. Auto-picking a different .dme here would
+            // override an explicit setting, so analysis stays standalone and stderr says why.
+            Console.Error.WriteLine($"dm-lsp: configured environmentFile not found: {file}");
+            return null;
         }
 
         if (root is null || !Directory.Exists(root))
@@ -606,6 +659,172 @@ internal sealed class LspServer
 
         string[] found = Directory.GetFiles(root, "*.dme", SearchOption.TopDirectoryOnly);
         return found.Length > 0 ? found[0] : null;
+    }
+
+    /// <summary>
+    /// Settles auto-discovery from the first opened DM document: the nearest <c>.dme</c> walking
+    /// up from the file wins, which is what a game nested below the workspace root needs — the
+    /// top-level scan finds nothing there and every file went standalone. Directory reads only,
+    /// no parsing. One workspace, so the first document decides and later opens change nothing;
+    /// <c>environmentFile</c> never reaches here at all. A wrong candidate degrades per file
+    /// rather than failing: a file the chosen .dme never includes analyses as
+    /// builtins-plus-itself, which is the verification the design asks for, already structural.
+    /// </summary>
+    private void DiscoverFromFirstOpen(string path)
+    {
+        if (!_discoveryPending)
+            return;
+
+        string extension = Path.GetExtension(path);
+
+        if (!extension.Equals(".dm", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".dme", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string file;
+
+        try
+        {
+            file = Path.GetFullPath(path);
+        }
+        catch (Exception e) when (e is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return;
+        }
+
+        string? stop = _rootDirectory is not null ? Path.GetFullPath(_rootDirectory) : null;
+
+        // A file outside the workspace root cannot name the root's project, and it does not
+        // consume the decision either — the first file IN the workspace still can.
+        if (stop is not null && !IsUnder(file, stop))
+            return;
+
+        _discoveryPending = false;
+
+        string? nearest = NearestDmeAbove(file, stop);
+
+        if (nearest is not null)
+        {
+            AdoptDiscovered(nearest);
+        }
+        else if (_workspace is null && Path.GetDirectoryName(file) is string directory)
+        {
+            // Single-file mode with no workspace root: initialize had nothing to open, and the
+            // walk found no project either, so the file's own directory becomes a standalone
+            // workspace — per-file analysis instead of the nothing this used to be.
+            _workspace = Workspace.OpenStandalone(directory);
+            _workspace.IconStateReader = DmiReader.StateNames;
+            Console.Error.WriteLine($"dm-lsp: no .dme above {file}; analysing each file on its own.");
+        }
+
+        AnnounceEnvironment();
+        AnnounceDefinesGap();
+    }
+
+    /// <summary>
+    /// The first directory at or above the file holding a <c>.dme</c>, nearest first, stopping
+    /// at the workspace root. With no root — a single-file window — the walk runs to the
+    /// filesystem root, which is a handful of directory reads.
+    /// </summary>
+    private static string? NearestDmeAbove(string file, string? stop)
+    {
+        for (string? dir = Path.GetDirectoryName(file); dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            string[] found;
+
+            try
+            {
+                found = Directory.GetFiles(dir, "*.dme", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            if (found.Length > 0)
+                return found[0];
+
+            if (stop is not null && string.Equals(
+                    Path.TrimEndingDirectorySeparator(dir),
+                    Path.TrimEndingDirectorySeparator(stop),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsUnder(string file, string root)
+        => file.StartsWith(
+            Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Swaps the workspace onto a proximity-discovered project. No buffers need carrying: this
+    /// runs before the first buffer is pushed, which is the only reason a swap is this cheap.
+    /// </summary>
+    private void AdoptDiscovered(string dme)
+    {
+        if (_workspace is Workspace current
+            && string.Equals(current.DmePath, dme, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _workspace?.Dispose();
+        _workspace = Workspace.Open(dme);
+        _workspace.IconStateReader = DmiReader.StateNames;
+
+        if (_definesConfigured)
+            _workspace.SetDefines(_defines!);
+
+        _autoDiscovered = true;
+
+        Console.Error.WriteLine(
+            $"dm-lsp: analysing {dme}, the nearest .dme above the first opened file. "
+            + "Set dm.environmentFile to override.");
+    }
+
+    /// <summary>
+    /// Tells the client which <c>.dme</c> discovery settled on. Which project is analysed decides
+    /// every answer the server gives, and a proximity-chosen one is otherwise invisible — the
+    /// exact problem the client's status bar exists to fix. Not sent when the client configured
+    /// the file itself: it already knows.
+    /// </summary>
+    private void AnnounceEnvironment()
+        => Rpc.Notify(_output, "dm/environment", json =>
+        {
+            json.WriteStartObject();
+
+            if (_workspace is { HasEnvironmentFile: true } ws)
+                json.WriteString("environmentFile", ws.DmePath);
+            else
+                json.WriteNull("environmentFile");
+
+            json.WriteBoolean("autoDiscovered", _autoDiscovered);
+            json.WriteEndObject();
+        });
+
+    /// <summary>
+    /// The one-time note that an auto-discovered project is analysed with no <c>-D</c> defines.
+    /// A discovered .dme cannot know what the build passes, and a workspace without the build's
+    /// defines describes a DIFFERENT program — code behind a guard invisible, or visible when it
+    /// should not be — with nothing resolving wrongly enough to notice. A client that configured
+    /// either option has engaged with the settings and is not nagged.
+    /// </summary>
+    private void AnnounceDefinesGap()
+    {
+        if (!_autoDiscovered || _definesConfigured || _workspace is not { HasEnvironmentFile: true } ws)
+            return;
+
+        ShowMessage(MessageTypeInfo,
+            $"Analysing {Path.GetFileName(ws.DmePath)} (auto-discovered) with no -D defines. "
+            + "If your build passes any, set dm.defines — without them this analyses a different "
+            + "program from the one you compile.");
     }
 
     private static IReadOnlyList<string>? DefinesOf(JsonElement params_)
@@ -1712,6 +1931,7 @@ internal sealed class LspServer
     }
 
     private const int MessageTypeWarning = 2;
+    private const int MessageTypeInfo = 3;
 
     private static string RefusalWord(RenameRefusal refusal) => refusal switch
     {

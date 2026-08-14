@@ -75,6 +75,19 @@ internal sealed class MacroExpander
 
             if (!IsNameLike(token.Kind) || !_macros.TryGet(token.Text, out MacroDefinition macro))
             {
+                // `__FILE__` and `__LINE__` are position-dependent, so no table entry can carry
+                // them; they expand here, at the use, to the reporting position's file and
+                // 1-based line — which for a macro-body token is the invocation, dm.exe's own
+                // rule. A project `#define` of either would win in the table lookup above.
+                // Until 2026-08-13 they expanded nowhere at all and flowed to the parser as
+                // identifiers — tgstation's ASSERT strings carried 5,878 of them.
+                if (token.Kind == TokenKind.Identifier && token.Text is "__FILE__" or "__LINE__")
+                {
+                    AppendPositionMacro(token);
+                    i++;
+                    continue;
+                }
+
                 _output.Add(token);
                 i++;
                 continue;
@@ -136,6 +149,36 @@ internal sealed class MacroExpander
             $"macro recursion level too deep expanding '{macro.Name}'; the compiler rejects this too"));
 
         return false;
+    }
+
+    /// <summary>
+    /// <c>__FILE__</c> as a string literal, <c>__LINE__</c> as a number, both at the token's
+    /// REPORTING position — its own for a written use, the invocation for a macro-body one. The
+    /// buffer is re-lexed because a plain string is a Start/Text/End run, not one token; the
+    /// results keep the use's expansion chain, so a body token still maps back to the
+    /// invocation, and a written one's synthetic span is clamped onto the surrounding line by
+    /// <c>TokenSource.FromExpanded</c>'s position collapse.
+    /// </summary>
+    private void AppendPositionMacro(ExpandedToken use)
+    {
+        (SourceText source, TextSpan span) = use.ReportAt;
+
+        string text;
+
+        if (use.Text == "__FILE__")
+        {
+            text = $"\"{(source.Path ?? string.Empty).Replace('\\', '/')}\"";
+        }
+        else
+        {
+            int line = source.GetLinePosition(span.Start, PositionEncoding.Utf16).Line + 1;
+            text = line.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        SourceText buffer = SourceText.From(text, $"<{use.Text}>");
+
+        foreach (Token token in Relex(buffer))
+            _output.Add(new ExpandedToken(token.Kind, buffer, token.Span, use.Expansion));
     }
 
     private static List<ExpandedToken> BodyTokens(MacroDefinition macro, MacroExpansion expansion)
@@ -409,6 +452,20 @@ internal sealed class MacroExpander
         {
             string merged = result[^1].Text + replacement[0].Text;
             result[^1] = SyntheticToken(ClassifySingle(merged), merged, expansion);
+            start = 1;
+        }
+        else if (replacement.Count > 0)
+        {
+            // The paste means NO SPACE at the boundary even when nothing can glue into one token.
+            // Passed through unchanged, the argument's first token keeps the whitespace fact from
+            // how the INVOCATION spelled it: tgstation's `/datum/verb_metadata##owner_type` called
+            // with `, /client` put a spaced `/` mid-path, and the path reader's ends-at-whitespace
+            // rule (mlaas's gloves typo is its compiler evidence) split the path there — two
+            // invented undefined-vars per call site. A synthetic buffer starts at offset 0, so
+            // the rebuilt token's whitespace-before is false, the way dm.exe's textual paste
+            // makes it.
+            ExpandedToken first = replacement[0];
+            result.Add(SyntheticToken(first.Kind, first.Text, expansion));
             start = 1;
         }
 

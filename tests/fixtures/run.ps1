@@ -19,7 +19,7 @@
 param(
     [string]$Byond = "${env:ProgramFiles(x86)}\BYOND\bin",
     [switch]$OursOnly,
-    # The mined probe corpus: 252 compiles plus 252 diagdiffs, so a few minutes.
+    # The mined probe corpus: 255 compiles plus 255 diagdiffs, so a few minutes.
     # Off by default to keep the core suite quick.
     [switch]$Probes,
     [switch]$UpdateBaseline,
@@ -272,7 +272,7 @@ foreach ($dme in Get-ChildItem $root -Recurse -Filter '*.dme' |
 
 # -- 4. the mined probe corpus, against a ratchet ----------------------------
 #
-# 252 single-message probes mined from the diagnostic lab. We implement a
+# 255 single-message probes mined from the diagnostic lab. We implement a
 # fraction of what dm.exe reports, so this is a floor that must not drop rather
 # than a target to hit. See errors/probes/BASELINE.txt for why `invented` is not
 # the metric here.

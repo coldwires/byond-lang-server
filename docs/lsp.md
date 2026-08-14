@@ -31,6 +31,11 @@ Speaks stdio and nothing else. **Command-line arguments are ignored** — the VS
 `--stdio` and the server never reads it, so a client that insists on passing a transport flag is
 harmless. There is no TCP mode.
 
+**One server holds one workspace, and in a multi-root window the first folder wins.** The root is
+read from `rootUri`, then `rootPath`, then the first entry of `workspaceFolders`; the rest are
+ignored. Two games in one window therefore analyse as one project and a pile of out-of-project
+files — run one server per game instead, which is what every client here does per window.
+
 Errors and status go to **stderr**, which is worth wiring into your client's log: the standalone
 fallback below announces itself there and is otherwise invisible.
 
@@ -49,9 +54,20 @@ Two fields, both optional, both consequential.
 }
 ```
 
-**`environmentFile`** is the `.dme` to analyse. Without it the server takes **the first `.dme` in
-the workspace root**, non-recursively — a `.dme` is the project and real ones sit at the top. A
-project with several `.dme` files gets an arbitrary one of them, so send this field if you can.
+**`environmentFile`** is the `.dme` to analyse. Without it the server discovers one in two steps:
+**the first `.dme` in the workspace root** (non-recursively) at `initialize`, then **proximity at
+the first `didOpen`** — the nearest `.dme` walking up from that document wins, so a game nested
+below the workspace root is found from its own files, which the root scan never could. One
+workspace, so the first opened DM document decides for the session; an explicit `environmentFile`
+is never second-guessed, and a file outside the workspace root neither names a project nor
+consumes the decision. Discovery announces what it settled on through the `dm/environment`
+notification (below). A workspace with several `.dme` files can still get one you did not mean,
+so send this field if you can.
+
+A discovered `.dme` cannot know what the build passes to `dm.exe -D`, so when discovery settles
+with **no `defines` configured**, the server also sends one `window/showMessage` (Info) saying
+which `.dme` it picked and that analysis without the build's defines describes a different
+program. Configuring either option suppresses the note.
 
 **`defines`** is what the project's build passes to `dm.exe -D`, in the compiler's own spelling:
 
@@ -82,7 +98,11 @@ Cross-file resolution is what is lost. A standalone file completes its own procs
 BYOND's builtins, and nothing from the file beside it — which is what `dm.exe` compiling that file
 alone would also resolve. `dm/fileInProject` reports every file as outside a project in this mode.
 
-With neither a root nor a `.dme`, analysis is off and stderr says so.
+Standalone at `initialize` is not final: the first opened document still runs the proximity walk
+above, so a `.dme` nested below the root is adopted the moment a file near it is opened.
+
+With neither a root nor a `.dme`, the first opened file picks the nearest project above it; if
+that walk finds nothing either, the file's own directory becomes a standalone workspace.
 
 ---
 
@@ -123,7 +143,7 @@ consulted for it again.
 | Read | `completion` + `completionItem/resolve`, `hover`, `signatureHelp`, `definition`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `documentSymbol`, `workspace/symbol` |
 | Write | `rename` — **best-effort by design**: the `WorkspaceEdit` carries only sites *proven* to be the symbol, a refusal answers `null`, and both the refusal reason and the count of uncertain sites (`:` accesses, untyped receivers, string dispatch) arrive as a `window/showMessage` warning, since the standard response has no field for either. `dm/rename` below returns the full list |
 | Editor | `semanticTokens/full`, `inlayHint`, `foldingRange`, `documentLink`, `documentColor`, `colorPresentation` |
-| Server → client | `window/workDoneProgress/create` + `$/progress` |
+| Server → client | `window/workDoneProgress/create` + `$/progress`; `dm/environment` (below); `window/showMessage` for rename's uncertainty and the auto-discovery defines note |
 
 Trigger characters: `.` `:` `/` for completion, `(` `,` for signature help.
 
@@ -158,6 +178,12 @@ ABI are listed below rather than the whole shape.
 | `dm/iconStates` | `uri` | every state in a `.dmi` |
 | `dm/rename` | `textDocument`, `position`, `newName` | the full rename answer: `refusal` word, provable `edits`, and every `uncertain` site with a `reason` (`colonAccess`, `untypedReceiver`, `stringLiteral`). Same shape as `dm_rename_at` |
 | `dm/tickFile` / `dm/untickFile` | `textDocument` | a `.dme` edit as `{ uri, text, refusal }` |
+
+One custom **notification**, server → client:
+
+| Method | Params | When |
+|---|---|---|
+| `dm/environment` | `{ environmentFile, autoDiscovered }` | auto-discovery settles, at the first `didOpen`. `environmentFile` is the absolute path being analysed, or null when none was found. Not sent when the client configured `environmentFile` — it already knows. Wire it into whatever shows the active project; the VS Code client's status bar consumes it |
 
 **Deltas from the ABI shapes:**
 

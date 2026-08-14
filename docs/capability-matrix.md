@@ -34,7 +34,7 @@ work list.
 | Folding ranges | `FoldingService` | `dm_folding_ranges` (0.19) | `foldingRange` |
 | Document links (`#include`) | `DocumentLinkService` | `dm_document_links` (0.19) | `documentLink` |
 | Is this file in the project | `Workspace.IsFileInProject` | `dm_file_in_project` (0.19) | `dm/fileInProject` |
-| Standalone (no `.dme`) analysis | `Workspace.OpenStandalone`, `GetTreeFor` | `dm_workspace_open_standalone` (0.20) | falls back automatically when no `.dme` is found |
+| Standalone (no `.dme`) analysis | `Workspace.OpenStandalone`, `GetTreeFor` | `dm_workspace_open_standalone` (0.20) | falls back automatically when no `.dme` is found; the first `didOpen` still adopts the nearest `.dme` above the file, announced via `dm/environment` (2026-08-13) |
 | `.dme` tickmarks (tick/untick) | `DmeIncludeBlock`, `Workspace.TickFile`/`UntickFile` | `dm_dme_is_ticked`, `dm_dme_tick`, `dm_dme_untick` (0.20) | `dm/tickFile`, `dm/untickFile` + the client's toggle command |
 | Workspace-symbol kind filters | `WorkspaceSymbolService` (`var/`, `proc/`, `verb/`, `#`) | `dm_workspace_symbols` (0.8) — filters ride in the query string | `workspace/symbol` |
 | Object-tree panel | `TreeQueryService` | `dm_query_json` (0.11) | `dm/objectTree` + the client's Explorer view |

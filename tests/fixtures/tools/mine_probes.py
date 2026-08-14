@@ -33,10 +33,13 @@ SUMMARY = re.compile(r"- (\d+) errors?, (\d+) warnings?")
 # Messages that exist but are outside a language server's reach. Matching on a
 # substring of the message rather than the probe name, since the probe name is
 # the lab's naming and the message is the contract.
+# "unable to open" and "cannot find file" were in this list until 2026-08-13, grouped with the
+# asset checks - wrongly: a missing #include is squarely a language server's business, we report
+# it, and diagdiff scores it agreed. The asset spellings (icon, dmi, sound...) still filter.
 OUT_OF_SCOPE = (
     "map", "turf on", "area on", "icon", "skin", "dmf", "dmi", "dmm", "dmp",
     "cache", "out of memory", "internal", "bad instruction", "bad node",
-    "failed to", "unable to open", "cannot find file", "key file",
+    "failed to", "key file",
     "sound", "savefile", "database", "too large", "child nodes",
     "maximum number", "too many", "bad build", "version number",
 )

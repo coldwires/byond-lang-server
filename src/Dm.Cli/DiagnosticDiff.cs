@@ -267,8 +267,12 @@ internal static class DiagnosticDiff
 
             if (verbose)
             {
-                foreach ((Entry key, string _) in group.Take(5))
-                    Console.Out.WriteLine($"            {key}");
+                // The message rides along because it names the SYMBOL, and the symbol is the
+                // grouping axis that carries the cause — five sites of one name is one bug.
+                // Forty, not five: a 120-strong group showed five sites of two names and hid
+                // whether a third name existed, which is the question verbose is for.
+                foreach ((Entry key, string message) in group.Take(40))
+                    Console.Out.WriteLine($"            {key}  {message}");
             }
         }
 

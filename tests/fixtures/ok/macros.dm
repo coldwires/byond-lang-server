@@ -17,6 +17,19 @@
 
 #define SECONDS *10
 
+// A macro whose BODY is a directive. `int MACRO_MADE 2` expands to
+// `#define MACRO_MADE 2` and dm.exe RE-PROCESSES the expansion, so the macro
+// exists afterwards - madridspy builds its whole status-flag vocabulary this
+// way (`#define int #define`, then `int DEAD 2` and eight more). We re-process
+// too since 2026-08-13, the same day the -code_tree oracle surfaced the gap: a
+// line-starting object-like macro whose body begins with `#` splits the run
+// and its line becomes a directive. Only the HEAD expands - a directive's
+// arguments are raw, or `#undef FOO` would undefine FOO's VALUE. The #undef
+// keeps `int` from leaking into the rest of the suite.
+#define int #define
+int MACRO_MADE 2
+#undef int
+
 // A skipped region whose content is indented. The newline after its #endif
 // sits at the SKIPPED depth until the next code line dedents, and levelling it
 // invented a block with nothing in it. The declaration after the region must
@@ -74,6 +87,7 @@
 	CHECK("macro arg keeps its tail", M.argument_survives_a_null_index(3), "*W #3")
 	CHECK("macro expanding to an operator", M.cooldown_shape(), 0)
 
+	CHECK("a macro-made macro exists", MACRO_MADE, 2)
 	CHECK("stringify", STRINGIFY(abc), "abc")
 	CHECK("token paste", GLUE(2, 5), 25)
 	CHECK("repeat operator", TWICE(1), 11)   // 2###t repeats t twice; the 2 is consumed

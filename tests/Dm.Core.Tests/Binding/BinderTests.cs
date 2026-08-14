@@ -119,7 +119,11 @@ public class BinderTests
         Assert.Contains(found, d => d.Id == "DM0400" && d.Message.Contains("nonexistent_xyz"));
     }
 
-    /// <summary>Binds the last file against a tree built from all of them, as a real build does.</summary>
+    /// <summary>
+    /// Binds the last file against a tree built from all of them, as a real build does — builtins
+    /// seeded, because a bare tree resolves `list()` and `nameof()` to nothing and the
+    /// undefined-proc check then measures the harness rather than the code.
+    /// </summary>
     private static IReadOnlyList<Diagnostic> Bind(params string[] files)
     {
         List<(string, ParseResult)> parsed = new();
@@ -127,7 +131,11 @@ public class BinderTests
         for (int i = 0; i < files.Length; i++)
             parsed.Add(($"file{i}.dm", DeclarationParser.Parse(Lexer.Lex(SourceText.From(files[i])))));
 
-        ObjectTree tree = TypeTreeBuilder.Build(parsed);
+        ObjectTree tree = new();
+        Builtins.Seed(tree);
+
+        foreach ((string file, ParseResult parse) in parsed)
+            TypeTreeBuilder.AddFile(tree, file, parse);
 
         return Binder.Bind(tree, parsed[^1].Item2.Root, parsed[^1].Item1);
     }
@@ -209,8 +217,10 @@ public class BinderTests
     }
 
     /// <summary>
-    /// Cross-file: the file holding the LATER declaration reports the duplicate; the earlier
-    /// file's "previous definition" line is the documented miss.
+    /// Cross-file: each file reports its own half of the pair. The file holding the LATER
+    /// declaration draws the duplicate; binding the ancestor's file draws the "previous
+    /// definition" — the check's one documented miss until 2026-08-13, closed by the tree's
+    /// redeclaration index instead of a descendant scan per bind.
     /// </summary>
     [Fact]
     public void A_cross_file_redeclaration_reports_the_duplicate_half()
@@ -221,6 +231,239 @@ public class BinderTests
 
         Diagnostic reported = Assert.Single(found);
         Assert.Contains("duplicate definition", reported.Message);
+    }
+
+    [Fact]
+    public void A_cross_file_redeclaration_reports_the_previous_half_in_the_ancestors_file()
+    {
+        // Bind() binds the LAST file, so the ancestor's declaration is the one being bound and
+        // the descendant's duplicate sits in the other file.
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing/sub\n\tproc/f()\n\t\treturn 2\n",
+            "/datum/thing\n\tproc/f()\n\t\treturn 1\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Contains("previous definition", reported.Message);
+    }
+
+    /// <summary>dm.exe reports one previous line however many descendants duplicate (probed).</summary>
+    [Fact]
+    public void Two_duplicating_descendants_draw_one_previous_line()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing/one\n\tproc/f()\n\t\treturn 2\n/datum/thing/two\n\tproc/f()\n\t\treturn 3\n",
+            "/datum/thing\n\tproc/f()\n\t\treturn 1\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Contains("previous definition", reported.Message);
+    }
+
+    /// <summary>The var half pairs across files the same way (probe p2, 2026-08-13).</summary>
+    [Fact]
+    public void A_var_redeclared_on_a_subtype_reports_the_previous_half_in_the_ancestors_file()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing/sub\n\tvar/x\n",
+            "/datum/thing\n\tvar/x\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Contains("previous definition", reported.Message);
+    }
+
+    // -- bare identifiers (DM0400's undefined-var half) -----------------------
+
+    [Fact]
+    public void A_bare_name_resolving_nowhere_is_an_undefined_var()
+    {
+        IReadOnlyList<Diagnostic> found = Bind("/proc/f()\n\treturn missing_thing\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Equal("DM0400", reported.Id);
+        Assert.Equal("missing_thing: undefined var", reported.Message);
+    }
+
+    /// <summary>Value position is VARS-ONLY: &amp;f and initial(p) both error in dm.exe.</summary>
+    [Fact]
+    public void A_proc_name_does_not_satisfy_value_position()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/d\n\tproc/p()\n\t\treturn 1\n\tproc/q()\n\t\treturn p\n");
+
+        Assert.Contains(found, d => d.Id == "DM0400" && d.Message == "p: undefined var");
+    }
+
+    [Fact]
+    public void Members_globals_and_proc_scope_names_all_resolve()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "var/g = 1\n\n/mob/test\n\tvar/m = 2\n\tproc/f(a)\n\t\treturn g + m + a + args.len + usr\n");
+
+        Assert.DoesNotContain(found, d => d.Id == "DM0400");
+    }
+
+    /// <summary>`list(k = 1)` stores the STRING key "k"; the variable is never read (probed).</summary>
+    [Fact]
+    public void An_assoc_key_identifier_is_string_sugar_not_a_read()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/proc/f()\n\tvar/list/L = list(missing_key = 1)\n\treturn L\n");
+
+        Assert.DoesNotContain(found, d => d.Id == "DM0400");
+    }
+
+    /// <summary>A modified-type entry's target names a member of the constructed type.</summary>
+    [Fact]
+    public void A_modified_type_entry_target_is_not_a_scope_read()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/thing\n\tvar/hp = 1\n\n/proc/f()\n\tvar/obj/thing/T = new /obj/thing{hp = 2}\n\treturn T\n");
+
+        Assert.DoesNotContain(found, d => d.Id == "DM0400");
+    }
+
+    /// <summary>A lone identifier line is a LABEL — dm.exe's colon is optional (probed).</summary>
+    [Fact]
+    public void A_bare_label_line_is_not_a_read()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/proc/f()\n\tgoto fin\n\tfin\n\treturn 1\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>`var/a = 1, b = 2, c = 3` — the comma tail stays flat, so c is declared too.</summary>
+    [Fact]
+    public void Every_comma_sibling_is_declared()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/proc/f()\n\tvar/a = 1, b = 2, c = 3\n\tvar x, y, z\n\tx = 1\n\ty = 2\n\tz = 3\n"
+            + "\treturn a + b + c + x + y + z\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>A typed local var BLOCK declares its children as that type (mlaas's shape).</summary>
+    [Fact]
+    public void A_typed_local_var_block_declares_its_children()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/cl\n\tvar/worn = 0\n\n/proc/f()\n\tvar/obj/cl\n\t\tfirst\n\t\tsecond\n"
+            + "\tfirst = new\n\tsecond = new\n\treturn first.worn + second.worn\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>The `set` block form's children are settings, not statements (madridspy).</summary>
+    [Fact]
+    public void A_set_block_holds_settings_not_reads()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob/verb/v()\n\tset\n\t\thidden = 1\n\t\tinstant = 1\n\treturn 1\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>`var{a = 1; b = 2}` declares locals, not assignment statements (warklan).</summary>
+    [Fact]
+    public void A_var_brace_group_declares_its_entries()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/proc/f()\n\tvar{bg1 = 3; bg2 = 4}\n\treturn bg1 + bg2\n");
+
+        Assert.Empty(found);
+    }
+
+    // -- set names, usr in initializers, dotted receivers, undefined procs ----
+    // The 2026-08-13 evening batch, each rule probed before the code.
+
+    [Fact]
+    public void An_unknown_set_name_is_an_undefined_var()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob/verb/v()\n\tset bogus_setting = 1\n\treturn 1\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Equal("bogus_setting: undefined var", reported.Message);
+    }
+
+    /// <summary>All ten names compile in verbs AND procs (probed); none may report.</summary>
+    [Fact]
+    public void The_set_vocabulary_stays_silent()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/proc/t()\n\tset name = \"n\"\n\tset desc = \"d\"\n\tset category = \"c\"\n"
+            + "\tset hidden = 1\n\tset instant = 1\n\tset invisibility = 1\n\tset popup_menu = 0\n"
+            + "\tset background = 1\n\tset waitfor = 0\n\treturn 1\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>`usr` errors in a type-level initializer (probed in three spellings) and not in a body.</summary>
+    [Fact]
+    public void Usr_is_rejected_in_a_type_level_initializer()
+    {
+        Assert.Contains(
+            Bind("/datum/d\n\tvar/v = usr\n"),
+            d => d.Message == "usr: undefined var");
+
+        Assert.Empty(Bind("/proc/t()\n\treturn usr\n"));
+    }
+
+    /// <summary>
+    /// A bare receiver that resolves as NO var is dm.exe's error with the dotted text as the
+    /// symbol (errors/bare_type_receiver); an untyped LOCAL receiver stays the deliberate miss.
+    /// </summary>
+    [Fact]
+    public void A_bare_receiver_resolving_nowhere_reports_the_dotted_form()
+    {
+        Assert.Contains(
+            Bind("/mob\n\tvar/hp = 1\n\n/proc/t()\n\treturn mob.hp\n"),
+            d => d.Message == "mob.hp: undefined var");
+
+        Assert.Empty(Bind("/obj/item\n\tvar/hp = 1\n\n/proc/t()\n\tvar/x = new /obj/item\n\treturn x.hp\n"));
+    }
+
+    [Fact]
+    public void A_bare_call_no_proc_satisfies_is_an_undefined_proc()
+    {
+        IReadOnlyList<Diagnostic> found = Bind("/proc/t()\n\treturn no_such_global_xyz()\n");
+
+        Diagnostic reported = Assert.Single(found);
+        Assert.Equal("DM0401", reported.Id);
+        Assert.Equal("no_such_global_xyz: undefined proc", reported.Message);
+    }
+
+    /// <summary>Enclosing-chain, global, and builtin procs all satisfy a call.</summary>
+    [Fact]
+    public void Resolving_calls_stay_silent()
+    {
+        Assert.Empty(Bind(
+            "/proc/helper()\n\treturn 1\n\n/mob/test\n\tproc/own()\n\t\treturn 1\n"
+            + "\tproc/t(x)\n\t\treturn own() + helper() + length(x)\n"));
+    }
+
+    /// <summary>
+    /// A var does not satisfy a call — and dm.exe still counts the local unused (probed: both
+    /// diagnostics on one probe). But the NAME can resolve as a proc past the shadowing local:
+    /// mlaas calls the builtin length() with a parameter of that name in scope.
+    /// </summary>
+    [Fact]
+    public void A_called_local_is_an_undefined_proc_and_stays_unused()
+    {
+        IReadOnlyList<Diagnostic> found = Bind("/proc/t()\n\tvar/x = 5\n\tx()\n\treturn 1\n");
+
+        Assert.Contains(found, d => d.Id == "DM0401" && d.Message == "x: undefined proc");
+        Assert.Contains(found, d => d.Id == "unused_var");
+
+        Assert.Empty(Bind("/proc/limit(message, length)\n\treturn length(message)\n"));
+    }
+
+    /// <summary>`new the_type(usr)` reads the var and passes constructor args — not a call.</summary>
+    [Fact]
+    public void New_through_a_var_is_a_read_not_a_call()
+    {
+        Assert.Empty(Bind(
+            "/obj/thing\n/proc/t()\n\tvar/the_type = /obj/thing\n\treturn new the_type (null)\n"));
     }
 
     // -- what it must catch -------------------------------------------------

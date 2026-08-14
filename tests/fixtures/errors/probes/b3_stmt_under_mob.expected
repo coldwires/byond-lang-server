@@ -2,5 +2,5 @@
 # Recompiled here, so this records what dm.exe said on this machine.
 # probe: b3_stmt_under_mob
 2 error world: duplicate definition
-2 error 1: duplicate definition
+2 error 1: previous definition
 2 error <<: instruction not allowed here

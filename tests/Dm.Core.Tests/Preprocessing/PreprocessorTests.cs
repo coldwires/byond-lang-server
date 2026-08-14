@@ -59,6 +59,47 @@ public class PreprocessorTests
         Assert.Equal("var / first = 1 var / second = 2 var / last = 3", Text(result));
     }
 
+    /// <summary>
+    /// dm.exe RE-PROCESSES macro expansions for directives — `#define int #define` then
+    /// `int DEAD 2` defines DEAD, which is how madridspy builds its whole status-flag
+    /// vocabulary. Probed 2026-08-13. The directive line itself must not leak into the stream,
+    /// and the use on the NEXT line of the same run must already see the macro.
+    /// </summary>
+    [Fact]
+    public void A_macro_made_define_is_reprocessed()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#define int #define\nint DEAD 2\nvar/x = DEAD\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal("var / x = 2", Text(result));
+    }
+
+    [Fact]
+    public void A_macro_made_undef_is_reprocessed()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme",
+            "#define U #undef\n#define FOO 2\nvar/a = FOO\nU FOO\nvar/b = FOO\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal("var / a = 2 var / b = FOO", Text(result));
+    }
+
+    /// <summary>A macro whose body is a COMPLETE directive works from a bare line.</summary>
+    [Fact]
+    public void A_macro_carrying_a_whole_directive_is_reprocessed()
+    {
+        using TempDirectory temp = new();
+        temp.Write("game.dme", "#define MK #define DEAD 2\nMK\nvar/x = DEAD\n");
+
+        PreprocessResult result = Preprocessor.Run(Path.Combine(temp.Path, "game.dme"));
+
+        Assert.Equal("var / x = 2", Text(result));
+    }
+
     [Fact]
     public void Directive_lines_are_not_in_the_output()
     {

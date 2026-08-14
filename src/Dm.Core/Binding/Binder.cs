@@ -40,6 +40,10 @@ public sealed class Binder
     // Null on the diagnostics-only path, where every sink branch short-circuits to nothing.
     private readonly Action<Services.Reference>? _sink;
 
+    // True while binding a type-level or global var's initializer, where `usr` does not exist
+    // (probed — see BindDeclarations). Single-threaded walk, so a plain field.
+    private bool _inTypeInitializer;
+
     // The sites resolution deliberately stops at — `:`-family accesses and `.` through an unwritten
     // type — for a caller that needs to know where proof ends rather than only where it succeeds.
     private readonly Action<Services.UncertainSite>? _uncertain;
@@ -139,10 +143,16 @@ public sealed class Binder
                     break;
 
                 case VarDeclarationSyntax variable:
-                    // A type-level initialiser runs with the enclosing type as `src`.
+                    // A type-level initialiser runs with the enclosing type as `src` — and with
+                    // NO `usr`: probed 2026-08-13, `usr` in a datum var initialiser, a global
+                    // var initialiser and a bare override initialiser (`/world/name = usr`) are
+                    // all dm.exe's "usr: undefined var". The flag is what lets BindIdentifier
+                    // report it here while proc bodies keep the whitelist.
                     _inside = enclosing.IsRoot ? "/" : enclosing.Text;
                     CheckDuplicateVar(variable, enclosing);
+                    _inTypeInitializer = true;
                     BindExpression(variable.Initializer, new Scope(enclosing), invoked: false);
+                    _inTypeInitializer = false;
                     break;
 
                 case ProcDeclarationSyntax proc:
@@ -237,19 +247,6 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// A <c>proc/</c> name declared twice is dm.exe's duplicate-definition error — on one type, on
-    /// an ancestor at any depth, or against a builtin (§8, probes dup1–dup9). Overrides carry no
-    /// marker and never trip this; a var and a proc may legally share a name.
-    /// </summary>
-    /// <remarks>
-    /// dm.exe reports a pair: <i>"duplicate definition"</i> on the later declaration and
-    /// <i>"previous definition"</i> on the first. Binding is per file, so each site reports its own
-    /// half and a same-file pair matches the compiler line for line. The one deliberate miss: when
-    /// the first declaration lives in another file, its <i>"previous definition"</i> line is not
-    /// reported — finding it from here would mean scanning every descendant type on every bind.
-    /// A builtin has no line at all, and dm.exe accordingly reports a single error there.
-    /// </remarks>
-    /// <summary>
     /// The var half of <c>DM0403</c>: a name declared twice on one type, or redeclared over an
     /// ancestor's or a builtin's.
     /// </summary>
@@ -306,6 +303,18 @@ public sealed class Binder
             return;
         }
 
+        // This site is the type's sole declaration. When a DESCENDANT re-declares the name, this
+        // line is the pair's "previous definition" half — dm.exe reports it here whatever file
+        // the descendant sits in, and ONCE, however many descendants duplicate it (both probed).
+        if (sites.Count == 1
+            && sites[0].Span == variable.Span
+            && sites[0].NameSpan == variable.NameSpan
+            && _tree.VarRedeclaredBelow(owner, variable.Name))
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0403", variable.NameSpan, $"{variable.Name}: previous definition"));
+        }
+
         // Redeclaring what an ancestor declares, at any depth. An ancestor that merely overrides is
         // not a declarer, so the walk continues past it to whoever is.
         foreach (TypeSymbol ancestor in _tree.InheritanceChain(type))
@@ -330,6 +339,21 @@ public sealed class Binder
         }
     }
 
+    /// <summary>
+    /// A <c>proc/</c> name declared twice is dm.exe's duplicate-definition error — on one type, on
+    /// an ancestor at any depth, or against a builtin (§8, probes dup1–dup9). Overrides carry no
+    /// marker and never trip this; a var and a proc may legally share a name.
+    /// </summary>
+    /// <remarks>
+    /// dm.exe reports a pair: <i>"duplicate definition"</i> on the later declaration and
+    /// <i>"previous definition"</i> on the first. Binding is per file, so each site reports its
+    /// own half — the descendant's file carries the duplicate line, and the ancestor's own bind
+    /// reports the previous line through <see cref="ObjectTree.ProcRedeclaredBelow"/>, whichever
+    /// file the descendant sits in. That closed the check's one documented miss without the
+    /// per-bind descendant scan it was deferred over: the tree carries the answer as a
+    /// once-per-build index. A builtin has no line at all, and dm.exe accordingly reports a
+    /// single error there.
+    /// </remarks>
     private void CheckDuplicateProc(ProcDeclarationSyntax proc, TypePath owner)
     {
         if (_tree.Find(owner) is not TypeSymbol type)
@@ -376,6 +400,19 @@ public sealed class Binder
             return;
         }
 
+        // This site is the type's sole declaration. When a DESCENDANT re-declares the name, this
+        // line is the pair's "previous definition" half — dm.exe reports it here whatever file
+        // the descendant sits in, and ONCE, however many descendants duplicate it (both probed).
+        // Before the ancestor walk, because a middle link of a three-deep chain is both halves.
+        if (symbol.DeclaringSites.Count == 1
+            && symbol.DeclaringSites[0].Span == proc.Span
+            && symbol.DeclaringSites[0].NameSpan == proc.NameSpan
+            && _tree.ProcRedeclaredBelow(owner, proc.Name))
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0403", proc.NameSpan, $"{proc.Name}: previous definition"));
+        }
+
         // The sole declaration on its own type: a redeclaration of something an ancestor already
         // declares, at any depth, is still a duplicate. An ancestor that merely overrides is not
         // a declarer — the walk continues to whoever is.
@@ -396,17 +433,6 @@ public sealed class Binder
             {
                 _diagnostics.Add(Diagnostic.Error(
                     "DM0403", proc.NameSpan, $"{proc.Name}: duplicate definition"));
-
-                // The pair's other half, when the ancestor's declaration sits in this same file.
-                DeclarationSite first = above.DeclaringSites[0];
-
-                if (_file is not null
-                    && string.Equals(first.File, _file, StringComparison.OrdinalIgnoreCase))
-                {
-                    _diagnostics.Add(Diagnostic.Error(
-                        "DM0403", first.NameSpan, $"{proc.Name}: previous definition"));
-                }
-
                 return;
             }
         }
@@ -503,7 +529,11 @@ public sealed class Binder
 
         foreach (ProcSymbol declared in _tree.Root.Procs)
         {
-            if (declared.Name == "lentext" && !declared.IsBuiltin)
+            // The shadow is a declaration SITE, not a non-builtin symbol: on a seeded tree the
+            // project's declaration MERGES into the builtin's ProcSymbol and IsBuiltin stays
+            // true, so the previous `!IsBuiltin` test could only ever hold on an unseeded unit
+            // harness — found 2026-08-13 the moment the harness seeded builtins like production.
+            if (declared.Name == "lentext" && declared.Sites.Count > 0)
                 return;
         }
 
@@ -719,9 +749,22 @@ public sealed class Binder
                 _labelUses.Add(jumped);
                 break;
 
-            // `set` names are a fixed vocabulary rather than members of anything, and an unlabelled
-            // break names nothing.
-            case SetStatementSyntax:
+            // `set` names are a fixed vocabulary rather than members of anything — ten names,
+            // probed in verbs and in procs alike (SyntaxFacts.SetNames), and a name outside it is
+            // dm.exe's plain "undefined var" on the set line (probes b2_set_unknown,
+            // b4_set_bogus_in, w3012_loop_checks). The VALUE stays unbound: `set src in view(7)`
+            // is prompt configuration, not a read.
+            case SetStatementSyntax setting:
+                if (setting.Name.Length > 0
+                    && System.Array.IndexOf(Syntax.SyntaxFacts.SetNames, setting.Name) < 0)
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "DM0400", setting.Span, $"{setting.Name}: undefined var"));
+                }
+
+                break;
+
+            // An unlabelled break names nothing.
             case GotoStatementSyntax:
             case BreakStatementSyntax:
                 break;
@@ -805,11 +848,23 @@ public sealed class Binder
             // `path {a = 1; b = x}` — the braces are mandatory here and the entries are ordinary
             // expressions, so a local read inside one is a read. Missing from this switch until
             // 2026-08-12, which made every such read invisible to the walk and to the index.
+            // An entry's TARGET names a member of the constructed type, not anything in scope,
+            // so the undefined-identifier check must not see it.
             case ModifiedTypeExpressionSyntax modified:
                 BindExpression(modified.Type, scope, invoked: false);
 
                 foreach (ExpressionSyntax entry in modified.Assignments)
-                    BindExpression(entry, scope, invoked: false);
+                {
+                    if (entry is AssignmentExpressionSyntax { Target: IdentifierExpressionSyntax setMember } set)
+                    {
+                        BindIdentifier(setMember, scope, invoked: false, written: true, checkUndefined: false);
+                        BindExpression(set.Value, scope, invoked: false);
+                    }
+                    else
+                    {
+                        BindExpression(entry, scope, invoked: false);
+                    }
+                }
 
                 break;
 
@@ -820,7 +875,21 @@ public sealed class Binder
                 break;
 
             case NewExpressionSyntax created:
-                BindExpression(created.Type, scope, invoked: false);
+                // `new the_type(usr)` — a type held in a VAR, which the parser reads as one
+                // invocation expression. The name is a VALUE READ and the parens are constructor
+                // arguments; bound as a call it reported dm.exe-clean sites as undefined procs
+                // and hid the read from unused_var (mlaas, madridspy and warklan all ship it).
+                if (created.Type is InvocationExpressionSyntax constructed)
+                {
+                    BindExpression(constructed.Target, scope, invoked: false);
+
+                    foreach (ArgumentSyntax argument in constructed.Arguments)
+                        BindArgument(argument, scope);
+                }
+                else
+                {
+                    BindExpression(created.Type, scope, invoked: false);
+                }
 
                 foreach (ArgumentSyntax argument in created.Arguments)
                     BindArgument(argument, scope);
@@ -871,7 +940,15 @@ public sealed class Binder
 
     private void BindArgument(ArgumentSyntax argument, Scope scope)
     {
-        BindExpression(argument.Name, scope, invoked: false);
+        // A bare-identifier assoc NAME is exempt from the undefined check: `list(k = "a")` stores
+        // the STRING key "k" and never reads a variable (probed 2026-08-13, madridspy's gun
+        // lists), a call's `f(name = 1)` names a parameter, and the parenthesized variable form
+        // cannot be told apart because the AST keeps no parentheses.
+        if (argument.Name is IdentifierExpressionSyntax assocName)
+            BindIdentifier(assocName, scope, invoked: false, written: false, checkUndefined: false);
+        else
+            BindExpression(argument.Name, scope, invoked: false);
+
         BindExpression(argument.Weight, scope, invoked: false);
         BindExpression(argument.Value, scope, invoked: false);
     }
@@ -882,7 +959,14 @@ public sealed class Binder
     /// </summary>
     private void BindMemberAccess(MemberAccessExpressionSyntax member, Scope scope, bool invoked, bool written = false)
     {
-        BindExpression(member.Target, scope, invoked: false);
+        // A bare-identifier RECEIVER is not reported by the identifier check: dm.exe's message
+        // there folds the whole dotted text into one symbol — `mob.name: undefined var`, pinned
+        // by errors/bare_type_receiver — so an identifier-shaped report would be a different
+        // diagnostic than the compiler's, invented and missed at once.
+        if (member.Target is IdentifierExpressionSyntax receiverName)
+            BindIdentifier(receiverName, scope, invoked: false, written: false, checkUndefined: false);
+        else
+            BindExpression(member.Target, scope, invoked: false);
 
         // `:` widens the check to every subtype of the declared type, and on an untyped receiver it
         // asks only whether the name exists as a member of anything in the program. Both are real
@@ -907,6 +991,22 @@ public sealed class Binder
             if (UncertainWants(member.Name))
                 _uncertain!(new Services.UncertainSite(
                     _file ?? string.Empty, member.NameSpan, Services.UncertainReason.UntypedReceiver));
+
+            // A bare-identifier receiver that resolves as NO var anywhere is not an untyped
+            // receiver — it is dm.exe's error, with the whole dotted text as its symbol:
+            // `mob.name: undefined var` (errors/bare_type_receiver pins the form). An untyped
+            // local, member or global resolves as a var and stays silent here, which keeps the
+            // deliberate `.`-on-untyped miss exactly as it was. Reads only — the invoked form's
+            // message is unprobed.
+            if (!invoked
+                && member.Target is IdentifierExpressionSyntax bare
+                && scope.Find(bare.Name) is null
+                && !IsCompilerProvidedName(bare.Name)
+                && !BareNameIsAVar(bare.Name, scope))
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0400", member.NameSpan, $"{bare.Name}.{member.Name}: undefined var"));
+            }
 
             return;
         }
@@ -1051,11 +1151,22 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Sink-only bare-name resolution: the enclosing chain first, then the root's globals — the
-    /// same order definition uses. Reports no diagnostic; the undefined-bare-identifier check is
-    /// separate M11 work with its own zero-invented gate.
+    /// Bare-name resolution, serving two consumers: the reference index (project-declared
+    /// symbols) and the undefined-var check (anything dm.exe can see, builtins included).
     /// </summary>
-    private void BindIdentifier(IdentifierExpressionSyntax identifier, Scope scope, bool invoked, bool written)
+    /// <remarks>
+    /// The check is vars-only, which the mined probes pin: <c>&amp;f</c> and <c>initial(p)</c>
+    /// both draw <i>"undefined var"</i> from dm.exe though <c>f</c> and <c>p</c> are procs in
+    /// scope, so a proc name never satisfies value position. <c>checkUndefined</c> is false in
+    /// the two positions where a bare name is not a value read at all: a member-access RECEIVER,
+    /// where dm.exe folds the whole dotted text into its own message (<c>mob.name: undefined
+    /// var</c> — a separate miss), and an argument's assoc NAME, which is STRING sugar
+    /// (<c>list(k = "a")</c> stores the key <c>"k"</c>; probed 2026-08-13) and indistinguishable
+    /// from the parenthesized variable form because the AST keeps no parentheses.
+    /// </remarks>
+    private void BindIdentifier(
+        IdentifierExpressionSyntax identifier, Scope scope, bool invoked, bool written,
+        bool checkUndefined = true)
     {
         // A local shadows a member whatever its type, so it settles the name before anything else
         // asks about it. Marking the read here — ahead of the sink gate rather than behind it — is
@@ -1064,6 +1175,22 @@ public sealed class Binder
         // a proc's locals as never read. That is the shape attempt three could not account for.
         if (scope.Find(identifier.Name) is { } local)
         {
+            // A CALL is not satisfied by the var — but the NAME can still resolve as a proc:
+            // mlaas's `limittext(message, length)` calls the builtin `length()` with a parameter
+            // of that name in scope, and dm.exe compiles it. Only a name no proc anywhere
+            // satisfies reports. The local stays unread either way: probed, dm.exe warns
+            // unused_var on a local whose only mention is a call.
+            if (invoked)
+            {
+                if (checkUndefined && !BareNameIsAProc(identifier.Name, scope))
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "DM0401", identifier.Span, $"{identifier.Name}: undefined proc"));
+                }
+
+                return;
+            }
+
             if (!written)
                 local.Read = true;
 
@@ -1071,11 +1198,46 @@ public sealed class Binder
             return;
         }
 
-        if (!SinkWants(identifier.Name)
-            || identifier.Name is "src" or "usr" or "world" or "global" or "args")
+        // `usr` does not exist in a type-level or global var initializer — probed in all three
+        // spellings (datum var, global var, bare override) as dm.exe's "usr: undefined var".
+        if (identifier.Name == "usr" && _inTypeInitializer && checkUndefined && !invoked)
         {
+            _diagnostics.Add(Diagnostic.Error("DM0400", identifier.Span, "usr: undefined var"));
             return;
         }
+
+        // Proc-scope vars and the compiler's own vocabulary, which no tree holds. The
+        // pseudo-macros resolve at dm.exe's parser layer and survive our preprocessor as plain
+        // identifiers; `as`/`in`/`to` reach here only through error recovery on code the parser
+        // already reported — dm.exe's message on `var/as = 40` is the parse error, never
+        // "undefined var". `__FILE__`/`__LINE__` used to be absorbed here too and are now
+        // expanded at the use instead — see IsCompilerProvidedName's note.
+        if (IsCompilerProvidedName(identifier.Name))
+            return;
+
+        if (checkUndefined)
+        {
+            // The undefined halves of DM0400/DM0401: a bare name that nothing dm.exe can see
+            // satisfies. Value position is VARS-ONLY and call position is PROCS-ONLY — probed
+            // from both sides: `&f` and `initial(p)` error though the procs exist, and a called
+            // global VAR is "undefined proc" though the var exists.
+            if (!invoked && !BareNameIsAVar(identifier.Name, scope))
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0400", identifier.Span, $"{identifier.Name}: undefined var"));
+                return;
+            }
+
+            if (invoked && !BareNameIsAProc(identifier.Name, scope))
+            {
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0401", identifier.Span, $"{identifier.Name}: undefined proc"));
+                return;
+            }
+        }
+
+        if (!SinkWants(identifier.Name))
+            return;
 
         TypeSymbol? declaring = _tree.Find(scope.EnclosingType) is { } enclosing
             ? DeclaringOwner(enclosing, identifier.Name, invoked)
@@ -1096,6 +1258,29 @@ public sealed class Binder
         ReferenceKind kind = invoked ? ReferenceKind.Call : written ? ReferenceKind.Write : ReferenceKind.Read;
         EmitReference(identifier.Name, identifier.Span, kind, declaring, isProc: invoked);
     }
+
+    /// <summary>Proc-scope names, compiler vocabulary, and recovery-only keywords — never
+    /// reported. <c>__FILE__</c>/<c>__LINE__</c> are deliberately NOT here since 2026-08-13: the
+    /// expander now expands them at the use, so one reaching this walk as an identifier is a
+    /// preprocessor regression that should surface, not be absorbed.</summary>
+    private static bool IsCompilerProvidedName(string name)
+        => name is "src" or "usr" or "world" or "global" or "args" or "caller" or "callee"
+            or "__TYPE__" or "__PROC__" or "__IMPLIED_TYPE__"
+            or "__MAIN__" or "DM_VERSION" or "DM_BUILD"
+            or "as" or "in" or "to";
+
+    /// <summary>Whether any var dm.exe can see satisfies this bare name: the enclosing chain's,
+    /// builtins included, or a root global's.</summary>
+    private bool BareNameIsAVar(string name, Scope scope)
+        => (_tree.Find(scope.EnclosingType) is { } enclosing
+                && _tree.ResolveVar(enclosing, name) is not null)
+            || _tree.Root.FindVar(name) is not null;
+
+    /// <summary>The call-position twin: procs and verbs only.</summary>
+    private bool BareNameIsAProc(string name, Scope scope)
+        => (_tree.Find(scope.EnclosingType) is { } enclosing
+                && _tree.ResolveProc(enclosing, name) is not null)
+            || _tree.Root.FindProc(name) is not null;
 
     /// <summary>
     /// The receiver's <b>written</b> type, or null when nothing says what it is.

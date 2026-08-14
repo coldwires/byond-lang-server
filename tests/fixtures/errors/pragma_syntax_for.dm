@@ -7,11 +7,11 @@
 // so a comma-clause header is "malformed for statement" - which is the error
 // this file records, at the line inside the body.
 //
-// WE DO NOT REPORT IT YET, and that is deliberate rather than unnoticed. We
-// accept a mode-inappropriate header in BOTH directions - the default-grammar
-// C form is "too many args" to dm.exe and silent from us too - so the missing
-// piece is a for-header shape check, not pragma handling. This file is the
-// target for whoever writes it.
+// WE REPORT IT since 2026-08-13, from the same probe matrix that pinned dm.exe:
+// a comma-only header under `C for` is "malformed for statement", a fourth
+// clause is "too many args" in both modes (for_too_many_args beside this file
+// is the default-grammar half), and a chained comma BESIDE semicolons - the C
+// idiom - stays silent, as it does in dm.exe.
 
 /proc/mid_body_pragma()
 	var/r = 0

@@ -239,6 +239,7 @@ P# / cmptext T1,T2,...
 P# / cmptextEx T1,T2,...
 P# / continue
 P# / copytext T,Start=1,End=0
+P / copytext_char T,Start=1,End=0
 P# / cos X
 P# / del
 P# / do
@@ -251,8 +252,12 @@ P# / file2text File
 P# / filter type=Type,parameter=Value,...
 P# / findlasttext Haystack,Needle,Start=0,End=1
 P# / findlasttextEx Haystack,Needle,Start=0,End=1
+P / findlasttextEx_char Haystack,Needle,Start=1,End=0
+P / findlasttext_char Haystack,Needle,Start=1,End=0
 P# / findtext Haystack,Needle,Start=1,End=0
 P# / findtextEx Haystack,Needle,Start=1,End=0
+P / findtextEx_char Haystack,Needle,Start=1,End=0
+P / findtext_char Haystack,Needle,Start=1,End=0
 P# / flick Icon,Object
 P# / flist Path
 P# / floor A
@@ -303,6 +308,7 @@ P# / jointext List,Glue,Start=1,End=0
 P# / json_decode JSON
 P# / json_encode Value
 P# / length E
+P / length_char E
 P# / lentext T
 P# / lerp A,B,factor
 P# / link url
@@ -323,6 +329,7 @@ P# / new
 P# / newlist A,B,C,...
 P# / noise_hash num1,num2,num3...
 P# / nonspantext Haystack,Needles,Start=1
+P / nonspantext_char Haystack,Needles,Start=1
 P# / num2text N,SigFig=6
 P# / obounds Ref,Dist=0
 P# / ohearers Depth=world.view,Center=usr
@@ -342,6 +349,8 @@ P# / refcount Object
 P# / regex pattern,flags
 P# / replacetext Haystack,Needle,Replacement,Start=1,End=0
 P# / replacetextEx Haystack,Needle,Replacement,Start=1,End=0
+P / replacetextEx_char Haystack,Needle,Replacement,Start=1,End=0
+P / replacetext_char Haystack,Needle,Replacement,Start=1,End=0
 P# / return
 P# / rgb R,G,B
 P# / rgb2num color
@@ -359,9 +368,12 @@ P# / sorttext T1,T2,...
 P# / sorttextEx T1,T2,...
 P# / sound file,repeat=0,wait,channel,volume
 P# / spantext Haystack,Needles,Start=1
+P / spantext_char Haystack,Needles,Start=1
 P# / spawn Delay=0
 P# / splicetext Text,Start=1,End=0,Insert=""
+P / splicetext_char Text,Start=1,End=0,Insert
 P# / splittext Text,Delimiter,Start=1,End=0,include_delimiters=0
+P / splittext_char Text,Delimiter,Start=1,End=0,include_delimiters=0
 P# / sqrt A
 P# / startup File,Port=0,Options,...
 P# / stat Name,Value
@@ -375,6 +387,7 @@ P# / switch E
 P# / tan X
 P# / text FormatText,Args
 P# / text2ascii T,pos=1
+P / text2ascii_char T,pos=1
 P# / text2file Text,File
 P# / text2num T
 P# / text2path T

@@ -13,7 +13,7 @@
 #   dmc diagdiff <path>\tgstation.dme -DCBT --baseline <this file>
 #
 # dme	agreed	missed	invented
-hell.dme	4	0	0
+hell.dme	2	0	0
 Klan Wars.dme	15	0	0
 spies.dme	0	0	0
 tgstation.dme	0	0	0

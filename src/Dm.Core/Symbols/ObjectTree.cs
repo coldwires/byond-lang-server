@@ -160,6 +160,93 @@ public sealed class ObjectTree
             yield return Root;
     }
 
+    // The (type, name) pairs whose declaration deserves dm.exe's "previous definition" line
+    // because a DESCENDANT type re-declares the name. Built lazily in one pass over the tree —
+    // the alternative is a subtree scan per bound declaration, which is the cost the check's
+    // cross-file half was deferred over at M11. A TypeSymbol is fresh per tree, so the cache
+    // cannot go stale. The walks mirror the binder's descendant-side checks exactly: the nearest
+    // ancestor carrying the name decides, a builtin there means the descendant reports a builtin
+    // conflict and no previous line exists, and a merely-overriding ancestor is walked past.
+    private HashSet<(TypePath Owner, string Name)>? _procsRedeclaredBelow;
+    private HashSet<(TypePath Owner, string Name)>? _varsRedeclaredBelow;
+
+    /// <summary>Whether a descendant type re-declares this proc with a <c>proc/</c> segment.</summary>
+    internal bool ProcRedeclaredBelow(TypePath owner, string name)
+    {
+        EnsureRedeclarationIndex();
+        return _procsRedeclaredBelow!.Contains((owner, name));
+    }
+
+    /// <summary>Whether a descendant type re-declares this var with a <c>var/</c> segment.</summary>
+    internal bool VarRedeclaredBelow(TypePath owner, string name)
+    {
+        EnsureRedeclarationIndex();
+        return _varsRedeclaredBelow!.Contains((owner, name));
+    }
+
+    private void EnsureRedeclarationIndex()
+    {
+        if (_procsRedeclaredBelow is not null)
+            return;
+
+        HashSet<(TypePath, string)> procs = new();
+        HashSet<(TypePath, string)> vars = new();
+
+        foreach (TypeSymbol type in Types)
+        {
+            foreach (ProcSymbol proc in type.Procs)
+            {
+                if (proc.DeclaringCount == 0 || proc.IsBuiltin)
+                    continue;
+
+                foreach (TypeSymbol ancestor in InheritanceChain(type))
+                {
+                    if (ReferenceEquals(ancestor, type)
+                        || ancestor.FindProc(proc.Name) is not ProcSymbol above)
+                    {
+                        continue;
+                    }
+
+                    if (above.IsBuiltin)
+                        break;
+
+                    if (above.DeclaringCount > 0)
+                    {
+                        procs.Add((ancestor.Path, proc.Name));
+                        break;
+                    }
+                }
+            }
+
+            foreach (VarSymbol variable in type.Vars)
+            {
+                if (type.VarDeclaringSites(variable.Name).Count == 0)
+                    continue;
+
+                foreach (TypeSymbol ancestor in InheritanceChain(type))
+                {
+                    if (ReferenceEquals(ancestor, type)
+                        || ancestor.FindVar(variable.Name) is not { } above)
+                    {
+                        continue;
+                    }
+
+                    if (above.IsBuiltin)
+                        break;
+
+                    if (ancestor.VarDeclaringSites(variable.Name).Count > 0)
+                    {
+                        vars.Add((ancestor.Path, variable.Name));
+                        break;
+                    }
+                }
+            }
+        }
+
+        _varsRedeclaredBelow = vars;
+        _procsRedeclaredBelow = procs;
+    }
+
     /// <summary>Finds a var on a type or anything it inherits from.</summary>
     internal VarSymbol? ResolveVar(TypeSymbol type, string name)
     {

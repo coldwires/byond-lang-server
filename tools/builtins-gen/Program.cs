@@ -349,6 +349,34 @@ internal static class Program
                 added++;
         }
 
+        // The `_char` text procs, 515's character-index twins of the byte-index family — absent
+        // from this reference version entirely. Compiler-verified 2026-08-13 on 516.1686: all
+        // ten compile in one unit and `bogus_char_xyz` is "undefined proc". Surfaced by the
+        // bare-call undefined-proc check inventing 120 on /tg/station — the fifth builtins hole
+        // a new resolution surface has exposed. Signatures mirror the byte-index twins'.
+        (string Name, string Signature)[] charProcs =
+        {
+            ("copytext_char", "T,Start=1,End=0"),
+            ("findtext_char", "Haystack,Needle,Start=1,End=0"),
+            ("findtextEx_char", "Haystack,Needle,Start=1,End=0"),
+            ("findlasttext_char", "Haystack,Needle,Start=1,End=0"),
+            ("findlasttextEx_char", "Haystack,Needle,Start=1,End=0"),
+            ("length_char", "E"),
+            ("nonspantext_char", "Haystack,Needles,Start=1"),
+            ("replacetext_char", "Haystack,Needle,Replacement,Start=1,End=0"),
+            ("replacetextEx_char", "Haystack,Needle,Replacement,Start=1,End=0"),
+            ("spantext_char", "Haystack,Needles,Start=1"),
+            ("splicetext_char", "Text,Start=1,End=0,Insert"),
+            ("splittext_char", "Text,Delimiter,Start=1,End=0,include_delimiters=0"),
+            ("text2ascii_char", "T,pos=1"),
+        };
+
+        foreach ((string name, string signature) in charProcs)
+        {
+            if (Add(entries, new Entry { Kind = 'P', Owner = "/", Name = name, Signature = signature }))
+                added++;
+        }
+
         return added;
     }
 

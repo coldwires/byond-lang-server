@@ -128,7 +128,7 @@ constructs it is checking cannot report their failure.
 
 ## The mined probe corpus
 
-`errors/probes/` is 252 single-message probes mined from the diagnostic lab
+`errors/probes/` is 255 single-message probes mined from the diagnostic lab
 (`byondtest/lab/errors`) by `tools/mine_probes.py`. Each is recompiled during
 mining rather than trusted from the lab's cache, so probes needing assets we do
 not copy, or whose message has moved, drop out without a hand-written blocklist.
@@ -136,12 +136,12 @@ Messages a language server can never emit - map, skin, asset, codegen, internal
 sanity checks - are filtered by message text. 109 probes that compile clean and
 51 duplicate message sets are skipped.
 
-It runs only with `-Probes`, since 252 compiles plus 252 diagdiffs takes a few
+It runs only with `-Probes`, since 255 compiles plus 255 diagdiffs takes a few
 minutes.
 
-**It is a ratchet, not a gate.** We agree on **44 of 252** today; asserting
-"must agree on all" would fail 208 times and teach nothing. `BASELINE.txt`
-records the number and the names, and the run fails only if agreement *drops*.
+**It is a ratchet, not a gate.** `BASELINE.txt` records the current agreement
+count and the names — asserting "must agree on all" would fail a couple of
+hundred times and teach nothing — and the run fails only if agreement *drops*.
 Raise it deliberately with `-Probes -UpdateBaseline`, after reading why it moved.
 
 **`invented` is not the metric here, and that is the subtle part.** These files
@@ -151,8 +151,8 @@ extra diagnostics on a must-fail file are recovery working, not spurious output.
 The zero-invented rule belongs to code that **compiles clean**, which is what
 sections 1-3 cover.
 
-That 44/252 is also the first honest denominator for M11: 208 known compiler
-messages we say nothing about.
+The baseline's count against 255 is also the honest denominator for M11: every
+probe outside it is a known compiler message we say nothing about.
 
 ## Adding to it
 
@@ -177,7 +177,7 @@ and a finding that does not land in it will be re-learned.
   ...
   ok    ok/ok compiles clean
 [2] ok/ runs, every check passing
-  ok    ok/ runtime, 64 checks
+  ok    ok/ runtime, 104 checks
 [3] diagdiff: zero invented
   ok    diagdiff errors/semantic.dme
   ...
