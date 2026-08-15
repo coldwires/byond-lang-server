@@ -65,10 +65,23 @@ internal sealed class VarSymbol
     /// <remarks>
     /// Rendered from the source span rather than from the expression tree, for the same reason a
     /// parameter's default is: a construct we model loosely still shows the author's own text, and
-    /// the text cannot drift from the declaration the way a rendering can. Not evaluated — <c>5 + 1</c>
-    /// stays <c>5 + 1</c> until there is a constant evaluator to fold it.
+    /// the text cannot drift from the declaration the way a rendering can. Still not evaluated —
+    /// <c>5 + 1</c> stays <c>5 + 1</c> here, and <see cref="ConstantValue"/> carries the 6 beside
+    /// it rather than replacing it.
     /// </remarks>
     public string InitialValue { get; init; } = string.Empty;
+
+    /// <summary>
+    /// What the initialiser comes to, when it is a compile-time constant, rendered as DM renders
+    /// it. Empty when it is not one, and empty for a bare literal.
+    /// </summary>
+    /// <remarks>
+    /// Beside <see cref="InitialValue"/> rather than instead of it: the author's text is what they
+    /// wrote and this is what it means, and a reader of <c>= 5 * 60</c> wants both. A bare literal
+    /// folds to nothing on purpose — <c>123456789</c> renders as <c>1.23457e+08</c> in DM's own
+    /// six-significant-digit form, which is true and less useful than the literal already there.
+    /// </remarks>
+    public string ConstantValue { get; init; } = string.Empty;
 
     /// <summary>
     /// Whether a <c>var/</c> introduced this, rather than a bare override.

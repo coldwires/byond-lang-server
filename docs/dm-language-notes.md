@@ -116,6 +116,28 @@ hp=42 label=set
 Legal anywhere a type value is. The braces are **mandatory** here, even though braces are optional
 elsewhere in DM, and `;` separates entries written on one line.
 
+### What a modified-type initializer can see
+
+The values inside the braces are **not** scoped like the expressions they look like. A literal
+works, and a macro works — but a proc local does not, and neither does a member reached through
+one:
+
+| Written, inside a proc holding `var/n = 5` and `var/obj/gun/g` | Result |
+|---|---|
+| `new /obj/pouch{capacity = 5}` | compiles |
+| `new /obj/pouch{capacity = POUCH_MAX}` — a `#define` | compiles |
+| `new /obj/pouch{capacity = n}` | **`n: undefined var`**, plus `unused_var` on `n` |
+| `new /obj/pouch{capacity = g.ammo}` | **`g.ammo: undefined var`**, plus `unused_var` on `g` |
+
+The macro compiles for a reason that has nothing to do with scope: the preprocessor substitutes
+`9` before the parser ever looks. And the `unused_var` sitting beside each error is the compiler
+confirming the local was never read at all, rather than resolved to something unexpected — the
+same rule that makes a member access count as a use of its receiver only when the access compiles.
+
+Probed one case per compilation unit on 516.1687, since `dm.exe` stops at the first error. The
+rejections are `tests/fixtures/errors/modified_type_scope`; the two compiling forms are asserted
+by value in `ok/parsing.dm` rather than merely compiled.
+
 ## 6. A bare `for` iterates world *contents*, not all instances
 
 ```dm
@@ -707,6 +729,32 @@ Untyped is not the same as unchecked. With `var/x` and no type anywhere:
 this name exist as a member of anything in the program?* — and accepts it if so. That is the widest
 form of the check `:` performs, and it is still a check.
 
+### `?:` is wider than `:`, and the two are one character apart
+
+The null-conditional colon does not ask what `:` asks. On a receiver whose type is written down:
+
+| Written | Result |
+|---|---|
+| `M:on_subtype` — the member is on a subtype of M's declared type | compiles |
+| `M:elsewhere` — the member is on an unrelated type | **`M:elsewhere: undefined var`** |
+| `M?:elsewhere` — the same member, the same receiver | **compiles** |
+| `M?:nowhere_xyz` — a name on nothing at all | **`M:nowhere_xyz: undefined var`** |
+
+So `:` searches the declared type, its ancestors and its subtypes, while `?:` asks only whether
+the name is a member of *anything* — the same question an untyped receiver gets. Note the message
+prints a plain `:` either way, so the diagnostic does not tell you which operator you wrote.
+
+Two more rules fall out of the same probes. The search is **kind-sensitive**: `x:only_a_proc` in
+value position is *"undefined var"* even though the proc exists, because a proc name does not
+satisfy a var access. And **subtype means inheritance, not path** — a type declared anywhere with
+`parent_type = /mob/test` is reachable through a `/mob/test` receiver's `:`, which matters because
+re-parenting is ordinary DM: `/mob` itself descends from `/atom/movable` rather than from the root.
+
+One last asymmetry, visible only through `unused_var`: a **failing `:` does not count as a use of
+its receiver** while a **failing `?:` does**. Same receiver, same missing member — `M:nowhere_xyz`
+draws `unused_var: M` beside the error and `M?:nowhere_xyz` does not, which reads as `?:`
+evaluating the receiver for its null test before the member lookup can fail.
+
 This is why the two operators cannot share a completion list even when the receiver is unknown: the
 correct list after `x.` is empty, and after `x:` it is every member name in the program.
 
@@ -1101,6 +1149,14 @@ behaviour.
 `:player: undefined type path` — in a proc local, a typed var initialiser, a type-level var, and
 inside the `/mob` branch itself. An absolute-path control compiled in the same harness. Treat it as
 removed.
+
+**Documents a search order backwards.** The reference says a library include searches the system
+library directory first and the per-user one second. It is the other way round. Both are searched —
+a library that exists only beside the compiler binary resolves through `#include <name>` and
+compiles clean — but when the same library name exists in both, the **user** folder wins, shown by
+shadowing a real user library with an install-side copy: the shadow's marker stayed *"undefined
+type path"* while the real library's own var resolved, with and without the shadow in place.
+Verified on 516.1687.
 
 **Two errors in the operator documentation.**
 - The precedence table lists `-=` twice in the assignment row.

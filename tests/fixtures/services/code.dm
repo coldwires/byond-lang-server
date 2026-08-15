@@ -98,7 +98,7 @@
 // its keep: written a day earlier, it recorded their absence, and it failed the
 // moment ReceiverType learned to walk a chain. Completion, definition and hover
 // all answered at 56 the whole time - the index was the one surface that did not.
-//? references 81:22 => types.dm:20 write, code.dm:56 write, code.dm:59 read, code.dm:81 read, code.dm:85 read, code.dm:88 read, code.dm:89 read
+//? references 81:22 => types.dm:20 write, code.dm:56 write, code.dm:59 read, code.dm:81 read, code.dm:85 read, code.dm:88 read, code.dm:89 read, code.dm:136 read, code.dm:138 read
 
 // A typed GLOBAL is a receiver - dm.exe compiles `armory.reload()` through
 // the root var. The bare-type-name fallback had been masking that this
@@ -115,3 +115,36 @@ var/mob/test/mob = new
 	//? complete 114:14 => weapon, hp, heal, !ammo
 	//? definition 114:14 => types.dm:9
 	return w
+
+// The two index positions the mark above did not reach - lines 136 and 138
+// below, both now in its expected set. A `for` header's STEP clause and a
+// `pick` WEIGHT were among the six expression holes closed on 2026-08-12, and
+// both were bound without anything asserting on them: the mark covered the
+// range bound, the label body, the assoc key and the bracket dimension, so
+// four of six were measured and two were taken on trust.
+//
+// Probed before writing: each compiles clean on 516.1687 with NO unused_var on
+// `g`, which is the compiler agreeing that both positions genuinely read it.
+//
+// NOTE FOR WHOEVER EDITS THIS FILE: marks carry ABSOLUTE line:col, so anything
+// inserted ABOVE marked code moves it and fails every mark below. This block
+// sits after the last marked line for that reason - the first draft put it at
+// line 101 and shifted four marks by three lines.
+/proc/more_index_positions()
+	var/obj/gun/g = new
+	var/list/out = list()
+	for(var/i = 1 to 9 step g.ammo)
+		out += i
+	out += pick(g.ammo;"a", 1;"b")
+	return out.len
+
+// The SIXTH hole, ModifiedTypeExpressionSyntax, cannot be marked here and the
+// reason is the language rather than the harness: a modified-type initializer's
+// values cannot see proc locals at all. Probed one case per compilation unit on
+// 516.1687 - `new /obj/gun{ammo = 5}` and `new /obj/gun{ammo = AMMO_MAX}`
+// compile, while a local `n` and a member `g.ammo` are each "undefined var"
+// AND draw unused_var on the local, the compiler saying it never read it. A
+// macro works because the preprocessor substitutes before the parser looks.
+// So no code that dm.exe accepts can put a project symbol in that position,
+// and the binder binding it is coverage this suite structurally cannot assert.
+// errors/modified_type_scope pins the rejection instead.

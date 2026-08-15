@@ -133,7 +133,7 @@ public sealed class CompletionItem
     public CompletionItem(
         string name, CompletionKind kind, string detail, bool isBuiltin, string documentation = "",
         bool inferred = false, int rank = 0, string declaredType = "", string initialValue = "",
-        TypeSource typeSource = TypeSource.None)
+        TypeSource typeSource = TypeSource.None, string constantValue = "")
     {
         Name = name;
         Kind = kind;
@@ -144,6 +144,7 @@ public sealed class CompletionItem
         Rank = rank;
         DeclaredType = declaredType;
         InitialValue = initialValue;
+        ConstantValue = constantValue;
         TypeSource = typeSource;
     }
 
@@ -213,11 +214,31 @@ public sealed class CompletionItem
     /// The initialiser as written — <c>6</c> for <c>var/fatigue = 6</c> — or empty when there is none.
     /// </summary>
     /// <remarks>
-    /// Source text, not an evaluated value: <c>5 + 1</c> stays <c>5 + 1</c>. A constant evaluator
-    /// would fold it, and until there is one this is the author's text rather than a claim about
-    /// what it comes to. For a <c>const</c> it is most of what a reader wants.
+    /// Source text, not an evaluated value: <c>5 + 1</c> stays <c>5 + 1</c> here, and
+    /// <see cref="ConstantValue"/> carries the 6 BESIDE it rather than replacing it. For a
+    /// <c>const</c> it is most of what a reader wants.
     /// </remarks>
     public string InitialValue { get; }
+
+    /// <summary>
+    /// What the initialiser comes to, when it folds - <c>300</c> for <c>= 5 * 60</c>. Empty
+    /// otherwise, and empty for a bare literal.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Rendered as DM renders a number: SIX significant digits, scientific beyond them, 32-bit
+    /// floats throughout. So <c>1 / 3</c> is <c>0.333333</c> and not seventeen digits of C#, and
+    /// <c>7.5 % 2</c> is <c>1</c> because DM's <c>%</c> truncates both operands first. Every value
+    /// was read off 516.1687 and the same expressions run in <c>ok/constants.dm</c>.
+    /// </para>
+    /// <para>
+    /// A bare literal deliberately folds to nothing: <c>123456789</c> would render as
+    /// <c>1.23457e+08</c>, which is what the compiler holds and less use than the digits the
+    /// author already typed. Folding earns its place only where it says something the source
+    /// does not.
+    /// </para>
+    /// </remarks>
+    public string ConstantValue { get; }
 
     /// <summary>
     /// Which route produced the RECEIVER's type, when this item came from a member list.

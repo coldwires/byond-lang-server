@@ -667,6 +667,38 @@ public class CompletionServiceTests
     }
 
     /// <summary>
+    /// A bracket local is a <c>/list</c>, and the completion says so without marking it inferred.
+    /// </summary>
+    /// <remarks>
+    /// <c>var/players[0]</c> then <c>players.</c> answered NOTHING until 2026-08-15 — the binder
+    /// and the tree learned the rule on 08-14 and completion's own local walk was a third copy
+    /// that did not. Nothing could have caught it: diagdiff never sees completion. It is not
+    /// inference either — probed against 516.1687, <c>players.Add(1)</c> and <c>players.len</c>
+    /// compile while <c>players.nonexistent_xyz</c> errors, so dm.exe checks members through it
+    /// and the items must not be badged as a guess.
+    /// </remarks>
+    [Fact]
+    public void A_bracket_local_completes_as_a_list_and_is_not_inferred()
+    {
+        foreach (string declaration in new[] { "var/players[0]", "var/players[]", "var/players[3]" })
+        {
+            CompletionResult result = Complete(
+                $"/proc/f()\n\t{declaration}\n\tplayers.|\n", withBuiltins: true);
+
+            Assert.Contains("Add", Names(result));
+            Assert.Contains("len", Names(result));
+            Assert.All(result.Items, i => Assert.False(i.Inferred));
+        }
+
+        // A written type still wins over the brackets: this is /mob's members, not /list's.
+        CompletionResult written = Complete(
+            "/proc/f()\n\tvar/mob/players[0]\n\tplayers.|\n", withBuiltins: true);
+
+        Assert.Contains("Move", Names(written));
+        Assert.DoesNotContain("Add", Names(written));
+    }
+
+    /// <summary>
     /// The lazy-resolve pair: the brief list carries no documentation, and resolving one item
     /// returns exactly that item's. The list is otherwise identical, so a client can switch to
     /// lazy resolve without losing anything else.

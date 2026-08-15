@@ -80,14 +80,15 @@ public sealed class DmeEdit
 /// <c>AI.dm</c>, which is only correct lowercased first.</description></item>
 /// </list>
 /// </remarks>
-internal static class DmeIncludeBlock
+public static class DmeIncludeBlock
 {
     private const string BeginMarker = "// BEGIN_INCLUDE";
     private const string EndMarker = "// END_INCLUDE";
 
     /// <summary>One entry inside the block.</summary>
-    internal readonly struct Entry
+    public readonly struct Entry
     {
+        /// <summary>An entry: the path as written, and the line that carries it.</summary>
         public Entry(string path, TextSpan lineSpan)
         {
             Path = path;

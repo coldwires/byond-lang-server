@@ -1,0 +1,47 @@
+// What DM itself computes and prints for the expressions our constant evaluator
+// folds. Every value here was read off 516.1687 rather than reasoned about, and
+// the point of running them is that DM's arithmetic is NOT C#'s: 32-bit floats,
+// six significant digits, a truncating `%`, and a left-associative `**`.
+//
+// The evaluator asserts these same strings in ConstantEvaluatorTests. That is a
+// unit test over our own code and is structurally blind to the compiler
+// changing; this file is the half that is not, so a BYOND release that moves any
+// of them fails a build rather than silently making every folded value wrong.
+
+/datum/constants
+
+	// Six significant digits, and scientific beyond them - so a large integer does
+	// NOT round-trip through DM's own rendering. This is why a bare literal is
+	// never folded: replacing what the author typed with 1.23457e+08 is true and
+	// useless.
+	proc/rendering()
+		return "[1 / 3]:[123456789]:[2 ** 0.5]"
+
+	// 32-bit floats, hidden by that same six-digit rendering. A double would print
+	// 0.30000000000000004 here, and DM prints 0.3.
+	proc/float_width()
+		return "[0.1 + 0.2]:[1 / 10]"
+
+	// `%` truncates BOTH operands to integers before dividing; `%%` is the
+	// fractional one. Swapping them is a wrong number with nothing to say so.
+	proc/modulo()
+		return "[7.5 % 2]:[7.5 %% 2]"
+
+	// `**` is LEFT-associative - 64, not 512 - and unary minus binds tighter than
+	// it, so -2 ** 2 is 4 rather than -4. Both are the opposite of the C instinct.
+	proc/exponent()
+		return "[2 ** 3 ** 2]:[-2 ** 2]"
+
+	// The rest of what folds: integer arithmetic, shifts, comparisons yielding
+	// 1 or 0, and string concatenation.
+	proc/ordinary()
+		return "[5 + 1]:[5 * 60]:[1 << 10]:[5 > 3]:["a" + "b"]"
+
+/proc/run_constants()
+	var/datum/constants/C = new
+
+	CHECK("six significant digits, scientific beyond", C.rendering(), "0.333333:1.23457e+08:1.41421")
+	CHECK("numbers are 32-bit floats", C.float_width(), "0.3:0.1")
+	CHECK("% truncates its operands, %% does not", C.modulo(), "1:1.5")
+	CHECK("** binds left, unary minus binds tighter", C.exponent(), "64:4")
+	CHECK("ordinary folding", C.ordinary(), "6:300:1024:1:ab")

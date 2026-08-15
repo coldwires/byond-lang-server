@@ -30,6 +30,10 @@ internal static class HoverJson
         // a project symbol has a declaration to open, which beats any link.
         json.Append(",\"reference\":");
         SymbolJson.AppendString(json, hover.Reference);
+        // What the initialiser comes to, when it folds. Beside the signature rather than inside
+        // it: the signature's contract is the declaration AS WRITTEN.
+        json.Append(",\"constant\":");
+        SymbolJson.AppendString(json, hover.ConstantValue);
         json.Append(",\"documentation\":");
         SymbolJson.AppendString(json, hover.Documentation);
         json.Append(",\"startLine\":").Append(start.Line);

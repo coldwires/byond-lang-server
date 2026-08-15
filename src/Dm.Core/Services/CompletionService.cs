@@ -431,7 +431,8 @@ public static class CompletionService
                 variable.IsBuiltin ? Rank.Builtin : rank,
                 variable.DeclaredType?.Text ?? string.Empty,
                 variable.InitialValue,
-                typeSource));
+                typeSource,
+                variable.ConstantValue));
         }
 
         foreach (ProcSymbol proc in type.Procs)
@@ -852,10 +853,15 @@ public static class CompletionService
             if (!string.Equals(local.Name, name, StringComparison.Ordinal))
                 continue;
 
-            if (local.DeclaredType is { } type)
+            // A written type, or the /list that brackets give a declaration — both are types
+            // dm.exe checks members through, so both report Written and neither is inference.
+            // The bracket half was missing until 2026-08-15: `var/players[0]` then `players.`
+            // answered nothing on every surface sharing this walk, while the binder and the tree
+            // had known the rule since 2026-08-14. `DeclaredType.Of` is now the one copy.
+            if (DeclaredType.Of(local.DeclaredType, local.HasBrackets) is { } type)
             {
                 source = TypeSource.Written;
-                return TypePath.FromSegments(type.Segments);
+                return type;
             }
 
             // Everything past this line is inference the compiler does not do: dm.exe checks only

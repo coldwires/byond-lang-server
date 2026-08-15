@@ -29,8 +29,6 @@ namespace Dm.Core.Symbols;
 /// </remarks>
 internal static class TypeTreeBuilder
 {
-    private static readonly TypePath ListPath = TypePath.Parse("/list");
-
     /// <summary>
     /// Which type, if any, a group header hands its child vars — see the group-header case in
     /// <see cref="Walk"/>. A header carrying a `var` segment starts fresh from the segments after
@@ -226,14 +224,11 @@ internal static class TypeTreeBuilder
         }
 
         // Brackets TYPE a var: `var/players[0]` is a /list to dm.exe — mlaas calls
-        // `players.Add()` on exactly that — so a bracketed declaration with no written type
-        // carries ListPath rather than nothing. A written type wins over brackets, and both win
-        // over a group header's inherited type: `var/list/mob/L[]` stays what it says.
-        TypePath? declaredType = variable.DeclaredType is { } written && written.Segments.Count > 0
-            ? TypePath.FromSegments(written.Segments)
-            : variable.HasBrackets
-                ? ListPath
-                : inheritedType;
+        // `players.Add()` on exactly that — and a written type wins over brackets, which is
+        // `DeclaredType.Of`. Both win over a group header's inherited type, which is why that
+        // is the fallback here: `var/list/mob/L[]` stays what it says.
+        TypePath? declaredType =
+            DeclaredType.Of(variable.DeclaredType, variable.HasBrackets) ?? inheritedType;
 
         // The initialiser AS WRITTEN, rendered from source rather than from the tree, for the same
         // reason a parameter's default is: an expression we model loosely still shows the author's
@@ -252,6 +247,10 @@ internal static class TypeTreeBuilder
                 new DeclarationSite(file, variable.Span, variable.NameSpan))
             {
                 InitialValue = initialValue,
+                // Folded here rather than on demand: the initialiser's expression is in hand
+                // exactly once, at the declaration. Measured free — an A/B on mlaas with the
+                // fold disabled reads the same 13-14 ms per keystroke either way.
+                ConstantValue = Binding.ConstantEvaluator.Fold(variable.Initializer) ?? string.Empty,
                 IsDeclaration = variable.InVarContext,
             },
             parentType,

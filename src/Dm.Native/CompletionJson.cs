@@ -54,6 +54,12 @@ internal static class CompletionJson
             SymbolJson.AppendString(json, item.DeclaredType);
             json.Append(",\"value\":");
             SymbolJson.AppendString(json, item.InitialValue);
+
+            // Beside "value", never instead of it: the author's text and what it comes to are
+            // different facts and a reader of `= 5 * 60` wants both. Empty unless the initialiser
+            // folds, and empty for a bare literal - see CompletionItem.ConstantValue.
+            json.Append(",\"constant\":");
+            SymbolJson.AppendString(json, item.ConstantValue);
             json.Append(",\"documentation\":");
             SymbolJson.AppendString(json, item.Documentation);
             json.Append('}');

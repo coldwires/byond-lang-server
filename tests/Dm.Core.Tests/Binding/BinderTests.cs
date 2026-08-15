@@ -127,6 +127,92 @@ public class BinderTests
     /// seeded, because a bare tree resolves `list()` and `nameof()` to nothing and the
     /// undefined-proc check then measures the harness rather than the code.
     /// </summary>
+    // -- the `:` family -------------------------------------------------------
+    // Probed against 516.1687, one case per compilation unit, and the whole point is that the
+    // three questions differ. errors/colon_access holds the compiler's own answers.
+
+    private const string ColonTypes =
+        "/mob/test\n\tvar/hp = 1\n"
+        + "/mob/test/special\n\tvar/on_subtype = 5\n"
+        + "/datum/other\n\tvar/elsewhere = 9\n\tproc/only_a_proc()\n\t\treturn 1\n";
+
+    /// <summary>
+    /// `:` widens to the SUBTYPES of the declared type, which is the whole difference from `.`.
+    /// Fails by inventing on code dm.exe compiles.
+    /// </summary>
+    [Fact]
+    public void Colon_reaches_a_member_declared_only_on_a_subtype()
+    {
+        Assert.Empty(Bind(ColonTypes + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M:on_subtype\n"));
+    }
+
+    /// <summary>
+    /// And it stops there: an unrelated type's member is not reachable, in dm.exe's own dotted
+    /// form. Fails by missing a diagnostic the compiler reports.
+    /// </summary>
+    [Fact]
+    public void Colon_does_not_reach_an_unrelated_types_member()
+    {
+        Assert.Contains(
+            Bind(ColonTypes + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M:elsewhere\n"),
+            d => d.Id == "DM0400" && d.Message == "M:elsewhere: undefined var");
+    }
+
+    /// <summary>
+    /// The pair that separates the two operators: same receiver, same member, one character
+    /// apart. `?:` asks the widest question there is, so it accepts what `:` refuses.
+    /// </summary>
+    [Fact]
+    public void Null_colon_accepts_what_colon_refuses()
+    {
+        Assert.Empty(Bind(ColonTypes + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M?:elsewhere\n"));
+
+        Assert.Contains(
+            Bind(ColonTypes + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M?:nowhere_xyz\n"),
+            d => d.Id == "DM0400" && d.Message == "M:nowhere_xyz: undefined var");
+    }
+
+    /// <summary>
+    /// An untyped receiver asks whether the name is a member of ANYTHING, builtins included —
+    /// and the search is kind-sensitive, so a proc does not answer a var access.
+    /// </summary>
+    [Theory]
+    [InlineData("x:hp", false)]
+    [InlineData("x:icon_state", false)]
+    [InlineData("x:nowhere_xyz", true)]
+    [InlineData("x:only_a_proc", true)]
+    public void An_untyped_receiver_asks_the_widest_question(string access, bool reports)
+    {
+        IReadOnlyList<Diagnostic> diagnostics =
+            Bind(ColonTypes + $"/proc/f()\n\tvar/x\n\tx = 1\n\treturn {access}\n");
+
+        Assert.Equal(reports, diagnostics.Any(d => d.Id == "DM0400"));
+    }
+
+    /// <summary>
+    /// The invoked twin reports "undefined proc", and a subtype's proc is still reachable.
+    /// </summary>
+    [Fact]
+    public void An_invoked_colon_access_reports_the_proc_form()
+    {
+        Assert.Contains(
+            Bind(ColonTypes + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M:only_a_proc()\n"),
+            d => d.Id == "DM0401" && d.Message == "M:only_a_proc: undefined proc");
+    }
+
+    /// <summary>
+    /// A subtype by <c>parent_type</c> counts, however its path reads — walking path children
+    /// would miss every re-parented type, and re-parenting is ordinary DM.
+    /// </summary>
+    [Fact]
+    public void A_subtype_by_parent_type_is_reachable_through_colon()
+    {
+        Assert.Empty(Bind(
+            "/mob/test\n\tvar/hp = 1\n"
+            + "/datum/adopted\n\tparent_type = /mob/test\n\tvar/only_there = 7\n"
+            + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M:only_there\n"));
+    }
+
     private static IReadOnlyList<Diagnostic> Bind(params string[] files)
     {
         List<(string, ParseResult)> parsed = new();
@@ -559,13 +645,20 @@ public class BinderTests
             "/obj/item\n\tvar/hp = 1\n/obj/item/sword\n\n/proc/f()\n\tvar/obj/item/sword/S = new\n\treturn S.hp\n"));
 
     /// <summary>
-    /// `:` widens the check to the subtype tree and, on an untyped receiver, asks only whether the
-    /// name exists anywhere at all. Both are real checks, and neither is implemented — so it stays
-    /// silent rather than reporting the `.` answer, which would be wrong in the invented direction.
+    /// `:` widens the check to the subtype tree rather than switching checking off, so a name on
+    /// nothing at all is still an error — and the local is still unused, since a failing `:` is
+    /// not a read. This test asserted SILENCE until 2026-08-15, when the check shipped; it failed
+    /// the moment it did, which is what an obsolete assertion should do.
     /// </summary>
     [Fact]
-    public void A_colon_access_is_not_checked_yet()
-        => Assert.Empty(Bind("/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I:nowhere\n"));
+    public void A_colon_access_to_nothing_at_all_reports()
+    {
+        IReadOnlyList<Diagnostic> diagnostics =
+            Bind("/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I:nowhere\n");
+
+        Assert.Contains(diagnostics, d => d.Id == "DM0400" && d.Message == "I:nowhere: undefined var");
+        Assert.Contains(diagnostics, d => d.Id == "unused_var");
+    }
 
     /// <summary>
     /// dm.exe rejects every member of an untyped local, including the right one, because it does

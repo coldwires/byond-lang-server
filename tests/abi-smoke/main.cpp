@@ -31,7 +31,7 @@ static int g_checks = 0;
 // needs no edit here; losing them fails loudly. That direction is the one that was invisible —
 // a RID where a block silently stopped running still printed "all checks passed", and CI ran
 // ctest with --output-on-failure, so on a pass nothing printed the number at all.
-static const int kMinimumChecks = 260;
+static const int kMinimumChecks = 263;
 
 static void check(bool condition, const char *what)
 {
@@ -379,7 +379,8 @@ static void test_completion(const fs::path &dir)
         // base_var is UNTYPED with an initialiser and friend is TYPED with none, so the two
         // together pin "type" and "value" independently - a check on one var alone could pass
         // with the pair swapped.
-        out << "/mob/test\n\tvar/base_var = 1\n\tvar/mob/test/friend\n";
+        // cooldown FOLDS - `5 * 60` is 300 - while base_var is already a literal and must not.
+        out << "/mob/test\n\tvar/base_var = 1\n\tvar/cooldown = 5 * 60\n\tvar/mob/test/friend\n";
         out << "/mob/test/special\n\tvar/subtype_var = 2\n";
         out << "/datum/unrelated\n\tvar/elsewhere = 3\n";
         out << "/proc/f()\n\tvar/mob/test/t = new\n\tt.\n";
@@ -394,7 +395,7 @@ static void test_completion(const fs::path &dir)
 
     char *json = nullptr;
     // Line 8 (0-based) is `\tt.`; character 3 is just past the dot.
-    check(dm_complete_at(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 10, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: call succeeds");
     check(json != nullptr, "complete: json returned");
 
@@ -421,13 +422,23 @@ static void test_completion(const fs::path &dir)
         check(doc.find("\"name\":\"friend\",\"detail\":\"/mob/test\",\"kind\":1,\"builtin\":false,"
                        "\"inferred\":false,\"typeFrom\":\"written\",\"type\":\"/mob/test\",\"value\":\"\"") != std::string::npos,
               "complete: a typed var carries its type and an empty value");
+
+        // What the initialiser COMES TO, beside what it says rather than instead of it. `5 * 60`
+        // folds to 300; a bare literal folds to nothing, because `123456789` would come back as
+        // 1.23457e+08 - true to the compiler, and less use than the digits the author typed.
+        check(doc.find("\"name\":\"cooldown\",\"detail\":\"/mob/test\",\"kind\":1,\"builtin\":false,"
+                       "\"inferred\":false,\"typeFrom\":\"written\",\"type\":\"\",\"value\":\"5 * 60\","
+                       "\"constant\":\"300\"") != std::string::npos,
+              "complete: a folding initialiser carries its constant");
+        check(doc.find("\"value\":\"1\",\"constant\":\"\"") != std::string::npos,
+              "complete: a bare literal folds to nothing");
         dm_free(json);
     }
 
     // Line 11 (0-based) is `\tu.` — an UNTYPED local initialised with `new /mob/test`. The list
     // rides on inference dm.exe does not do, and every item says so.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 12, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 13, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: inferred-receiver call succeeds");
 
     if (json)
@@ -449,7 +460,7 @@ static void test_completion(const fs::path &dir)
     // though the flag is correct - dm.exe still refuses members through an input filter. This is
     // the case typeFrom exists to let a client word properly.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 16, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 17, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: as-clause receiver call succeeds");
 
     if (json)
@@ -465,7 +476,7 @@ static void test_completion(const fs::path &dir)
     // Line 13 (0-based) is `\t.` — a bare leading dot is DM's return-value variable, not member
     // access, and the distinct context is what lets a client show nothing without guessing.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 14, 2, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 15, 2, DM_ENCODING_UTF16, &json) == DM_OK,
           "complete: bare-dot call succeeds");
 
     if (json)
@@ -481,7 +492,7 @@ static void test_completion(const fs::path &dir)
     // own var comes before the builtins it inherits; and a cap is off until asked for,
     // because a client filtering locally over a truncated list misses what is being typed.
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 10, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "limit: uncapped call succeeds");
 
     if (json)
@@ -501,7 +512,7 @@ static void test_completion(const fs::path &dir)
     check(dm_set_completion_limit(ws, 3) == DM_OK, "limit: accepted");
 
     json = nullptr;
-    check(dm_complete_at(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_at(ws, "complete.dm", 10, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "limit: capped call succeeds");
 
     if (json)
@@ -518,7 +529,7 @@ static void test_completion(const fs::path &dir)
     // resolve fills in the one the user highlighted. A bare identifier on a real project
     // offers tens of thousands of items and the user reads one.
     json = nullptr;
-    check(dm_complete_brief(ws, "complete.dm", 9, 3, DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_brief(ws, "complete.dm", 10, 3, DM_ENCODING_UTF16, &json) == DM_OK,
           "resolve: brief list succeeds");
 
     if (json)
@@ -532,7 +543,7 @@ static void test_completion(const fs::path &dir)
     }
 
     json = nullptr;
-    check(dm_complete_resolve(ws, "complete.dm", 9, 3, "base_var", DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_resolve(ws, "complete.dm", 10, 3, "base_var", DM_ENCODING_UTF16, &json) == DM_OK,
           "resolve: resolving one item succeeds");
 
     if (json)
@@ -544,18 +555,18 @@ static void test_completion(const fs::path &dir)
 
     // A name the position does not offer is an empty answer, not an error.
     json = nullptr;
-    check(dm_complete_resolve(ws, "complete.dm", 9, 3, "no_such_item", DM_ENCODING_UTF16, &json) == DM_OK,
+    check(dm_complete_resolve(ws, "complete.dm", 10, 3, "no_such_item", DM_ENCODING_UTF16, &json) == DM_OK,
           "resolve: an unknown item still succeeds");
     dm_free(json);
 
     char *rejected = reinterpret_cast<char *>(0x1);
-    check(dm_complete_resolve(ws, "complete.dm", 9, 3, nullptr, DM_ENCODING_UTF16, &rejected)
+    check(dm_complete_resolve(ws, "complete.dm", 10, 3, nullptr, DM_ENCODING_UTF16, &rejected)
               == DM_ERR_INVALID_ARG,
           "resolve: a null name is rejected");
     check(rejected == nullptr, "resolve: out-param cleared on failure");
 
     rejected = reinterpret_cast<char *>(0x1);
-    check(dm_complete_at(ws, "complete.dm", 9, 3, 99, &rejected) == DM_ERR_INVALID_ARG,
+    check(dm_complete_at(ws, "complete.dm", 10, 3, 99, &rejected) == DM_ERR_INVALID_ARG,
           "complete: unknown encoding rejected");
     check(rejected == nullptr, "complete: out-param cleared on failure");
 
@@ -1095,6 +1106,8 @@ static void test_references(const fs::path &dir)
         check(doc.find("\": /mob/guy\"") != std::string::npos,
               "hints: the inferred type is rendered");
         check(doc.find("\"kind\":\"type\"") != std::string::npos, "hints: kind is a word");
+        check(doc.find("\"kind\":\"unknown\"") == std::string::npos,
+              "hints: no kind crosses as \"unknown\"");
         check(doc.find("\"amount:\"") != std::string::npos,
               "hints: a parameter name is rendered at the call site");
         check(doc.find("\"kind\":\"parameter\"") != std::string::npos,

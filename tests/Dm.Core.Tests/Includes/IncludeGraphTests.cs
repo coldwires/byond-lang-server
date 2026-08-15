@@ -387,6 +387,56 @@ public class IncludeGraphTests
         Assert.Empty(graph.Diagnostics);
     }
 
+    /// <summary>
+    /// A library that lives only in the INSTALL's own folder still resolves. dm.exe searches
+    /// there — probed on 516.1687 by putting a library beside the binary and compiling a project
+    /// that includes it — and we searched only the user folder until 2026-08-15, so a project
+    /// leaning on an installed library resolved for the compiler and not for us.
+    /// </summary>
+    [Fact]
+    public void A_library_in_the_system_root_resolves()
+    {
+        using TempDirectory temp = new();
+        using TempDirectory user = new();
+        using TempDirectory system = new();
+
+        temp.Write("game.dme", "#include <vendor/thing>\n");
+        system.Write("vendor/thing/thing.dm", "/mob/from_the_install\n");
+
+        IncludeGraph graph = IncludeGraph.Build(
+            Path.Combine(temp.Path, "game.dme"),
+            new IncludeOptions { LibraryRoot = user.Path, SystemLibraryRoot = system.Path });
+
+        Assert.Equal(2, graph.Files.Count);
+        Assert.True(graph.Files[1].FromLibrary);
+        Assert.Empty(graph.Diagnostics);
+    }
+
+    /// <summary>
+    /// And when both carry the name, the USER folder wins — which is the opposite of the order
+    /// the DM Reference documents. Probed by shadowing a real user library with one of the same
+    /// name beside the binary: the shadow's marker stayed undefined while the real library's own
+    /// var resolved. Fails by resolving the install's copy, which is a silently different program.
+    /// </summary>
+    [Fact]
+    public void The_user_root_wins_over_the_system_root()
+    {
+        using TempDirectory temp = new();
+        using TempDirectory user = new();
+        using TempDirectory system = new();
+
+        temp.Write("game.dme", "#include <vendor/thing>\n");
+        user.Write("vendor/thing/thing.dm", "/mob/from_the_user_folder\n");
+        system.Write("vendor/thing/thing.dm", "/mob/from_the_install\n");
+
+        IncludeGraph graph = IncludeGraph.Build(
+            Path.Combine(temp.Path, "game.dme"),
+            new IncludeOptions { LibraryRoot = user.Path, SystemLibraryRoot = system.Path });
+
+        Assert.Equal(2, graph.Files.Count);
+        Assert.StartsWith(user.Path, graph.Files[1].Path);
+    }
+
     [Fact]
     public void Files_reached_through_a_library_are_marked_as_library_too()
     {

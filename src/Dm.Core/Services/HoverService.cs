@@ -14,13 +14,14 @@ public sealed class HoverResult
 {
     /// <summary>A hover; a part with nothing to show is passed as an empty string.</summary>
     public HoverResult(string detail, string signature, string documentation, TextSpan span,
-        string reference = "")
+        string reference = "", string constantValue = "")
     {
         Detail = detail;
         Signature = signature;
         Reference = reference;
         Documentation = documentation;
         Span = span;
+        ConstantValue = constantValue;
     }
 
     /// <summary>The resolved path, such as <c>/mob/proc/attack</c>.</summary>
@@ -28,6 +29,18 @@ public sealed class HoverResult
 
     /// <summary>The declaration as written, one line, trimmed.</summary>
     public string Signature { get; }
+
+    /// <summary>
+    /// What the initialiser comes to, when it folds - <c>300</c> for <c>var/cooldown = 5 * 60</c>.
+    /// Empty otherwise, and empty for a bare literal.
+    /// </summary>
+    /// <remarks>
+    /// Beside <see cref="Signature"/> rather than inside it, because the signature's contract is
+    /// the declaration AS WRITTEN and this is a claim about what it means. Rendered as DM renders
+    /// a number - six significant digits, 32-bit floats - so it agrees with what the running game
+    /// would print.
+    /// </remarks>
+    public string ConstantValue { get; }
 
     /// <summary>Preceding <c>///</c> lines with their markers stripped, or empty.</summary>
     public string Documentation { get; }
@@ -107,7 +120,9 @@ public static class HoverService
             documentation = DocComments.Above(source, declarationLine);
         }
 
-        return new HoverResult(target.Detail, signature, documentation, TokenSpanAt(document, offset));
+        return new HoverResult(
+            target.Detail, signature, documentation, TokenSpanAt(document, offset),
+            constantValue: ConstantFor(tree, target.Detail));
     }
 
     /// <summary>The span of the token under the cursor, for the client to highlight.</summary>
@@ -116,6 +131,33 @@ public static class HoverService
     /// answer is about — a private copy of the boundary logic here carried the same off-by-one
     /// the definition side had.
     /// </remarks>
+    /// <summary>
+    /// The folded initialiser of the var a hover resolved to, or empty.
+    /// </summary>
+    /// <remarks>
+    /// Keyed off the resolved path the hover is already reporting rather than threaded down from
+    /// the resolution, so nothing about definition's shape has to change for hover to say one
+    /// more true thing. A proc's detail carries <c>()</c> and never matches a var, which is the
+    /// guard against answering about the wrong symbol.
+    /// </remarks>
+    private static string ConstantFor(ObjectTree tree, string detail)
+    {
+        if (detail.Length == 0 || detail.EndsWith(')'))
+            return string.Empty;
+
+        int cut = detail.LastIndexOf('/');
+
+        if (cut < 0)
+            return string.Empty;
+
+        string owner = cut == 0 ? "/" : detail[..cut];
+        string name = detail[(cut + 1)..];
+
+        return tree.Find(owner) is { } type && type.FindVar(name) is { } variable
+            ? variable.ConstantValue
+            : string.Empty;
+    }
+
     private static TextSpan TokenSpanAt(Document document, int offset)
     {
         int index = DefinitionService.IndexAt(document.Lex.Tokens, offset);

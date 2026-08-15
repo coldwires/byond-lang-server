@@ -212,6 +212,8 @@ Spec-only clients ignore these. They are additive and will not break a strict pa
 | `completion` items | `inferred` | The receiver's type was worked out rather than written, which per `INTEGRATION.txt` §4 is exactly what `dm.exe` refuses. Badge, rank down, or drop |
 | | `typeFrom` | Which route produced the type: `initializer`, `assignment`, `as`, `none`. Sent only alongside `inferred`, so `written` never appears on this surface. `bareTypeName` left at ABI 0.26 with the fallback that produced it |
 | | `type`, `value` | The item's own declared type and its initialiser as written |
+| | `constant` | What the initialiser comes to, when it folds — `300` for `= 5 * 60`. Absent when it does not fold, and absent for a bare literal. Rendered as DM renders a number: six significant digits, 32-bit floats |
+| `hover` | a `= \`300\`` line | The same folded value, as markdown rather than a field, so it needs no client code |
 | `documentSymbol` | `owner` | The resolved path of whatever contains the symbol |
 
 There is **no field for a completion context** on this surface. The ABI reports one — `Identifier`,
