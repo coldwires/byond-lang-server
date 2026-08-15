@@ -63,6 +63,14 @@ internal static class SyntaxFacts
         "popup_menu", "background", "waitfor", "src",
     };
 
+    /// <summary>
+    /// The var modifier words — a header or path segment that modifies rather than types. Both
+    /// parsers hold their own sets for their own contexts; this one serves the tree builder,
+    /// which must skip them when reading a group header's segments as the children's TYPE.
+    /// </summary>
+    internal static bool IsVarModifier(string word)
+        => word is "const" or "final" or "global" or "static" or "tmp";
+
     internal static bool IsPathSegmentKeyword(TokenKind kind) => kind
         is TokenKind.KeywordThrow
         or TokenKind.KeywordSet

@@ -1,0 +1,10 @@
+# dm.exe strips whitespace when echoing the symbol, so "returnx.hp" is line
+# 16's "return x.hp"; the rows below are the substrings that matter.
+16 error x.hp: undefined var
+15 warning x: variable defined but not used
+20 error y.f: undefined proc
+19 warning y: variable defined but not used
+23 error a.hp: undefined var
+23 error m.hp: undefined var
+28 error thing.hp: undefined var
+32 error gv.hp: undefined var

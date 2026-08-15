@@ -576,8 +576,10 @@ internal sealed class DeclarationParser
         List<VarDeclarationSyntax> siblings = new();
 
         // The bracket declaration forms: `var/L[]` is a list, `var/M[10]` presizes it, and
-        // `var/grid[10][5]` nests. The brackets belong to the declaration, not to an expression.
-        SkipDeclarationBrackets();
+        // `var/grid[10][5]` nests. The brackets belong to the declaration, not to an expression —
+        // and they TYPE the var: mlaas's `var/players[0]` calls `players.Add()` throughout, which
+        // only compiles because dm.exe reads the brackets as /list.
+        bool hasBrackets = SkipDeclarationBrackets();
 
         if (Current == TokenKind.Assign)
         {
@@ -608,7 +610,7 @@ internal sealed class DeclarationParser
 
             int siblingStart = _position;
             PathSyntax siblingPath = ParsePath();
-            SkipDeclarationBrackets();
+            bool siblingBrackets = SkipDeclarationBrackets();
 
             bool siblingInitializer = false;
             ExpressionSyntax? siblingValue = null;
@@ -626,7 +628,8 @@ internal sealed class DeclarationParser
                 siblingValue,
                 Array.Empty<VarDeclarationSyntax>(),
                 SpanFrom(siblingStart),
-                inVarContext));
+                inVarContext,
+                siblingBrackets));
         }
 
         // Neither applies when a `;` handed the rest of the line to a new declaration: consuming to
@@ -641,7 +644,8 @@ internal sealed class DeclarationParser
         }
 
         return new VarDeclarationSyntax(
-            path, modifiers, declaredType, hasInitializer, initializer, siblings, SpanFrom(start), inVarContext);
+            path, modifiers, declaredType, hasInitializer, initializer, siblings, SpanFrom(start),
+            inVarContext, hasBrackets);
     }
 
     // -- paths -------------------------------------------------------------
@@ -854,9 +858,12 @@ internal sealed class DeclarationParser
 
     // -- helpers -----------------------------------------------------------
 
-    /// <summary>Consumes the <c>[]</c> / <c>[10]</c> suffixes of a bracket list declaration.</summary>
-    private void SkipDeclarationBrackets()
+    /// <summary>Consumes the <c>[]</c> / <c>[10]</c> suffixes of a bracket list declaration,
+    /// answering whether any were there — the fact that types the var <c>/list</c>.</summary>
+    private bool SkipDeclarationBrackets()
     {
+        bool any = Current == TokenKind.OpenBracket;
+
         while (Current == TokenKind.OpenBracket)
         {
             int depth = 0;
@@ -872,6 +879,8 @@ internal sealed class DeclarationParser
             }
             while (depth > 0 && !AtEnd);
         }
+
+        return any;
     }
 
     /// <summary>Parses the expression after an <c>=</c>, then resynchronises to the element's end.</summary>

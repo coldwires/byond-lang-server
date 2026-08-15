@@ -403,6 +403,21 @@
 	proc/file_macro_names_this_file()
 		return findtext("[__FILE__]", "parsing.dm") ? 1 : 0
 
+	// Brackets TYPE a var - `var/bl[0]` is a /list - and a `var/list` block
+	// header types its children too. Both were untyped in our tree until the
+	// reject-everything `.` check met three corpora leaning on them: mlaas's
+	// `players[0].Add()`, madridspy's `var/list` market block, warklan's ban
+	// lists.
+	var/bracket_list[0]
+	var/list
+		header_list
+	proc/typing_rules()
+		bracket_list.Add("a")
+		header_list = list("b", "c")
+		var/local_bracket[0]
+		local_bracket.Add("d")
+		return bracket_list.len + header_list.len + local_bracket.len
+
 /proc/run_parsing()
 	var/datum/parsing/P = new
 
@@ -466,3 +481,4 @@
 	CHECK("new through a var", P.new_through_a_var(), 1)
 	CHECK("__LINE__ advances per line", P.line_macro_delta(), 1)
 	CHECK("__FILE__ names this file", P.file_macro_names_this_file(), 1)
+	CHECK("brackets and var/list headers type vars", P.typing_rules(), 4)

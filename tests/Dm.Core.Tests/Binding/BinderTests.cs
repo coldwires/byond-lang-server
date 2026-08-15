@@ -96,17 +96,20 @@ public class BinderTests
     }
 
     /// <summary>
-    /// An untyped LOCAL shadows a typed member of the same name, so the check must stop at the
-    /// local — falling through would check against a type the receiver never had, and invent.
+    /// An untyped LOCAL shadows a typed member of the same name, so the resolution must stop at
+    /// the local — falling through would check against a type the receiver never had. The local
+    /// being untyped, the access now reports dm.exe's own rejection rather than the member's
+    /// answer: the shadow decides WHICH error, not whether.
     /// </summary>
     [Fact]
     public void An_untyped_local_shadowing_a_member_stops_the_check()
     {
-        Assert.DoesNotContain(
-            Bind(
-                "/mob\n\tvar/hp = 1\n"
-                + "/obj/pill\n\tvar/mob/owner\n\tproc/show(x)\n\t\tvar/owner = x\n\t\treturn owner.anything_at_all\n"),
-            d => d.Id is "DM0400" or "DM0401");
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob\n\tvar/hp = 1\n"
+            + "/obj/pill\n\tvar/mob/owner\n\tproc/show(x)\n\t\tvar/owner = x\n\t\treturn owner.anything_at_all\n");
+
+        Assert.Contains(found, d => d.Message == "owner.anything_at_all: undefined var");
+        Assert.DoesNotContain(found, d => d.Message.Contains("undefined var on"));
     }
 
     /// <summary>A typed root GLOBAL as a receiver is checked through its written type.</summary>
@@ -420,7 +423,11 @@ public class BinderTests
             Bind("/mob\n\tvar/hp = 1\n\n/proc/t()\n\treturn mob.hp\n"),
             d => d.Message == "mob.hp: undefined var");
 
-        Assert.Empty(Bind("/obj/item\n\tvar/hp = 1\n\n/proc/t()\n\tvar/x = new /obj/item\n\treturn x.hp\n"));
+        // The untyped-local control moved: dm.exe rejects that too, with the same dotted form
+        // — see An_untyped_receiver_rejects_every_member.
+        Assert.Contains(
+            Bind("/obj/item\n\tvar/hp = 1\n\n/proc/t()\n\tvar/x = new /obj/item\n\treturn x.hp\n"),
+            d => d.Message == "x.hp: undefined var");
     }
 
     [Fact]
@@ -471,10 +478,13 @@ public class BinderTests
     [Fact]
     public void A_member_no_type_declares_is_an_undefined_var()
     {
+        // The unused_var rides along on purpose: dm.exe counts a member access as a use of its
+        // receiver only when the access COMPILES, so the failing read leaves I unused — the
+        // errors/semantic goldens pair every such error with the warning.
         IReadOnlyList<Diagnostic> found = Bind(
             "/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I.nowhere_at_all\n");
 
-        Assert.Equal(new[] { "DM0400" }, Ids(found));
+        Assert.Equal(new[] { "DM0400", "unused_var" }, Ids(found).OrderBy(i => i));
     }
 
     [Fact]
@@ -483,7 +493,7 @@ public class BinderTests
         IReadOnlyList<Diagnostic> found = Bind(
             "/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I.nowhere_at_all()\n");
 
-        Assert.Equal(new[] { "DM0401" }, Ids(found));
+        Assert.Equal(new[] { "DM0401", "unused_var" }, Ids(found).OrderBy(i => i));
     }
 
     /// <summary>
@@ -534,7 +544,7 @@ public class BinderTests
             "/obj/item\n\tvar/hp = 1\n/obj/item/sword\n\tvar/sharpness = 5\n"
             + "\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I.sharpness\n");
 
-        Assert.Equal(new[] { "DM0400" }, Ids(found));
+        Assert.Equal(new[] { "DM0400", "unused_var" }, Ids(found).OrderBy(i => i));
     }
 
     // -- what it must not ---------------------------------------------------
@@ -558,13 +568,77 @@ public class BinderTests
         => Assert.Empty(Bind("/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I:nowhere\n"));
 
     /// <summary>
-    /// dm.exe rejects every member of an untyped local, including the right one, because it does no
-    /// local inference. That is a real diagnostic we do not yet raise — reporting it needs certainty
-    /// that we saw the declaration, and a missed declaration form would invent errors on live code.
+    /// dm.exe rejects every member of an untyped local, including the right one, because it does
+    /// no local inference — and it STILL counts the local unused, since the erroring access is
+    /// not a read (both probed 2026-08-14). This was the deliberate miss until the declaration
+    /// forms were certain; the certainty guard that remains is builtins with no recorded type.
     /// </summary>
     [Fact]
-    public void An_untyped_receiver_is_not_checked_yet()
-        => Assert.Empty(Bind("/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/x = new /obj/item\n\treturn x.hp\n"));
+    public void An_untyped_receiver_rejects_every_member()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/item\n\tvar/hp = 1\n\n/proc/f()\n\tvar/x = new /obj/item\n\treturn x.hp\n");
+
+        Assert.Contains(found, d => d.Id == "DM0400" && d.Message == "x.hp: undefined var");
+        Assert.Contains(found, d => d.Id == "unused_var");
+    }
+
+    /// <summary>The invoked twin, and untyped members and globals reject the same way (probed).</summary>
+    [Fact]
+    public void The_untyped_rejection_covers_calls_members_and_globals()
+    {
+        Assert.Contains(
+            Bind("/proc/f(a)\n\treturn a.g()\n"),
+            d => d.Id == "DM0401" && d.Message == "a.g: undefined proc");
+
+        Assert.Contains(
+            Bind("var/gv\n/proc/f()\n\treturn gv.hp\n"),
+            d => d.Id == "DM0400" && d.Message == "gv.hp: undefined var");
+
+        Assert.Contains(
+            Bind("/mob/test\n\tvar/thing\n\tproc/p()\n\t\treturn thing.hp\n"),
+            d => d.Id == "DM0400" && d.Message == "thing.hp: undefined var");
+    }
+
+    /// <summary>
+    /// A builtin var with no recorded type is OUR table's gap — five are deliberately untyped
+    /// because no probe discriminates them — so it must stay silent, not report.
+    /// </summary>
+    [Fact]
+    public void An_untyped_builtin_var_stays_silent()
+        => Assert.DoesNotContain(
+            Bind("/mob/test\n\tproc/p()\n\t\treturn appearance.icon\n"),
+            d => d.Id is "DM0400" or "DM0401");
+
+    /// <summary>
+    /// An untyped OVERRIDE on a subtype must not hide the typed declaration above it — the
+    /// declared type is the chain's first non-null, not the first symbol's. tgstation's bots
+    /// override `ai_controller` per type while /atom declares it `/datum/ai_controller`, and the
+    /// override-shadow read invented 319 there on the check's first run.
+    /// </summary>
+    [Fact]
+    public void An_untyped_override_does_not_hide_the_declared_type()
+        => Assert.Empty(Bind(
+            "/datum/brain\n\tvar/mode = 1\n"
+            + "/mob/base\n\tvar/datum/brain/mind_thing\n"
+            + "/mob/base/bot\n\tmind_thing = null\n\tproc/p()\n\t\treturn mind_thing.mode\n"));
+
+    /// <summary>
+    /// Brackets and a `var/list` block header TYPE vars — mlaas's `players[0].Add()`, madridspy's
+    /// market block, warklan's ban lists all compile through them — so the member check runs
+    /// against /list rather than rejecting everything.
+    /// </summary>
+    [Fact]
+    public void Bracket_and_header_vars_are_lists()
+    {
+        Assert.Empty(Bind(
+            "/mob/test\n\tvar/bl[0]\n\tvar/list\n\t\thl\n\tproc/p()\n\t\tvar/lb[0]\n"
+            + "\t\tlb.Add(1)\n\t\treturn bl.len + hl.len\n"));
+
+        Assert.Contains(
+            Bind("/proc/t()\n\tvar/lb[0]\n\tlb.Add(1)\n\treturn lb.bogus_xyz\n"),
+            d => d.Id == "DM0400" && d.Message.Contains("bogus_xyz"));
+    }
 
     /// <summary>
     /// A call result has no knowable type, so dm.exe silently degrades `.` to `:` and stops
@@ -620,7 +694,7 @@ public class BinderTests
             "/obj/item\n\tvar/hp = 1\n/datum/elsewhere\n\tvar/borrowed = 0\n"
             + "\n/proc/f()\n\tvar/obj/item/I = new\n\treturn I.borrowed\n");
 
-        Assert.Equal(new[] { "DM0400" }, Ids(found));
+        Assert.Equal(new[] { "DM0400", "unused_var" }, Ids(found).OrderBy(i => i));
     }
 
     /// <summary>
