@@ -173,6 +173,8 @@ ABI are listed below rather than the whole shape.
 | `dm/subtypesOf` | `path`, `limit` | everything beneath a path, flat, with `truncated` |
 | `dm/members` | `path`, `inherited` | a type's vars and procs, inheritance resolved |
 | `dm/ancestorsOf` | `path` | the inheritance chain, nearest first, self excluded |
+| `dm/overriddenProc` | `path`, `name` | what that type's definition of the proc overrides: `{ overrides, owner, builtin }`. `overrides: false` is an answer — a fresh declaration overrides nothing, which is what `no_parent` reports on. The builtin case is the type's own, so `/mob/Login()` answers `/mob` with `builtin: true` and there is nothing to open |
+| `dm/dmeEntries` | — | every file DreamMaker's include block lists, in file order. The BLOCK, not the include graph: a file included from another `.dm` never appears, and an entry inside an `#if` is skipped |
 | `dm/references` | `path`, `limit` | every use of a symbol, with `kind` and `inside` |
 | `dm/fileInProject` | `textDocument` | `{ file, inProject, environmentFile }` |
 | `dm/iconStates` | `uri` | every state in a `.dmi` |

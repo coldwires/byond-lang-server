@@ -47,7 +47,8 @@ internal static class QueryJson
         int Limit,
         bool Inherited,
         bool IncludeBuiltins,
-        PositionEncoding Encoding);
+        PositionEncoding Encoding,
+        string Name);
 
     public static string? Answer(Workspace workspace, string requestJson, out QueryError error)
     {
@@ -100,6 +101,38 @@ internal static class QueryJson
                 }
 
                 json.Append("]}");
+                return json.ToString();
+            }
+
+            case "overriddenProc":
+            {
+                // The inverse of the `references` query's `override` kind: not what overrides
+                // this, but what THIS overrides. A caller drawing a "go to overridden" affordance
+                // needs the answer before it can decide whether to draw one at all.
+                if (request.Name.Length == 0 || tree.Find(request.Path) is not { } subject)
+                    break;
+
+                StringBuilder json = new();
+                json.Append("{\"query\":\"overriddenProc\",\"path\":");
+                SymbolJson.AppendString(json, subject.Path.Text);
+                json.Append(",\"name\":");
+                SymbolJson.AppendString(json, request.Name);
+
+                // A fresh declaration overrides nothing, and that is an ANSWER rather than an
+                // error - it is what dm.exe's own no_parent warning reports on. So the call
+                // succeeds with "overrides": false and no owner.
+                if (tree.FindOverriddenProc(subject.Path, request.Name) is { } found)
+                {
+                    json.Append(",\"overrides\":true,\"owner\":");
+                    SymbolJson.AppendString(json, found.Owner.Text);
+                    json.Append(",\"builtin\":").Append(found.IsBuiltin ? "true" : "false");
+                }
+                else
+                {
+                    json.Append(",\"overrides\":false,\"owner\":\"\",\"builtin\":false");
+                }
+
+                json.Append('}');
                 return json.ToString();
             }
 
@@ -236,6 +269,7 @@ internal static class QueryJson
 
         string query = string.Empty;
         string path = "/";
+        string memberName = string.Empty;
         int depth = TreeQueryService.DefaultDepth;
         int limit = TreeQueryService.DefaultSubtypeLimit;
         bool inherited = true;
@@ -267,6 +301,13 @@ internal static class QueryJson
 
                     case "path":
                         path = reader.GetString() ?? "/";
+                        break;
+
+                    // The member `overriddenProc` asks about. Named rather than folded into
+                    // "path" because a proc's canonical spelling there is `/mob/Login()`, and a
+                    // caller holding a type and a name should not have to assemble one.
+                    case "name":
+                        memberName = reader.GetString() ?? string.Empty;
                         break;
 
                     case "depth":
@@ -316,7 +357,8 @@ internal static class QueryJson
         if (depth < 0)
             depth = 0;
 
-        request = new Request(query, path, depth, limit, inherited, includeBuiltins, encoding);
+        request = new Request(
+            query, path, depth, limit, inherited, includeBuiltins, encoding, memberName);
         return true;
     }
 

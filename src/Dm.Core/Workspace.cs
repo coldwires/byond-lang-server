@@ -362,6 +362,35 @@ public sealed class Workspace : IDisposable
         return System.IO.Path.GetRelativePath(RootDirectory, full).Replace('/', '\\');
     }
 
+    /// <summary>
+    /// Every file DreamMaker's own <c>// BEGIN_INCLUDE</c> block lists, in file order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The block, not the include graph: these are the entries DreamMaker maintains and the
+    /// checkbox toggles, which is a different question from what the project actually compiles.
+    /// A file can be included from another <c>.dm</c> and never appear here, and an entry inside
+    /// an <c>#if</c> is skipped rather than guessed at.
+    /// </para>
+    /// <para>
+    /// Empty when there is no <c>.dme</c>, no block, or nothing parseable in it — the same
+    /// no-answer the tickmark calls give, since a caller wanting to draw a file list has nothing
+    /// to draw either way.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> DmeEntries()
+    {
+        if (EnvironmentText() is not { } dme)
+            return System.Array.Empty<string>();
+
+        List<string> paths = new();
+
+        foreach (DmeIncludeBlock.Entry entry in DmeIncludeBlock.Entries(dme))
+            paths.Add(entry.Path);
+
+        return paths;
+    }
+
     /// <summary>Whether DreamMaker's include block lists this file.</summary>
     public bool IsFileTicked(string path)
         => EnvironmentText() is { } dme && DmeIncludeBlock.IsTicked(dme, RelativeToRoot(path));

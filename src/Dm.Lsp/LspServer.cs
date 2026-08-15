@@ -268,6 +268,14 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteAncestorsOf(json, params_, cancel));
                     break;
 
+                case "dm/overriddenProc":
+                    RespondCancellable(id, (json, cancel) => WriteOverriddenProc(json, params_, cancel));
+                    break;
+
+                case "dm/dmeEntries":
+                    RespondCancellable(id, (json, cancel) => WriteDmeEntries(json, params_, cancel));
+                    break;
+
                 case "dm/objectTree":
                     RespondCancellable(id, (json, cancel) => WriteObjectTree(json, params_, cancel));
                     break;
@@ -2047,6 +2055,69 @@ internal sealed class LspServer
             WriteRange(json, target_.Text, reference.Span);
             json.WriteEndObject();
         }
+
+        json.WriteEndArray();
+        json.WriteEndObject();
+    }
+
+    /// <summary>
+    /// What a type's definition of a proc overrides — the inverse of `implementation`.
+    /// </summary>
+    /// <remarks>
+    /// Overriding nothing is an ANSWER, not an error: it is the case dm.exe's own `no_parent`
+    /// warning reports on, so the response says `overrides: false` rather than failing. A path the
+    /// tree does not hold is still -32803, as everywhere else here.
+    /// </remarks>
+    private void WriteOverriddenProc(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = StringParam(params_, "path", "/");
+        string name = StringParam(params_, "name", string.Empty);
+        ObjectTree tree = TreeAnnouncingBuild(ws, cancel);
+
+        if (tree.Find(path) is not { } type)
+            throw new NoSuchPathException();
+
+        json.WriteStartObject();
+        json.WriteString("query", "overriddenProc");
+        json.WriteString("path", type.Path.Text);
+        json.WriteString("name", name);
+
+        if (name.Length > 0 && tree.FindOverriddenProc(type.Path, name) is { } found)
+        {
+            json.WriteBoolean("overrides", true);
+            json.WriteString("owner", found.Owner.Text);
+            json.WriteBoolean("builtin", found.IsBuiltin);
+        }
+        else
+        {
+            json.WriteBoolean("overrides", false);
+            json.WriteString("owner", string.Empty);
+            json.WriteBoolean("builtin", false);
+        }
+
+        json.WriteEndObject();
+    }
+
+    /// <summary>Every file DreamMaker's own include block lists, in file order.</summary>
+    private void WriteDmeEntries(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        json.WriteStartObject();
+        json.WriteStartArray("entries");
+
+        foreach (string entry in ws.DmeEntries())
+            json.WriteStringValue(entry);
 
         json.WriteEndArray();
         json.WriteEndObject();

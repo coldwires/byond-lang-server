@@ -5,7 +5,7 @@
  LIVE DOCUMENT. Updated as features land. If something here is wrong, it is a
  bug in the doc - say so.
 
- ABI version at last update: 0.30  (39 exports, cdecl, six RIDs)
+ ABI version at last update: 0.31  (40 exports, cdecl, six RIDs)
  Last updated: 2026-08-15
 ================================================================================
 
@@ -172,8 +172,8 @@ WHAT YOU GET TODAY
     dm_core.dll          ship next to your executable
     dm_core.lib          link against this (Windows only, it is an import lib)
 
-  There is a working CMake project at tests/abi-smoke, current with ABI 0.30 and
-  passing 263 checks on x64 AND x86. It covers version negotiation, string
+  There is a working CMake project at tests/abi-smoke, current with ABI 0.31 and
+  passing 269 checks on x64 AND x86. It covers version negotiation, string
   ownership, handle lifetime including use-after-close, classification in both
   encodings, document symbols, completion, injected defines, go-to-definition,
   hover, signature help, diagnostics, the reference index, invalidation, the
@@ -1067,6 +1067,25 @@ WHAT YOU GET TODAY
       The full contract, including the double-listing case, is in
       dm_core.h.
 
+  dm_dme_entries(ws, &json)                                   NEW in 0.31
+      Every file the include block LISTS, in file order, as UTF-8 JSON.
+      YOU FREE IT with dm_free.
+
+        { "entries": ["code\\mob.dm", "code\\obj.dm"] }
+
+      Spelled as the block spells them - relative to the project root, with
+      backslashes - which is the same spelling the tickmark calls take, so
+      an entry from here feeds dm_dme_untick directly.
+
+      ** THE BLOCK, NOT THE INCLUDE GRAPH **
+      This is what DreamMaker's checkbox maintains. A file #included from
+      another .dm compiles and never appears here, and an entry inside an
+      #if is skipped rather than guessed at. If the question is "what does
+      the build reach", that is the graph, not this.
+
+      An empty list is an answer - no .dme, no block, nothing parseable -
+      rather than an error.
+
   dm_classification_count(spans)     -> N, or -1 if the handle is invalid
   dm_classification_data(spans)      -> pointer to 3*N int32s, or NULL
   dm_classification_free(spans)      -> release it
@@ -1093,6 +1112,21 @@ WHAT YOU GET TODAY
         {"query":"ancestorsOf","path":"/mob"}                    NEW in 0.14
             the whole inheritance chain, nearest first, self excluded, in
             one call instead of one objectTree round trip per level
+        {"query":"overriddenProc","path":"/mob","name":"Login"}  NEW in 0.31
+            WHAT THIS OVERRIDES - the inverse of the references query's
+            "override" kind, which answers what overrides this. Comes back
+            as { "overrides": true, "owner": "/mob", "builtin": true }.
+
+            "overrides": false is an ANSWER: a fresh declaration overrides
+            nothing, which is what dm.exe's own no_parent warning reports
+            on. Draw your "go to overridden" affordance from the flag
+            rather than from whether the call succeeded.
+
+            The builtin case is the type's OWN - a project writing
+            /mob/Login() overrides /mob's builtin, not an ancestor's - and
+            there is nothing to open there, since nothing declares a
+            builtin. That is why the flag is separate from the path.
+
         {"query":"references","path":"/mob/hp","limit":1000}     NEW in 0.14
             THE REFERENCE INDEX: every use of a symbol. The path is the
             detail string a dm_definition_at hit gives you (take the LAST
@@ -1358,8 +1392,16 @@ WHAT YOU GET TODAY
   the macro state reaching it actually changed, which after one keystroke is
   one file:
 
-    100 files    (a real game)        131 ms  ->   10 ms
-    7,161 files  (/tg/station)         13.7 s  ->  909 ms
+    100 files    (a real game)        131 ms  ->   13 ms
+    7,161 files  (/tg/station)         13.7 s  -> 1340 ms
+
+  Those "after" figures were re-measured on 2026-08-15 and are 30% worse than
+  the 10 ms and 909 ms this guide quoted before, which is worth stating plainly
+  rather than quietly correcting. Re-running the SAME commit that produced the
+  original numbers reads 11-12 ms and ~1,040 ms on the machine measuring today,
+  so roughly half the difference is the machine and the rest is eleven days of
+  the analyzer learning more about DM. Nothing regressed on any one day; the
+  cost grew with what we check.
 
   Both figures are one keystroke, warm, Release, and both were verified
   against a build of the same text with every cache off - 335,519

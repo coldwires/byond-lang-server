@@ -14,6 +14,10 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 31: added dm_dme_entries, and dm_query_json gains the "overriddenProc" query. Both close
+    ///     capability-matrix gaps the in-process surface had opened: reading DreamMaker's include
+    ///     block entry by entry, and asking what a type's definition of a proc OVERRIDES - the
+    ///     inverse of the references query's "override" kind.
     /// 30: dm_complete_at items and dm_hover_at both carry "constant" - what an initialiser
     ///     COMES TO when it folds, beside the source text rather than replacing it. Empty when
     ///     the initialiser is not constant, and empty for a bare literal.
@@ -66,7 +70,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 30;
+    public const int Minor = 31;
 
     /// <summary>Both numbers in one int: <c>(major &lt;&lt; 16) | minor</c>.</summary>
     public static int Packed => (Major << 16) | Minor;
