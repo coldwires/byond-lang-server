@@ -47,6 +47,11 @@ ObjectTree tree = ws.GetObjectTree();                     // built on demand, ca
 - **`.dme` tickmarks** `IsFileTicked`, `TickFile`, `UntickFile` — an edit (`DmeEdit`) comes back
   rather than the file being written, because the `.dme` is usually open and dirty in the editor
   that asked.
+  **`DmeIncludeBlock` is the same three answers over a `SourceText` you hold yourself** —
+  `Entries`, `Tick`, `Untick`, `IsTicked` — for the case the `Workspace` forms cannot serve: an
+  editor owning a buffer the workspace has never been given. Public since 2026-08-15. It is pure
+  text in, edit out, so it needs no project and no tree; `Entries` is the one answer the other two
+  shells do not expose (see the capability matrix).
 - **Rename** `RenameAt` — provable edits plus the uncertain sites, orchestrated here because the
   parses, macros and per-file lex all live here.
 

@@ -983,11 +983,34 @@ public sealed class Binder
                 local.Read = true;
         }
 
-        // `:` widens the check to every subtype of the declared type, and on an untyped receiver it
-        // asks only whether the name exists as a member of anything in the program. Both are real
-        // checks and both are worth making — but a wrong subtype walk invents errors on working
-        // code, so it waits until the `.` case is proven at zero invented.
-        if (member.Kind != MemberAccessKind.Dot)
+        // The `:` family. Untyped is NOT unchecked here, and the three questions differ - all
+        // probed against 516.1687, one case per compilation unit:
+        //
+        //   `:`  on a WRITTEN type   the declared type, its ancestors AND ITS SUBTYPES.
+        //                            `M:on_subtype` compiles where `M.on_subtype` does not;
+        //                            `M:elsewhere`, on an unrelated type, is "undefined var".
+        //   `?:` on anything         the WIDEST check: does the name exist as a member of
+        //                            ANYTHING. `M?:elsewhere` compiles where `M:elsewhere`
+        //                            errors, which is the pair that separates the two, and
+        //                            `M?:nowhere_xyz` still errors, so it is not unchecked.
+        //   either, UNTYPED receiver the same widest check - `x:hp` compiles, `x:icon_state`
+        //                            compiles (builtins count), `x:nowhere_xyz` does not.
+        //
+        // Kind-sensitive throughout: `x:only_a_proc` read as a VAR is "undefined var" though the
+        // proc exists, so the two name sets are asked separately.
+        if (member.Kind is MemberAccessKind.Colon or MemberAccessKind.NullColon)
+        {
+            if (UncertainWants(member.Name))
+                _uncertain!(new Services.UncertainSite(
+                    _file ?? string.Empty, member.NameSpan, Services.UncertainReason.ColonAccess));
+
+            BindColonAccess(member, scope, invoked, MarkReceiverRead);
+            return;
+        }
+
+        // `::` and anything else in the family stays unchecked: a different operator with a
+        // different question, and nothing has probed it.
+        if (member.Kind is not (MemberAccessKind.Dot or MemberAccessKind.NullDot))
         {
             MarkReceiverRead();
 
@@ -1104,6 +1127,80 @@ public sealed class Binder
                 "DM0400",
                 member.NameSpan,
                 $"undefined var on {type.Path}: {member.Name}"));
+    }
+
+    /// <summary>
+    /// The <c>:</c> and <c>?:</c> check: wider than <c>.</c>, and still a check.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reports in dm.exe's own form — the receiver as written, a plain <c>:</c> even when the
+    /// source said <c>?:</c> (the compiler prints `M:nowhere_xyz` for `M?:nowhere_xyz`), and
+    /// "undefined var" or "undefined proc" by whether the access is invoked.
+    /// </para>
+    /// <para>
+    /// The certainty guard is the one the untyped-`.` check needed: only a receiver we can see
+    /// the declaration of is reported. A builtin var with no recorded type is OUR table's gap —
+    /// five are deliberately untyped because no probe discriminates them — and reporting through
+    /// one would invent on working code.
+    /// </para>
+    /// </remarks>
+    private void BindColonAccess(
+        MemberAccessExpressionSyntax member, Scope scope, bool invoked, Action markReceiverRead)
+    {
+        bool wide = member.Kind == MemberAccessKind.NullColon;
+
+        // Whether a FAILING access still counts as a use of its receiver splits by operator, and
+        // only a probe could have said so. Same receiver, same name, one character apart:
+        //
+        //   M:nowhere_xyz    error AND unused_var on M   - the failing `:` is not a use
+        //   M?:nowhere_xyz   error, NO unused_var        - the failing `?:` is
+        //
+        // which reads as `?:` evaluating the receiver for its null test before the member lookup
+        // can fail. Whatever the mechanism, dm.exe's pairing is the contract, and getting it
+        // backwards costs a missed diagnostic on every failing site rather than a wrong one.
+        if (wide)
+            markReceiverRead();
+
+        if (member.Target is not IdentifierExpressionSyntax bare || IsCompilerProvidedName(bare.Name))
+        {
+            markReceiverRead();
+            return;
+        }
+        TypeSymbol? receiver = null;
+
+        if (!wide && ReceiverType(member.Target, scope) is { } path)
+            receiver = _tree.Find(path);
+
+        if (receiver is null)
+        {
+            // No written type to widen from, so the question is the widest one. Only ask it when
+            // the receiver is a declaration we have seen: an untyped local, parameter or project
+            // var. Anything else - a builtin whose type we never recorded, a name we cannot
+            // place - stays silent, which is the untyped-`.` guard applied unchanged.
+            bool ours = scope.Find(bare.Name) is not null || UntypedProjectVar(bare.Name, scope)
+                || BareNameIsAVar(bare.Name, scope);
+
+            if (!ours || _tree.AnyMemberNamed(member.Name, invoked))
+            {
+                markReceiverRead();
+                return;
+            }
+        }
+        else if (_tree.AnyDescendantHasMember(receiver, member.Name, invoked)
+            || (invoked
+                ? _tree.ResolveProc(receiver, member.Name) is not null
+                : _tree.ResolveVar(receiver, member.Name) is not null))
+        {
+            markReceiverRead();
+            return;
+        }
+
+        _diagnostics.Add(invoked
+            ? Diagnostic.Error(
+                "DM0401", member.NameSpan, $"{bare.Name}:{member.Name}: undefined proc")
+            : Diagnostic.Error(
+                "DM0400", member.NameSpan, $"{bare.Name}:{member.Name}: undefined var"));
     }
 
     // -- the reference sink ---------------------------------------------------
@@ -1430,7 +1527,6 @@ public sealed class Binder
     }
 
     private static readonly TypePath UsrType = TypePath.Parse("/mob");
-    private static readonly TypePath ListType = TypePath.Parse("/list");
 
     private static TypePath PathOf(PathSyntax path, TypePath enclosing)
         => path.Anchor == PathAnchor.Absolute
@@ -1477,14 +1573,11 @@ public sealed class Binder
     private void Declare(LocalVarStatementSyntax local, Scope scope, LocalKind kind)
     {
         // Brackets TYPE a local: `var/L[0]` is a /list to dm.exe, sized or not, and a written
-        // type still wins — the same rule the tree applies to type-level bracket vars.
+        // type still wins — the same rule the tree applies to type-level bracket vars, shared
+        // rather than repeated (DeclaredType.Of).
         LocalRecord record = new(
             local.Name,
-            local.DeclaredType is { Segments.Count: > 0 } declared
-                ? TypePath.FromSegments(declared.Segments)
-                : local.HasBrackets
-                    ? ListType
-                    : null,
+            DeclaredType.Of(local.DeclaredType, local.HasBrackets),
             local.NameSpan,
             kind);
 

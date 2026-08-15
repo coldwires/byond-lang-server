@@ -16,9 +16,9 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.33 MB, ABI 0.29, 39 exports, cdecl on every platform
+    dm_core.dll     2.33 MB, ABI 0.30, 39 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,346 green (1,276 core, 45 native, 25 lsp)
+    tests           1,389 green (1,319 core, 45 native, 25 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -26,7 +26,7 @@ WHERE WE ARE
                     re-baseline. The suite is green on it end to end,
                     tripwire included, and so are all four corpus
                     baselines and the language notes' appendix
-    abi-smoke       260 checks from C++, reporting 0.29 on win-x64 AND win-x86
+    abi-smoke       263 checks from C++, reporting 0.30 on win-x64 AND win-x86
                     - both re-published and re-run locally 2026-08-15. FIVE of
                     six RIDs were green in CI at 0.21
                     - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
@@ -78,26 +78,28 @@ WHAT'S NEXT
   THE QUEUE, as of 2026-08-15, cheapest first. Detail for each is in PLAN's
   changelog and in the section it belongs to; this is the order.
 
-    1. Push, and read CI. Nothing since 7a522f0 has had CI's eyes.
-    2. Completion's FindLocalType knows none of the 2026-08-14 typing rules
-       (brackets, var-block headers, the override-shadow chain). Ungated, so
-       only a user notices. Share the rules rather than teach a third copy.
-    3. ":" against the subtype tree - the last deferred binder check. Probe
-       the reporting shape first, as always.
-    4. The ratchet's remaining classes: out of bounds (5), invalid parent
-       type (4), bad variable (4), then the tail. 74 of 255 agreed.
-    5. ConstantEvaluator. Gates nothing in the missed column - init_proc is
-       default-off - but folds constants into hover and completion values.
-    6. Code actions, then formatting. DM0400's quick-edit wording waits on
+    1. Code actions, then formatting. DM0400's quick-edit wording waits on
        the first.
-    7. M9's tree merge, diff-patching the previous tree. 411 ms of
+    2. The ratchet's remaining classes: out of bounds (5), invalid parent
+       type (4), bad variable (4), then the tail. 74 of 255 agreed. Moved
+       DOWN the list 2026-08-15, the user's call - each remaining class is
+       its own probe matrix rather than the cheap sweep the count suggests.
+    3. M9's tree merge, diff-patching the previous tree. 411 ms of
        tgstation's 909 and the last whole-project phase. Three traps in
        PLAN 6 M9; write the test for each before the code.
-    8. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
+    4. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
        probe matrix first, move directive-head detection to collection time,
        retire FlushPending's splitting in the same change.
-    9. Type rename; incremental LSP sync and incremental re-lex within a
+    5. Type rename; incremental LSP sync and incremental re-lex within a
        file, both waiting for a profile to ask.
+    6. dm_dme_entries on the ABI and the LSP, if the capability matrix's
+       one open gap should close rather than stay recorded. A product call:
+       an export nobody asked for is a contract owed forever, and the
+       in-process consumer is already served.
+
+  DROPPED 2026-08-15, the user's call: sending the integration package to the
+  Qt dev. He is a year or more from finishing his IDE, so the package waits
+  for him to ask rather than sitting on a queue as owed.
 
   NEEDS A HUMAN, and CI cannot cover either: run the VS Code client against a
   real game, and run the Neovim and Helix snippets in docs/lsp.md.

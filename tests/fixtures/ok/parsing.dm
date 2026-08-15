@@ -289,6 +289,27 @@
 /datum/parsing/throw
 	var/marker = "thrown"
 
+// The three colon accesses that COMPILE, for the check that reports the ones
+// that do not (errors/colon_access). Asserted by value because compiling proves
+// only that the parser allowed it - and `:` reaching a subtype is exactly the
+// kind of claim that wants a number behind it.
+/obj/colon_base
+	var/base_hp = 3
+
+/obj/colon_base/special
+	var/only_special = 7
+
+/datum/colon_unrelated
+	var/far_away = 11
+
+// The type and the macro the modified-type check constructs. A macro is here on
+// purpose: it is the one non-literal a modified-type initializer accepts, and it
+// works because the preprocessor substitutes before the parser looks at scope.
+#define POUCH_MAX 9
+
+/obj/pouch
+	var/capacity = 1
+
 // `!` is a legal type-name segment in the SLASH form. warklan ships /obj/! as a
 // quest marker named after the `!.dmi` that floats over an NPC's head; dm.exe
 // rejects the indented form with "empty type name", so this spelling is the only
@@ -418,6 +439,35 @@
 		local_bracket.Add("d")
 		return bracket_list.len + header_list.len + local_bracket.len
 
+	// A modified-type initializer's values see LITERALS and MACROS and nothing
+	// else - a proc local is "undefined var" there, with unused_var beside it
+	// saying dm.exe never read the name. These are the compiling halves of that
+	// probe, asserted BY VALUE rather than by compiling, since a construct
+	// compiling proves only that the parser allowed it. The rejecting half is
+	// errors/modified_type_scope, where it earns its own compilation unit.
+	// `:` reaches a SUBTYPE's member through a base-typed var; `?:` asks the
+	// widest question there is and is null-safe with it; and an untyped
+	// receiver asks that same widest question. The middle one is the case that
+	// separates the two operators: `far_away` lives on an unrelated type, so a
+	// plain `:` there is "undefined var" while `?:` compiles.
+	proc/colon_accesses()
+		var/obj/colon_base/B = new /obj/colon_base/special
+		var/reached_subtype = B:only_special
+
+		var/obj/colon_base/N = null
+		var/wide_on_null = N?:far_away
+
+		var/u
+		u = B
+		var/through_untyped = u:base_hp
+
+		return "[reached_subtype]:[isnull(wide_on_null) ? "NULL" : wide_on_null]:[through_untyped]"
+
+	proc/modified_type_values()
+		var/obj/pouch/literal = new /obj/pouch{capacity = 5}
+		var/obj/pouch/expanded = new /obj/pouch{capacity = POUCH_MAX}
+		return "[literal.capacity]:[expanded.capacity]"
+
 /proc/run_parsing()
 	var/datum/parsing/P = new
 
@@ -482,3 +532,5 @@
 	CHECK("__LINE__ advances per line", P.line_macro_delta(), 1)
 	CHECK("__FILE__ names this file", P.file_macro_names_this_file(), 1)
 	CHECK("brackets and var/list headers type vars", P.typing_rules(), 4)
+	CHECK("modified-type values take a literal and a macro", P.modified_type_values(), "5:9")
+	CHECK("colon reaches a subtype, ?: is widest and null-safe", P.colon_accesses(), "7:NULL:3")

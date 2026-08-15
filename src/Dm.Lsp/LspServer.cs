@@ -986,6 +986,9 @@ internal sealed class LspServer
             if (item.InitialValue.Length > 0)
                 json.WriteString("value", item.InitialValue);
 
+            if (item.ConstantValue.Length > 0)
+                json.WriteString("constant", item.ConstantValue);
+
             json.WriteEndObject();
         }
 
@@ -1021,6 +1024,12 @@ internal sealed class LspServer
 
         if (hover.Detail.Length > 0)
             value = $"`{hover.Detail}`\n\n{value}";
+
+        // The folded initialiser, when it folds. Rendered as markdown for the same reason the
+        // reference link is: it needs no client code, and `= 5 * 60` is exactly the declaration
+        // where a reader wants the 300 without doing the arithmetic themselves.
+        if (hover.ConstantValue.Length > 0)
+            value += $"\n\n= `{hover.ConstantValue}`";
 
         if (hover.Documentation.Length > 0)
             value += $"\n\n{hover.Documentation}";

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Dm.Core.Symbols;
@@ -263,6 +264,109 @@ public sealed class ObjectTree
         }
 
         return null;
+    }
+
+    // Every member name in the program, by kind. What `:` falls back to and what `?:` asks
+    // outright - compiler-verified 2026-08-15: on an untyped receiver `x:hp` compiles when `hp`
+    // is a member of ANYTHING, builtins included (`x:icon_state` compiles), while a name that is
+    // only a PROC does not satisfy a var access (`x:only_a_proc` is "undefined var"). So the sets
+    // are kept apart rather than merged.
+    private HashSet<string>? _anyVarName;
+    private HashSet<string>? _anyProcName;
+
+    /// <summary>Whether any type in the program has a member of this name and kind.</summary>
+    /// <remarks>
+    /// The widest check DM performs. `:` on an untyped receiver asks exactly this, and so does
+    /// `?:` on any receiver - which is NOT the same question `:` asks of a typed one, where the
+    /// search is the declared type and its subtypes. `M?:elsewhere` compiles where `M:elsewhere`
+    /// does not, which is the pair that pins the difference.
+    /// </remarks>
+    internal bool AnyMemberNamed(string name, bool isProc)
+    {
+        if (_anyVarName is null)
+        {
+            HashSet<string> vars = new(StringComparer.Ordinal);
+            HashSet<string> procs = new(StringComparer.Ordinal);
+
+            foreach (TypeSymbol type in Types)
+            {
+                foreach (VarSymbol variable in type.Vars)
+                    vars.Add(variable.Name);
+
+                foreach (ProcSymbol proc in type.Procs)
+                    procs.Add(proc.Name);
+            }
+
+            _anyVarName = vars;
+            _anyProcName = procs;
+        }
+
+        return isProc ? _anyProcName!.Contains(name) : _anyVarName.Contains(name);
+    }
+
+    // Inheritance children: the inverse of InheritanceParent, which the tree has never needed
+    // before because every other question walks upward.
+    private Dictionary<TypePath, List<TypeSymbol>>? _inheritanceChildren;
+
+    /// <summary>Whether the type or anything INHERITING from it carries this member.</summary>
+    /// <remarks>
+    /// <para>
+    /// The `:` widening: it checks the declared type and its subtypes, so a property declared
+    /// only on a subtype is reachable through `:` and not through `.`.
+    /// </para>
+    /// <para>
+    /// <b>Subtype means INHERITANCE, not path.</b> Probed 2026-08-15: a `/datum/adopted` carrying
+    /// `parent_type = /mob/test` satisfies `M:only_there` on a `/mob/test` receiver, so walking
+    /// path children would miss every type a project re-parents - and re-parenting is ordinary DM,
+    /// which is why `/mob` itself descends from `/atom/movable` rather than from the root.
+    /// </para>
+    /// <para>
+    /// Cycle-guarded for the same reason <see cref="InheritanceChain"/> is: `parent_type` is an
+    /// ordinary assignment and nothing stops a project from writing a loop.
+    /// </para>
+    /// </remarks>
+    internal bool AnyDescendantHasMember(TypeSymbol type, string name, bool isProc)
+    {
+        if (_inheritanceChildren is null)
+        {
+            Dictionary<TypePath, List<TypeSymbol>> children = new();
+
+            foreach (TypeSymbol candidate in Types)
+            {
+                if (InheritanceParent(candidate) is not { } parent)
+                    continue;
+
+                if (!children.TryGetValue(parent.Path, out List<TypeSymbol>? bucket))
+                    children[parent.Path] = bucket = new List<TypeSymbol>();
+
+                bucket.Add(candidate);
+            }
+
+            _inheritanceChildren = children;
+        }
+
+        HashSet<TypePath> seen = new();
+        Stack<TypeSymbol> pending = new();
+        pending.Push(type);
+
+        while (pending.Count > 0)
+        {
+            TypeSymbol current = pending.Pop();
+
+            if (!seen.Add(current.Path))
+                continue;
+
+            if (isProc ? current.FindProc(name) is not null : current.FindVar(name) is not null)
+                return true;
+
+            if (_inheritanceChildren.TryGetValue(current.Path, out List<TypeSymbol>? below))
+            {
+                foreach (TypeSymbol child in below)
+                    pending.Push(child);
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Finds a var on a type or anything it inherits from.</summary>

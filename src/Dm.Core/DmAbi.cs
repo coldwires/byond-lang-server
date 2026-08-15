@@ -14,6 +14,9 @@ public static class DmAbi
     public const int Major = 0;
 
     /// <summary>
+    /// 30: dm_complete_at items and dm_hover_at both carry "constant" - what an initialiser
+    ///     COMES TO when it folds, beside the source text rather than replacing it. Empty when
+    ///     the initialiser is not constant, and empty for a bare literal.
     /// 29: dm_inlay_hints names the parameter kind. Parameter-name hints have been in the answer
     ///     since 2026-08-12 and crossed this boundary as "unknown", the word the header tells a
     ///     client to treat as opaque, so the ABI shipped them unusable while the LSP sent them
@@ -63,7 +66,7 @@ public static class DmAbi
     /// 2: added dm_set_buffer, dm_close_buffer, and the dm_classify_range family.
     /// 1: workspace open/close/root.
     /// </summary>
-    public const int Minor = 29;
+    public const int Minor = 30;
 
     /// <summary>Both numbers in one int: <c>(major &lt;&lt; 16) | minor</c>.</summary>
     public static int Packed => (Major << 16) | Minor;

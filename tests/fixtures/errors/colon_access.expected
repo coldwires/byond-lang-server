@@ -1,0 +1,10 @@
+38 warning M: variable defined but not used
+39 error M:elsewhere: undefined var
+43 warning M: variable defined but not used
+44 error M:nowhere_xyz: undefined var
+48 warning x: variable defined but not used
+50 error x:nowhere_xyz: undefined var
+54 warning x: variable defined but not used
+56 error x:only_a_proc: undefined var
+61 warning M: variable defined but not used
+62 error M:only_a_proc: undefined proc

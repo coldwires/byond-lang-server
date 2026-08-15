@@ -408,9 +408,18 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  * input filter, and dm.exe does not check members through it - so it stays in
  * "detail" where it reads as what it is.
  *
- * "value" is source text, not an evaluated result: `5 + 1` stays `5 + 1`. Folding
- * waits on a constant evaluator, and until there is one this is the author's text
- * rather than a claim about what it comes to.
+ * "value" is source text, not an evaluated result: `5 + 1` stays `5 + 1`. What it
+ * COMES TO arrives beside it as "constant" (0.30) - "6" here, "300" for `5 * 60`,
+ * and EMPTY when the initialiser is not a compile-time constant. The two are
+ * different facts and a reader of `= 5 * 60` wants both, so neither replaces the
+ * other.
+ *
+ * A BARE LITERAL FOLDS TO NOTHING on purpose. `123456789` would come back as
+ * "1.23457e+08" - which is what the compiler holds, since DM renders a number with
+ * SIX significant digits and its numbers are 32-bit floats - and that is less use
+ * to a reader than the digits already in front of them. Every folded value is
+ * rendered the way the running game would print it: `1 / 3` is "0.333333", and
+ * `7.5 % 2` is "1" because DM's `%` truncates both operands first.
  *
  * "documentation" (0.9) is the doc comment above the declaration - a run of ///
  * lines or a slash-star-star block - or empty. Use dm_complete_brief and
@@ -493,6 +502,7 @@ dm_status dm_workspace_symbols(dm_workspace workspace, const char *query, int32_
  *   {
  *     "detail": "/mob/guy/health",           the resolved path
  *     "signature": "var/health = 1",         the declaration as written
+ *     "constant": "",                        what the initialiser comes to (0.30)
  *     "reference": "",                       DM Reference URL, builtins only
  *     "documentation": "How much ...",       preceding /// lines, markers stripped
  *     "startLine": 9, "startChar": 3,        the token you hovered, to highlight

@@ -101,11 +101,67 @@ internal sealed class IncludeOptions
     /// </remarks>
     public FileEffectCache? Effects { get; init; }
 
+    /// <summary>
+    /// Where the BYOND INSTALL keeps libraries, when it does. Overridable for tests; otherwise
+    /// derived from <c>DM_BYOND_BIN</c> (the same variable everything else here locates the
+    /// compiler with) and then from the default install location.
+    /// </summary>
+    internal string? SystemLibraryRoot { get; init; }
+
     internal string ResolveLibraryRoot()
         => LibraryRoot ?? System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "BYOND",
             "lib");
+
+    /// <summary>
+    /// Every root an angle-bracket include is searched in, in the order dm.exe searches them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The user library folder first, then the install's own.</b> Probed against 516.1687 with
+    /// both halves: a library that exists ONLY beside the binary resolves from there, so the
+    /// install dir is genuinely searched; and a library present in BOTH is taken from the user
+    /// folder, proven by shadowing a real one and watching the shadow's marker stay undefined
+    /// while the real library's own var still resolved.
+    /// </para>
+    /// <para>
+    /// <b>That is the opposite of what the DM Reference says</b>, which documents the system
+    /// directory first — recorded in PLAN.md §M3 on the reference's authority and wrong. Where
+    /// the two disagree the compiler wins (§8), and this is the fourth time that has cost
+    /// something.
+    /// </para>
+    /// <para>
+    /// An explicit <see cref="LibraryRoot"/> replaces the USER root, not the chain, because that
+    /// is the one dm.exe would have read from the user's own configuration.
+    /// </para>
+    /// </remarks>
+    internal IEnumerable<string> ResolveLibraryRoots()
+    {
+        yield return ResolveLibraryRoot();
+
+        if (SystemLibraryRoot is { } configured)
+        {
+            yield return configured;
+            yield break;
+        }
+
+        // The install root is the parent of the bin directory the compiler lives in.
+        if (Environment.GetEnvironmentVariable("DM_BYOND_BIN") is { Length: > 0 } bin
+            && System.IO.Path.GetDirectoryName(bin.TrimEnd(
+                System.IO.Path.DirectorySeparatorChar,
+                System.IO.Path.AltDirectorySeparatorChar)) is { Length: > 0 } installed)
+        {
+            yield return System.IO.Path.Combine(installed, "lib");
+            yield break;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            yield return System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "BYOND", "lib");
+        }
+    }
 }
 
 /// <summary>
@@ -1200,17 +1256,31 @@ internal sealed class IncludeGraph
 
             if (directive.IsLibrary)
             {
-                // <vendor/name> lives at <libroot>/vendor/name/name.dm.
-                string libRoot = _options.ResolveLibraryRoot();
+                // <vendor/name> lives at <libroot>/vendor/name/name.dm, and there is more than
+                // one libroot: the user's folder, then the install's own. Probed rather than read
+                // off the reference, which documents the order backwards - see
+                // IncludeOptions.ResolveLibraryRoots.
                 string leaf = relative.Contains('/') ? relative[(relative.LastIndexOf('/') + 1)..] : relative;
 
-                attempted = Path.GetFullPath(Path.Combine(libRoot, relative, leaf + ".dm"));
-                if (File.Exists(attempted))
-                    return attempted;
+                attempted = string.Empty;
 
-                string flat = Path.GetFullPath(Path.Combine(libRoot, relative + ".dm"));
-                if (File.Exists(flat))
-                    return flat;
+                foreach (string libRoot in _options.ResolveLibraryRoots())
+                {
+                    string nested = Path.GetFullPath(Path.Combine(libRoot, relative, leaf + ".dm"));
+
+                    // The first root's attempt is what a failure reports, since it is the one a
+                    // reader is most likely to have meant.
+                    if (attempted.Length == 0)
+                        attempted = nested;
+
+                    if (File.Exists(nested))
+                        return nested;
+
+                    string flat = Path.GetFullPath(Path.Combine(libRoot, relative + ".dm"));
+
+                    if (File.Exists(flat))
+                        return flat;
+                }
 
                 return null;
             }

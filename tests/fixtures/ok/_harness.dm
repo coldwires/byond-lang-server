@@ -32,6 +32,7 @@ world/New()
 	run_parsing()
 	run_macros()
 	run_colors()
+	run_constants()
 
 	world.log << "----"
 	world.log << "checks [checks_total] failed [checks_failed]"

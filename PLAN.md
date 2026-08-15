@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.29** · 1,346 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.30** · 1,389 tests ·
 > Last updated: 2026-08-15
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -426,8 +426,14 @@ byond-lang-server/
 **Three planned entries were dropped rather than built, and saying which is the point of this
 section.** `docs/abi.md` is `INTEGRATION.txt`, with `abi/dm_core.h` as the contract it describes.
 `docs/api.md` was dropped while `public` was a default rather than a decision — 155 public types
-against 12 internal, an undocumentable object. **The surface was decided 2026-08-13: 61 public
-types against 106 internal.** Public is what `Dm.Native` and `Dm.Lsp` consume — `Workspace`,
+against 12 internal, an undocumentable object. **The surface was decided 2026-08-13 at 61 public
+types against 106 internal, and is 68 against 105 today** — re-counted 2026-08-15 rather than
+carried forward, because the decision is a rule and the number is a measurement that moves under
+it. Six of the seven arrivals are the rename family (`RenameService`, `RenameResult`,
+`RenameEdit`, `RenameRefusal`, `UncertainSite`, `UncertainReason`), which shipped at ABI 0.27
+hours after the count was taken; the seventh is `DmeIncludeBlock`, made public 2026-08-15 so an
+editor can read the block out of a buffer the workspace never sees. All seven pass the rule —
+`Dm.Native` or `Dm.Lsp` consumes them — so what drifted is the figure, not the surface. Public is what `Dm.Native` and `Dm.Lsp` consume — `Workspace`,
 `Document`, the services and their result types, `ObjectTree`/`TypeSymbol`/`TypePath`,
 `Diagnostic`, the text primitives — which is the §3 sync rule made structural: the in-process
 surface cannot outgrow the other two shells when it IS what the other two shells call. The lexer,
@@ -471,11 +477,11 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.29 and passing 260 checks on x64 and
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.30 and passing 263 checks on x64 and
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,346 today (1,276
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,389 today (1,319
   core, 45 native, 25 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
@@ -603,8 +609,13 @@ order — the same ordering that decides override resolution and the §4a path a
 
 - **`#pragma multiple`** opts a file *out* of include-once. `IncludeGraph` currently dedupes
   unconditionally and must honour this.
-- **Library search order is system lib dir first, then the per-user lib dir.** We only check the
-  user dir.
+- ~~**Library search order is system lib dir first, then the per-user lib dir.**~~ **The reference
+  has this BACKWARDS, probed 2026-08-15: the per-user folder wins.** Both are searched — a library
+  living only beside the binary resolves from there — but a name present in both is taken from
+  `~/Documents/BYOND/lib`, shown by shadowing a real user library with one of the same name in the
+  install and watching the shadow's marker stay undefined while the real library's own var still
+  resolved. **Shipped in the compiler's order**, user root then install root, the latter derived
+  from `DM_BYOND_BIN` or the default install path (§8).
 - **`###` is a repeat operator**, distinct from `##`: `#define SAYTWICE(t) 2###t` repeats the
   replacement N times. A greedy `##` match mis-tokenises it.
 - **`#` and `##` are documented only as *parameter prefixes*** (`#v`, `##k`), not as C-style infix
@@ -1265,6 +1276,7 @@ because nothing else in a DM toolchain reports them. The parser has to model the
 | `proc/` declared twice on one type | duplicate-definition error | **shipped as `DM0403`** — on one type, on an ancestor at any depth, and against a builtin (probes dup1–dup9). dm.exe reports a pair, "duplicate definition" on the later line and "previous definition" on the first; each file reports its own half, so a same-file pair matches line for line. **The cross-file "previous definition" half closed 2026-08-13**: the tree carries a once-per-build redeclaration index instead of the per-bind descendant scan the miss was deferred over, dm reports the ancestor's line once however many descendants duplicate (probed), and the var-over-ancestor case pairs the same way (probed — never recorded before). Fixtures `errors/dup_cross_proc` and `dup_cross_var`, exact against dm.exe. Overrides and var/proc name sharing stay clean. The var half SHIPPED 2026-08-12: the same-type pair is inverted (first line called the duplicate), a BARE OVERRIDE is not a declaration, and the sites live on `TypeSymbol` because a `VarSymbol` is cached in a `TreeContribution` and replayed. Fixture `errors/dup_var`. |
 | A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
 | `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | **shipped 2026-08-14 as DM0400/DM0401 in dm.exe's own dotted form** (`x.hp: undefined var`, `x.f: undefined proc`) — the message matches the compiler so diagdiff agrees; the quick-edit wording ("write `var/obj/item/x`") waits for code actions, where it belongs. The certainty guard that kept this deferred is builtins with no recorded type, which stay silent as our own gap. Shipping it flushed out the bracket/`var/list`-header typing rules (§8) across three corpora. |
+| `:` and `?:` (§8) | a WIDER check, not an absent one — and the two differ from each other | **shipped 2026-08-15 as DM0400/DM0401**, the last deferred binder check. `:` searches the declared type, its ancestors and its subtypes; `?:` and any untyped receiver ask whether the name is a member of anything at all; the search is kind-sensitive; and subtype means inheritance rather than path. Zero invented on all four corpora on the first run, tgstation included — which is the project that duck-types through `:` constantly, and therefore the one that would have said so. |
 
 The first one is **done**, and it is the shape the rest should follow. It was found in a shipped game
 where four mission procs were declared that way and one is called from another file — a runtime
@@ -1841,7 +1853,7 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.29, 39 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.30, 39 exports: version, last error, free, workspace
 open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
 pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
@@ -2254,6 +2266,10 @@ that the two candidate behaviours produce different compiler output.
 | **The `set` vocabulary is ten names, identical in verbs and procs.** | Probed 2026-08-13, all ten in one verb AND the same ten in a global proc, both compiling clean: `name desc category hidden instant invisibility popup_menu background waitfor src`. An unknown name is *"X: undefined var"* on the `set` line (probes b2_set_unknown, b4_set_bogus_in), and `loop_checks` — once documented — now errors the same way (probe w3012). `SyntaxFacts.SetNames`; runtime check in `ok/parsing.dm`. |
 | **`usr` does not exist in an initializer, and a bare call is PROCS-only.** | Probed 2026-08-13 in three initializer spellings — a datum var, a global var and a bare override (`/world/name = usr`) — each *"usr: undefined var"*. And the call/value split runs both ways: `var/x = 5` then `x()` is *"x: undefined proc"* **plus** `unused_var` on x, so a call neither resolves through a var nor reads it — while the NAME still resolves past the shadowing local to any proc, which is how mlaas calls the builtin `length()` with a parameter named `length` in scope. The value-position twin (§ vars-only, `&f`/`initial(p)`) was pinned the same day. Fixture `errors/undefined_more`. |
 | **`.` on an untyped var rejects in every spelling, and the receiver only counts as used when the access compiles.** | Probed 2026-08-14 across the matrix the original local-only probe left open: an untyped LOCAL, PARAMETER, `as`-clause parameter, MEMBER reached by bare name, and GLOBAL all reject every member — existing elsewhere or nowhere — with the whole dotted text as dm's symbol (`x.hp: undefined var`), and the invoked form is the proc twin (`x.f: undefined proc`). No degradation anywhere: the reference's degrade-to-`:` rule covers expressions, never a bare name. And `unused_var` fires BESIDE the error — for untyped receivers and for typed receivers whose member is missing alike — so a member access is a USE of its receiver only when it compiles. Fixture `errors/untyped_dot`, exact on all eight lines, warnings included. |
+| **A number renders with SIX significant digits, and its arithmetic is 32-bit.** | Runtime-verified on 516.1687: `1 / 3` prints `0.333333`, `2 ** 0.5` prints `1.41421`, and **`123456789` prints `1.23457e+08`** — so a large integer does not round-trip through DM's own rendering. `0.1 + 0.2` prints `0.3`, which is the 32-bit float and the six-digit rendering together hiding the epsilon a double would show. This is what any folded constant has to be rendered as, or a tool tells the author a number their game will never print. `ok/constants.dm` runs each of them. |
+| **A library include searches the USER folder before the install's, which is the reverse of the documented order.** | Probed on 516.1687 in two halves, because one alone cannot separate "searched second" from "not searched". A library placed ONLY beside the binary (`<install>/lib/probelib/probelib.dm`) resolves through `#include <probelib>` and compiles clean, so the install folder is genuinely searched — we had never looked there. Then a library present in BOTH: shadowing the real `deadron/characterhandling` with an install-side copy carrying a marker datum leaves the marker *"undefined type path"* while the real library's own `client` var still resolves, with and without the shadow present. So the **user folder wins**, and the DM Reference's "system lib dir first, then the per-user lib dir" — recorded in §M3 on its authority since M3 — is wrong. Fourth demonstrated reference error, after the leading-`:` path search, the duplicated `-=` row and the `A -= B` overload mapping. |
+| **`:` and `?:` ask DIFFERENT questions, and neither is unchecked.** | Probed one case per compilation unit on 516.1687. On a WRITTEN receiver type, `:` searches the declared type, its ancestors **and its subtypes** — `M:on_subtype` compiles where `M.on_subtype` does not, while `M:elsewhere`, on an unrelated type, is *"undefined var"*. **`?:` asks the widest question there is**: whether the name is a member of anything at all. `M?:elsewhere` **compiles** where `M:elsewhere` errors — same receiver, same member, one character apart — and `M?:nowhere_xyz` still errors, so it is wider rather than absent. An UNTYPED receiver asks that same widest question through either operator (`x:hp` and `x:icon_state` compile, builtins counting; `x:nowhere_xyz` does not). The search is **kind-sensitive**: `x:only_a_proc` read as a var is *"undefined var"* though the proc exists. **Subtype means INHERITANCE, not path** — a `/datum/adopted` carrying `parent_type = /mob/test` satisfies `M:only_there`, so a path-children walk misses every re-parented type. And the read-marking splits by operator: a failing `:` draws `unused_var` on its receiver while a failing `?:` does not, which reads as `?:` evaluating the receiver for its null test before the lookup fails. Fixture `errors/colon_access` (10 diagnostics exact, pairings included); the compiling forms are asserted by value in `ok/parsing.dm`. |
+| **A modified-type initializer's values cannot see proc locals.** | `new /obj/pouch{capacity = 5}` compiles and so does `{capacity = POUCH_MAX}` — a **macro** works, because the preprocessor substitutes before the parser looks at scope — while a local `n` and a member `g.ammo` are each *"undefined var"*, **and dm.exe reports `unused_var` on the local beside the error**, which is it saying the name was never read rather than resolved elsewhere. Probed one case per compilation unit on 516.1687 (dm.exe stops at the first error). The braces are mandatory in this position and legal anywhere a type value is (§4c), so the values look like ordinary expressions and are not scoped like them. Consequence for us is coverage rather than correctness: `ModifiedTypeExpressionSyntax` is bound (one of the six holes closed 2026-08-12) and **no code dm.exe accepts can put a project symbol there**, so the reference index cannot be asserted through it — recorded in `tests/fixtures/services/code.dm` where someone would look. Fixture `errors/modified_type_scope`; the compiling halves are asserted by value in `ok/parsing.dm`. |
 | **Brackets TYPE a var, and a `var/list` block header types its children.** | `var/players[0]` is a `/list` — mlaas calls `players.Add()` on exactly that shape throughout — as is `var/L[]`, sized or not, at type level and proc level alike. And a block header's segments are its children's DECLARED TYPE: madridspy's `var/list` block heads `/list` vars, and the nested forms — `var` over `list` over names, `var` over `obj/small_thing` over names, the same at proc level — all type their children (probed, all four shapes in one unit). A written type wins over brackets, and both win over a header's type — and an untyped OVERRIDE on a subtype hides none of them: the effective type is the inheritance chain's first non-null, which is how tgstation's bots override `ai_controller` per type while /atom's declaration keeps it `/datum/ai_controller`. These were invisible until the reject-everything check ran: nothing had ever asked what type an untyped-looking var carried. Runtime check in `ok/parsing.dm`. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -2388,6 +2404,16 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   3,238/3,238 chains, warklan 2,022/2,022, madridspy 2,199/2,200. All three oracles are live, and
   this one's harness is committed (`tests/fixtures/tools/compare_code_tree.py`) rather than left as
   a recipe, because it took six traps to make the zero mean anything. §8 has them.
+  **All three harnesses are committed as of 2026-08-15** — `compare_object_tree.py` and
+  `compare_includes.py` joined it, after two sessions of being recipes in `state.md` on the
+  reasoning that they were a few lines of `sort` and `comm`. Rebuilding them cost a **fifth `-o`
+  trap** nobody had recorded: an associative list's entries render as `<var>` elements inside the
+  `<val>`, marker and all, so `list(1 = "#00FFFF", …)` produces a var named `1` hung on whatever
+  type element the reader last saw. That is the argument for committing a harness rather than a
+  description of one. Re-run on 516.1687: mlaas and warklan exact both ways against `-o`,
+  madridspy exact but for the documented blind spot, mlaas's 100 DM source files identical
+  position for position against `-l`, and warklan **not comparable** there — an erroring build
+  emits no `Source Files:` block, so the script exits 2 rather than reporting a difference.
 
   **Set equality is the weaker half of this check and it is the one a `sort | comm` gives you.**
   Include order decides override resolution, so two identical sets in different orders are different
@@ -3717,3 +3743,86 @@ it.
   `BYOND_BUILD` change. **A stamp bump is a claim that a compiler changed nothing, and the
   evidence for it is a run**; 516.1686 arrived with `list(1 = "a")` becoming an error, which is
   the counterexample this procedure exists for.
+- **2026-08-15** — **The third copy of the bracket-typing rule is gone, and what it was hiding is
+  a language finding.** `var/players[0]` then `players.` answered NOTHING on every surface sharing
+  completion's local walk, a day after the binder and the tree learned the rule — the drift shape
+  this project keeps meeting, and ungated as ever, since diagdiff never sees completion.
+  `Symbols/DeclaredType.Of` is now the single implementation, called by `TypeTreeBuilder`,
+  `Binder.Declare` and `CompletionService.FindLocalType`; the two private `/list` constants are
+  deleted rather than left as a fourth and fifth. **Brackets are a WRITTEN type** — probed with a
+  control: `.Add(1)` and `.len` compile, `.nonexistent_xyz` errors — so those items are not badged
+  `inferred` and take no inlay hint. The var-block-header half needed nothing: the statement parser
+  already stamps a header's type onto its children.
+  Extending the tier-2 reference mark to the last two of the six 2026-08-12 expression holes (a
+  `for` header's `step`, a `pick` weight — the index held both and nothing had said so) then turned
+  up **what a modified-type initializer can see** (§8): literals and macros, never a proc local,
+  with `unused_var` beside the error as dm.exe confirming it read nothing. So the sixth hole,
+  `ModifiedTypeExpressionSyntax`, **cannot be asserted through any code dm.exe accepts** — coverage
+  this suite structurally lacks rather than a mark someone forgot, and recorded where a reader
+  would otherwise think it was missed. Fixture `errors/modified_type_scope`, the compiling halves
+  by value in `ok/parsing.dm` (110 runtime checks).
+  Also: `tools/builtins-gen` joined the solution. It was in no `.sln`, so CI's `dotnet build` never
+  touched it, which is how it silently stopped compiling on 2026-08-13 and nobody learned until
+  someone needed it.
+- **2026-08-15** — **`DmeIncludeBlock` is public, and the three things that follow from that.** An
+  editor owns buffers the workspace has never been given, so the block's read and edit answers are
+  now callable over a `SourceText` directly. Consequences, none of which the build could have
+  caught: `docs/api.md` gained the type, since a live doc whose rule is "a public type appearing
+  belongs here in the same commit" is only worth having if that happens; the surface count was
+  **re-measured rather than adjusted** — 61 → **68 public against 105 internal**, and six of the
+  seven arrivals turned out to be the rename family from ABI 0.27, which shipped hours after the
+  original count was taken and was never folded in; and the capability matrix gained **its first
+  open gap since M8**, because `Entries` has no ABI and no LSP equivalent. That gap is left
+  RECORDED rather than closed on sight: an export nobody has asked for is a contract owed forever,
+  and §3's rule is satisfied by making the divergence visible, not by exporting on reflex.
+- **2026-08-15** — **`ConstantEvaluator` ships at ABI 0.30, and the hard part was DM's arithmetic
+  rather than the folding.** `var/cooldown = 5 * 60` now carries the 300 beside the author's text,
+  on completion items and hover alike — `constant`, never replacing `value`, because what someone
+  wrote and what it means are two facts and a reader wants both. Every rule was read off 516.1687
+  before a line of it was written, and none of them is C#'s: **six significant digits** (`1 / 3` is
+  `0.333333`, and `123456789` is `1.23457e+08`), **32-bit floats** (`0.1 + 0.2` is `0.3`), a `%`
+  that **truncates both operands** while `%%` does not, and a **left-associative** `**` under a
+  tighter-binding unary minus. `ok/constants.dm` runs all of them under the real compiler, so the
+  unit tests are not the only thing asserting them — those encode what we believe and are blind by
+  construction to BYOND changing.
+  **A bare literal folds to nothing on purpose**: `123456789` would come back as `1.23457e+08`,
+  true to the compiler and worse than the digits the author already typed. Folding earns its place
+  only where it says something the source does not. Measured free by A/B on mlaas — the same 13-14
+  ms per keystroke with the fold live and disabled — since the initialiser's expression is in hand
+  exactly once, at the declaration.
+  Not done, and named rather than left implicit: a DM `const` var referenced by name is not
+  resolved. A macro is already gone by the time the parser runs, which is the common case; the
+  var case needs a tree walk and a cycle guard.
+- **2026-08-15** — **`:` against the subtype tree ships — the last deferred binder check — and the
+  probes found two rules nobody had written down.** The recorded rule was that `:` widens to the
+  subtype tree and an untyped receiver asks whether the name exists anywhere. Both hold. What was
+  not known: **`?:` is not `:`**. It asks the widest question on ANY receiver, so `M?:elsewhere`
+  compiles where `M:elsewhere` is *"undefined var"* — same receiver, same member, one character
+  apart — while `M?:nowhere_xyz` still errors, so it is wider rather than absent. And the
+  read-marking splits the same way: a failing `:` draws `unused_var` on its receiver, a failing
+  `?:` does not, which reads as the null test evaluating the receiver before the lookup fails.
+  Two more rules came out of the same matrix: the search is **kind-sensitive** (`x:only_a_proc` in
+  value position is "undefined var" though the proc exists), and **subtype means inheritance, not
+  path** — a `parent_type = /mob/test` type is reachable from a `/mob/test` receiver however its
+  own path reads, so `ObjectTree` gained the downward inheritance index it had never needed, the
+  inverse of `InheritanceChain`. **Zero invented on all four corpora on the first run**, tgstation
+  included, which is the project that duck-types through `:` constantly and would have said so
+  first. `errors/colon_access` is exact on ten diagnostics with every `unused_var` pairing, the
+  compiling forms are asserted by value in `ok/parsing.dm`, and the unit test that asserted `:`
+  was NOT checked failed the moment it shipped, which is what an obsolete assertion should do.
+- **2026-08-15** — **The `-o` and `-l` harnesses are committed, and rebuilding them found a trap
+  that was never recorded.** Both had been recipes in `state.md` for two sessions, on the
+  reasoning that they were a few lines of `sort` and `comm` — and the `-o` one immediately
+  reported three missing vars on mlaas, a project documented as exact. They were named `1`, `2`
+  and `3`: **an associative list's entries render as `<var>` elements inside the `<val>`**,
+  `file="…"` marker and all, so skipping the `<val>` *tag* is not enough — the whole subtree is
+  value detail, and the phantoms hang on whatever type element was last seen, twenty lines away.
+  Fifth `-o` trap, alongside `<verb>` being its own element, nesting owners, the builtin blind
+  spot and depth-by-tab-count. **The shape was the tell**: numeric names, on a project that cannot
+  be wrong. Both scripts now carry their traps as comments, and `compare_includes.py` carries the
+  swap control in-process — it re-runs its own comparison against a deliberately reordered list
+  and fails if that still reads identical, since a diff that cannot see a reordering proves
+  nothing by passing. Verified on 516.1687: mlaas and warklan exact both ways against `-o`,
+  madridspy exact but for the blind spot, mlaas 100 files position-for-position against `-l`, and
+  warklan **not comparable** there, exiting 2 rather than reporting a false difference, because an
+  erroring build emits no `Source Files:` block.
