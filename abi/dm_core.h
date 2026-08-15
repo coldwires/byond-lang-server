@@ -787,7 +787,8 @@ int32_t dm_file_in_project(dm_workspace workspace, const char* file);
 /* -- inlay hints ---------------------------------------------------------- */
 
 /*
- * Inferred-type annotations for untyped locals, as UTF-8 JSON. Added in ABI 0.16.
+ * Inferred-type annotations for untyped locals, and parameter names at call
+ * sites, as UTF-8 JSON. Added in ABI 0.16; the parameter kind named in 0.29.
  * YOU FREE the result with dm_free.
  *
  * DM code is full of `var/x = new /obj/item` and the type is exactly what a
@@ -798,6 +799,18 @@ int32_t dm_file_in_project(dm_workspace workspace, const char* file);
  *                                                 encoding, AFTER the name
  *                  "label": ": /obj/item",        render as written
  *                  "kind": "type" } ] }           treat unknown kinds as opaque
+ *
+ * TWO KINDS, and the position means something different in each:
+ *
+ *   "type"       an untyped local's inferred type, rendered AFTER the name
+ *   "parameter"  the name of the parameter an argument fills, rendered BEFORE
+ *                the argument - `heal(amount: 5)`. Suppressed where the source
+ *                already says it: `f(name = value)`, and an argument whose own
+ *                text is the parameter's name
+ *
+ * Parameter hints have been in the answer since 2026-08-12 and were reported as
+ * "unknown" until 0.29. If you pinned an older minor and dropped unknown kinds,
+ * you were dropping those hints; nothing else changed.
  *
  * Line range is zero-based and inclusive, same as dm_classify_range; ask for
  * what is visible. A local with a WRITTEN type gets no hint, and every hint is

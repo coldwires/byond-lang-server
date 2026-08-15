@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.28** · 1,345 tests ·
-> Last updated: 2026-08-11
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.29** · 1,346 tests ·
+> Last updated: 2026-08-15
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -375,7 +375,7 @@ Not overloadable: `=` `!` `&&` `||` `&&=` `||=` `?` `==` `!=` `.` `:` `?[]`.
 
 ## 5. Repository layout
 
-What is on disk. One line is marked as not built; everything else exists.
+What is on disk. Everything in it exists.
 
 ```
 byond-lang-server/
@@ -403,7 +403,7 @@ byond-lang-server/
                    hints / references / colors / icons / wsymbols / query / bench / diagdiff
   abi/
     dm_core.h      hand-written C header, source of truth for the ABI
-    dm_core.hpp    optional C++ RAII wrapper for the Qt client        <- NOT BUILT
+    dm_core.hpp    optional C++ RAII wrapper for the Qt client
     schema/        JSON schemas for the bulk query requests and responses
   editors/
     vscode/        extension + TextMate grammar
@@ -467,16 +467,16 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.29 MB, 39 exports) via NativeAOT, for six
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.33 MB, 39 exports) via NativeAOT, for six
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.28 and passing 258 checks on x64 and
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.29 and passing 260 checks on x64 and
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,345 today (1,276
-  core, 44 native, 25 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,346 today (1,276
+  core, 45 native, 25 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -490,7 +490,7 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   quarantine leaves the publish reporting success with the file gone.
 - ✅ A third job, `byond-fixtures`, runs the fixture suite against the **real compiler**. BYOND is
   Windows-only and no runner ships it, so the job fetches the standalone zip for a pinned build
-  (`BYOND_BUILD` in the workflow, 516.1686 today), points `DM_BYOND_BIN` at it, and runs
+  (`BYOND_BUILD` in the workflow, 516.1687 today), points `DM_BYOND_BIN` at it, and runs
   `dotnet test` plus `run.ps1 -Probes`. Until it existed, every compiler-backed assertion in
   `tests/fixtures` took its skip path in CI — the managed job runs on Linux — so CI was checking
   that our parser still agreed with our parser, and the version tripwire that exists to announce a
@@ -1841,7 +1841,7 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.28, 39 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.29, 39 exports: version, last error, free, workspace
 open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
 pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
@@ -2384,7 +2384,10 @@ exactly the constructs §4a describes, which makes them the natural first fixtur
   102/102 and the 100 DM source files are identical *position for position*, so making the walk
   incremental did not reorder it. That was worth checking separately, because `dmc bench --verify`
   compares declarations rather than file order and could not have seen a reordering.
-  `-code_tree` is the one oracle still unwired.
+  **`-code_tree` was wired on 2026-08-13 and is exact on everything it can measure** — mlaas
+  3,238/3,238 chains, warklan 2,022/2,022, madridspy 2,199/2,200. All three oracles are live, and
+  this one's harness is committed (`tests/fixtures/tools/compare_code_tree.py`) rather than left as
+  a recipe, because it took six traps to make the zero mean anything. §8 has them.
 
   **Set equality is the weaker half of this check and it is the one a `sort | comm` gives you.**
   Include order decides override resolution, so two identical sets in different orders are different
@@ -3675,3 +3678,42 @@ it.
   and analysing without them describes a different program. A configured `environmentFile` that
   does not exist stays standalone with a stderr line rather than being silently replaced. Four
   protocol tests; LSP-only, no ABI change. 1,299 tests.
+- **2026-08-15** — **ABI 0.29: `dm_inlay_hints` names its `parameter` kind**, and a doc-drift
+  pass around it. Parameter-name hints shipped 2026-08-12 and `InlayHintJson` mapped `Type` and
+  funnelled everything else into `"unknown"` — the word the header tells a client to treat as
+  opaque — so for three days the C ABI carried the feature unusable while `LspServer` sent its own
+  numbering correctly. **The writer's shape is the lesson**: mapping one enum member and
+  catch-alling the rest cannot fail loudly when the enum grows, and nothing asserted on a kind
+  other than `"type"` at any level, so neither the export tests nor the 258 smoke checks noticed.
+  Both now do. Additive, so a minor bump: no export changed, no existing kind moved, and a client
+  that dropped unknown kinds was dropping parameter hints. 260 checks reporting 0.29 on x64 and
+  x86, both republished.
+  **And the smoke test now says how many checks it ran.** CI invoked `ctest --output-on-failure`,
+  which swallows stdout on a pass, so six RID jobs asserted "all checks passed" and the count and
+  the reported ABI version appeared nowhere — a RID where a block silently stopped running looked
+  identical to one where it ran. `--verbose` puts both lines in the log, and the exe carries a
+  `kMinimumChecks` floor in the ratchet shape `BASELINE.txt` already uses: adding checks needs no
+  edit, losing them fails loudly. Proven by raising the floor by one and watching it fail, then
+  restoring it — a check that cannot fail proves nothing (§8).
+  The drift found with it was in the ungated half of every live doc. `PLAN.md` marked
+  `abi/dm_core.hpp` `NOT BUILT` three days after it shipped and called `-code_tree` "the one
+  oracle still unwired" two sections below the run that made it exact; `ROADMAP.txt` and
+  `state.md` carried three different builtins counts (1,018 / 1,017 / the correct 1,031);
+  `tests/fixtures/README.md` said 252 probes in two places and 255 in a third; `state.md`'s
+  Position block said the publish reported 0.27 when the artefacts were 0.28; and four files
+  dated themselves 2026-08-11 while carrying 08-14 content. `DocConsistencyTests` gates exactly
+  two facts — the ABI version and the export count, in three files — and every one of these sat
+  outside it. Counted rather than reasoned about, per the rule the block itself carries.
+- **2026-08-15** — **The pin moves to BYOND 516.1687, and nothing moved with it.** The canary
+  found the build the same day — its first newer build since it was written on 2026-08-13 — and
+  the bump then followed the fixtures README's own procedure rather than a version edit: the
+  standalone zip fetched and verified by name (`dm.exe` reports 516.1687), the suite run against
+  it with the old stamp so the tripwire failed by name and every other golden was seen to hold
+  (1,275 of 1,276), then `run.ps1 -Probes` for the two tiers CI cannot reach — **the runtime
+  world under 1687's DreamDaemon at 109 checks, and the probe ratchet unmoved at 74/255** — then
+  all four corpus baselines re-measured (`hell` 2/0/0, `Klan Wars` 15/0/0, `spies` 0/0/0,
+  `tgstation` 0/0/0 with `-DCBT`), then the language notes' appendix recompiled and re-run, its
+  output identical line for line. Only after all of that did `BYOND_VERSION.txt` and
+  `BYOND_BUILD` change. **A stamp bump is a claim that a compiler changed nothing, and the
+  evidence for it is a run**; 516.1686 arrived with `list(1 = "a")` becoming an error, which is
+  the counterexample this procedure exists for.

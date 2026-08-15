@@ -5,11 +5,12 @@ Every claim here was established by compiling and — where the behaviour is obs
 running a case built so that the two candidate answers produce *different* output.
 
 Originally established against **DM compiler 516.1666**, and the appendix has been re-run whole on
-**516.1686**, the current build — 0 errors, 0 warnings, and the output block below it is that run.
-Results may differ on other versions; the file at the end re-runs everything in about ten seconds.
+**516.1687**, the current build — 0 errors, 0 warnings, and the output block below it is that run,
+identical line for line to the 516.1686 run before it. Results may differ on other versions; the
+file at the end re-runs everything in about ten seconds.
 
 The compile-only sections are not in the appendix and so are not covered by that run. Several of
-them are pinned against 1686 by `tests/fixtures` instead — the keyword type names, the local-var
+them are pinned against 1687 by `tests/fixtures` instead — the keyword type names, the local-var
 `in` rule, undefined members through `.`, and duplicate definitions all have fixtures the CI job
 compiles with it. The rest still rest on their original 1666 testing, which is called out here
 rather than papered over: a version claim is only as good as the run behind it.

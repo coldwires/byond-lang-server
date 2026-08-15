@@ -9,7 +9,7 @@ pwsh tests/fixtures/run.ps1      # the same, plus the runtime run and (with -Pro
 `tests/Dm.Core.Tests/Fixtures/FixtureTests.cs`, so **adding a case is adding a
 file** — never a code change — and one command covers unit tests and fixtures
 alike. `run.ps1` remains for the two things xunit is a poor fit for: running the
-compiled world under DreamDaemon, and the 252-probe ratchet.
+compiled world under DreamDaemon, and the 255-probe ratchet.
 
 ## When BYOND updates
 
@@ -20,7 +20,7 @@ running it and reading what moved.
    name, because every `.expected` in the tree is data captured from one
    compiler version and comparing it against another silently measures the wrong
    thing.
-2. `pwsh tests/fixtures/run.ps1 -Probes` — the 252 mined messages. Anything that
+2. `pwsh tests/fixtures/run.ps1 -Probes` — the 255 mined messages. Anything that
    moved is a message the new version renamed, relocated, or stopped emitting.
 3. Read each difference before touching anything. A changed golden is a *finding*
    about the new compiler; that is the output you wanted.
@@ -177,7 +177,7 @@ and a finding that does not land in it will be re-learned.
   ...
   ok    ok/ok compiles clean
 [2] ok/ runs, every check passing
-  ok    ok/ runtime, 104 checks
+  ok    ok/ runtime, 109 checks
 [3] diagdiff: zero invented
   ok    diagdiff errors/semantic.dme
   ...
