@@ -25,9 +25,17 @@
 namespace fs = std::filesystem;
 
 static int g_failures = 0;
+static int g_checks = 0;
+
+// The floor, not the exact count: a ratchet, like tests/fixtures/BASELINE.txt. Adding checks
+// needs no edit here; losing them fails loudly. That direction is the one that was invisible —
+// a RID where a block silently stopped running still printed "all checks passed", and CI ran
+// ctest with --output-on-failure, so on a pass nothing printed the number at all.
+static const int kMinimumChecks = 260;
 
 static void check(bool condition, const char *what)
 {
+    ++g_checks;
     std::printf("  [%s] %s\n", condition ? "ok" : "FAIL", what);
     if (!condition)
         ++g_failures;
@@ -1068,9 +1076,12 @@ static void test_references(const fs::path &dir)
     }
 
     // An untyped local pushed as a buffer: the inferred type is rendered after it.
+    // The call on the last line carries the other kind - the parameter name, rendered
+    // BEFORE the argument, which crossed this boundary as "unknown" until 0.29.
     const char *hinted =
         "/mob/guy\n\tvar/hp = 1\n\tproc/hurt()\n\t\thp = 2\n"
-        "/proc/f()\n\tvar/g = new /mob/guy\n\treturn g.hp\n";
+        "/proc/heal(amount)\n\treturn amount\n"
+        "/proc/f()\n\tvar/g = new /mob/guy\n\theal(5)\n\treturn g.hp\n";
     check(dm_set_buffer(ws, "refs.dm", hinted, (int32_t)std::strlen(hinted)) == DM_OK,
           "hints: buffer pushed");
 
@@ -1084,6 +1095,10 @@ static void test_references(const fs::path &dir)
         check(doc.find("\": /mob/guy\"") != std::string::npos,
               "hints: the inferred type is rendered");
         check(doc.find("\"kind\":\"type\"") != std::string::npos, "hints: kind is a word");
+        check(doc.find("\"amount:\"") != std::string::npos,
+              "hints: a parameter name is rendered at the call site");
+        check(doc.find("\"kind\":\"parameter\"") != std::string::npos,
+              "hints: the parameter kind is named, not \"unknown\"");
         dm_free(json);
     }
 
@@ -1497,6 +1512,14 @@ int main()
     std::error_code ignored;
     fs::remove_all(dir, ignored);
 
-    std::printf("\n%s\n", g_failures == 0 ? "all checks passed" : "FAILURES PRESENT");
+    if (g_checks < kMinimumChecks)
+    {
+        std::printf("\n  [FAIL] ran %d checks, expected at least %d - checks went missing on "
+                    "this platform\n", g_checks, kMinimumChecks);
+        ++g_failures;
+    }
+
+    std::printf("\n%s: %d checks\n",
+                g_failures == 0 ? "all checks passed" : "FAILURES PRESENT", g_checks);
     return g_failures == 0 ? 0 : 1;
 }

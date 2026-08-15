@@ -30,7 +30,18 @@ internal static class InlayHintJson
 
             // A word rather than a number, same as diagnostic severity: shipping the enum's
             // integer invites a client to decode it with a different table.
-            json.Append(",\"kind\":\"").Append(hint.Kind == InlayHintKind.Type ? "type" : "unknown").Append('"');
+            //
+            // Every kind the service produces is named here. Parameter hints were emitted as
+            // "unknown" from the day they shipped (2026-08-12) until 0.29, so the ABI carried
+            // them for three days as a kind the header told clients to treat as opaque, while
+            // the LSP sent its own numbering correctly. A writer that maps one enum member and
+            // funnels the rest into a catch-all cannot fail loudly when the enum grows.
+            json.Append(",\"kind\":\"").Append(hint.Kind switch
+            {
+                InlayHintKind.Type => "type",
+                InlayHintKind.Parameter => "parameter",
+                _ => "unknown",
+            }).Append('"');
             json.Append('}');
         }
 

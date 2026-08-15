@@ -2,7 +2,7 @@
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-11
+ Last updated: 2026-08-15
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -16,14 +16,18 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.29 MB, ABI 0.28, 39 exports, cdecl on every platform
+    dm_core.dll     2.33 MB, ABI 0.29, 39 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,345 green (1,276 core, 44 native, 25 lsp)
-    BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
-                    516.1686 is the newest build (2026-08-05); the suite is
-                    green on it end to end, tripwire included
-    abi-smoke       258 checks from C++, reporting 0.28 on win-x64 AND win-x86
-                    - both re-published and re-run locally 2026-08-13. FIVE of
+    tests           1,346 green (1,276 core, 45 native, 25 lsp)
+    BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
+                    516.1687 is the newest build, and the canary is what
+                    found it: every golden held, so the pin moved 1686 ->
+                    1687 on 2026-08-15 as a stamp change rather than a
+                    re-baseline. The suite is green on it end to end,
+                    tripwire included, and so are all four corpus
+                    baselines and the language notes' appendix
+    abi-smoke       260 checks from C++, reporting 0.29 on win-x64 AND win-x86
+                    - both re-published and re-run locally 2026-08-15. FIVE of
                     six RIDs were green in CI at 0.21
                     - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
                     osx-x64 was UNVERIFIED until 2026-08-07: it asked for the
@@ -71,8 +75,34 @@ WHAT WE ARE BUILDING
 
 WHAT'S NEXT
 --------------------------------------------------------------------------------
-  THE QUEUE, as of 2026-08-08. Detail for each is in PLAN's changelog and in
-  the section it belongs to; this is the order.
+  THE QUEUE, as of 2026-08-15, cheapest first. Detail for each is in PLAN's
+  changelog and in the section it belongs to; this is the order.
+
+    1. Push, and read CI. Nothing since 7a522f0 has had CI's eyes.
+    2. Completion's FindLocalType knows none of the 2026-08-14 typing rules
+       (brackets, var-block headers, the override-shadow chain). Ungated, so
+       only a user notices. Share the rules rather than teach a third copy.
+    3. ":" against the subtype tree - the last deferred binder check. Probe
+       the reporting shape first, as always.
+    4. The ratchet's remaining classes: out of bounds (5), invalid parent
+       type (4), bad variable (4), then the tail. 74 of 255 agreed.
+    5. ConstantEvaluator. Gates nothing in the missed column - init_proc is
+       default-off - but folds constants into hover and completion values.
+    6. Code actions, then formatting. DM0400's quick-edit wording waits on
+       the first.
+    7. M9's tree merge, diff-patching the previous tree. 411 ms of
+       tgstation's 909 and the last whole-project phase. Three traps in
+       PLAN 6 M9; write the test for each before the code.
+    8. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
+       probe matrix first, move directive-head detection to collection time,
+       retire FlushPending's splitting in the same change.
+    9. Type rename; incremental LSP sync and incremental re-lex within a
+       file, both waiting for a profile to ask.
+
+  NEEDS A HUMAN, and CI cannot cover either: run the VS Code client against a
+  real game, and run the Neovim and Helix snippets in docs/lsp.md.
+
+  THE SHIPPED RECORD, from the 2026-08-08 queue:
 
     a. DONE 2026-08-08: the COLOUR PROVIDER, at ABI 0.23. rgb() calls and
        hex literals, on all three surfaces plus `dmc colors`. Named colours
@@ -210,7 +240,8 @@ WHAT'S NEXT
        reads a field, dm_build_tree warms the tree at open.
        DONE: inlay hints (their 12, the type half) at ABI 0.16 —
        inferred types on untyped locals, the same inference completion
-       rides on. Parameter-name hints are the deferred other half.
+       rides on. The parameter-name half shipped 2026-08-12; the ABI
+       reported it as kind "unknown" until 0.29.
        DONE: lazy completion documentation (their 11) at ABI 0.17 -
        dm_complete_brief + dm_complete_resolve, LSP resolveProvider.
        MEASURED FIRST, and the measurement matters more than the
@@ -280,8 +311,8 @@ MILESTONES                                    (restructured 2026-08-02)
              declarations, expressions and statements all parse; proc bodies
              are real trees. reads the PREPROCESSED stream by default.
   [x] M5   Object tree + BYOND builtins
-             1,018 entries for 516.1666 bundled, including stddef's 199
-             #define constants. A typed receiver resolves loc and Move().
+             1,031 entries bundled, including stddef's 199 #define
+             constants. A typed receiver resolves loc and Move().
   [x] M6   Binder + completion
              "mob." and "t." work. type inference through new/as/assignment,
              which is the ONE place we knowingly disagree with dm.exe.

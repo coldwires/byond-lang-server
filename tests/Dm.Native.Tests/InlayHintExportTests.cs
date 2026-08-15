@@ -94,6 +94,41 @@ public unsafe class InlayHintExportTests
         }
     }
 
+    /// <summary>
+    /// The parameter kind crosses the boundary by name. It did not from 2026-08-12 until ABI
+    /// 0.29: the writer mapped <c>Type</c> and funnelled everything else into "unknown", the
+    /// word the header tells a client to treat as opaque, so every parameter hint arrived
+    /// unusable while the LSP sent its own numbering correctly. Nothing asserted on a kind
+    /// other than "type", which is why three days passed.
+    /// </summary>
+    [Fact]
+    public void A_parameter_hint_carries_its_own_kind()
+    {
+        IntPtr ws = OpenWith(
+            "/proc/heal(amount)\n\treturn amount\n/proc/f()\n\treturn heal(5)\n",
+            out string dir);
+
+        try
+        {
+            byte* filePath = Utf8("code.dm");
+            byte* json;
+
+            Assert.Equal(Ok, Hints(ws, filePath, 0, 100, Utf16, &json));
+            NativeMemory.Free(filePath);
+
+            string document = ReadAndFree(json);
+
+            Assert.Contains("\"label\":\"amount:\"", document);
+            Assert.Contains("\"kind\":\"parameter\"", document);
+            Assert.DoesNotContain("\"unknown\"", document);
+        }
+        finally
+        {
+            Close(ws);
+            Directory.Delete(dir, true);
+        }
+    }
+
     [Fact]
     public void Rejects_an_unknown_encoding_and_clears_the_out_param()
     {

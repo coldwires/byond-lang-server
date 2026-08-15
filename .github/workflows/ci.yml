@@ -24,7 +24,7 @@ env:
   # the failure would name no change of ours. Bumping this is a deliberate edit, and it comes with
   # re-reading what moved and updating tests/fixtures/BYOND_VERSION.txt in the same change - the
   # procedure is in tests/fixtures/README.md.
-  BYOND_BUILD: '516.1686'
+  BYOND_BUILD: '516.1687'
 
 jobs:
   test:
@@ -307,7 +307,12 @@ jobs:
                build/abi-smoke/Release/ 2>/dev/null || true
           fi
 
-          ctest --test-dir build/abi-smoke -C Release --output-on-failure
+          # --verbose, not --output-on-failure: on a pass the latter swallows the exe's stdout,
+          # so the log said "1 test passed" and never how MANY checks ran or which ABI version
+          # the binary reported. Six RIDs asserting "all checks passed" without a count cannot
+          # show a RID where checks silently stopped running, and the count was a Windows-local
+          # fact for the whole of the project's life. The exe prints both lines; let them land.
+          ctest --test-dir build/abi-smoke -C Release --verbose
 
       - name: Upload the native binary
         uses: actions/upload-artifact@v4

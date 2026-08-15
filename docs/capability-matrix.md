@@ -22,7 +22,7 @@ work list.
 | Ancestor chain in one call | `ObjectTree.InheritanceChain` | `dm_query_json` `ancestorsOf` (0.14) | `dm/ancestorsOf` |
 | Disk-change invalidation | `Workspace.Invalidate` | `dm_invalidate` (0.14) | `workspace/didChangeWatchedFiles` — one invalidate per notification, then a re-publish for every open document; the VS Code client watches `**/*.{dm,dme,dmi}` |
 | Readiness + warm-at-open | `Workspace.IsTreeBuilt`, `GetObjectTree` | `dm_tree_ready`, `dm_build_tree` (0.15) | `$/progress` announces the build (push, the LSP idiom for the same fact) |
-| Inlay hints (inferred local types, parameter names) | `InlayHintService` | `dm_inlay_hints` (0.16) | `textDocument/inlayHint`, with LSP's own kind numbering |
+| Inlay hints (inferred local types, parameter names) | `InlayHintService` | `dm_inlay_hints` (0.16; the `parameter` kind named at 0.29, "unknown" before it) | `textDocument/inlayHint`, with LSP's own kind numbering |
 | Lazy completion documentation | `CompleteBriefAt` + `ResolveDocumentation` | `dm_complete_brief`, `dm_complete_resolve` (0.17) | `resolveProvider` + `completionItem/resolve` |
 | Completion ranking + opt-in cap | `CompletionResult.Truncated`, scope-distance order | `dm_set_completion_limit` (0.18), `truncated` | `isIncomplete` + `sortText` |
 | Per-item declared type + initial value | `CompletionItem.DeclaredType`, `.InitialValue` | `dm_complete_at` `type` / `value` (0.21) | `completion`, nonstandard `type` / `value` |

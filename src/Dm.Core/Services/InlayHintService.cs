@@ -53,8 +53,9 @@ public sealed class InlayHint
 /// holds. Every hint is inferred by construction: a WRITTEN type needs no hint.
 /// </para>
 /// <para>
-/// Parameter-name hints at call sites are the other half of the feature and are not built yet —
-/// they need argument spans walked out of every invocation, which is its own piece of work.
+/// Parameter-name hints at call sites are the other half of the feature and shipped 2026-08-12:
+/// the argument spans come out of the invocation and the name out of <c>SignatureHelpService</c>,
+/// so a hint and the signature popup cannot disagree about which parameter a position fills.
 /// </para>
 /// </remarks>
 public static class InlayHintService
