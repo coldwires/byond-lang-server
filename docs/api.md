@@ -83,7 +83,10 @@ until a buffer, define or `Invalidate` changes it.
 ## Symbols, text, diagnostics
 
 - `ObjectTree` — `Find` by `TypePath` or string (null when absent), `Root` (globals live there,
-  and it is deliberately not in any inheritance chain), `InheritanceChain`, `Types`, `Count`.
+  and it is deliberately not in any inheritance chain), `InheritanceChain`, `Types`, `Count`, and
+  `FindOverriddenProc` — what a type's definition of a proc overrides, as `(owner, isBuiltin)` or
+  null for a fresh declaration. The builtin case is the type's own: `/mob/Login()` overrides
+  `/mob`'s builtin rather than an ancestor's.
   `TypeSymbol` carries `Path`, `Name`, `Children`, `IsBuiltin`, `IsDeclared`.
 - `TypePath` — the value type for `/obj/item`-style paths: `Parse`, `FromSegments`, `Append`,
   ordinal ordering, `Text`.

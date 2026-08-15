@@ -32,6 +32,7 @@ work list.
 | DM Reference links on builtins | `DefinitionLocation.Reference` | `dm_hover_at` `reference` | `hover` — a `[DM Reference](url)` line in the markdown, which needs no client code |
 | Go-to-type-definition | `DefinitionService.TypeDefinitionAt` | `dm_type_definition_at` (0.19) | `typeDefinition` |
 | What-overrides-this | `ReferenceService`, `kind: override` | `dm_query_json` `references` (0.14) | `implementation` |
+| What-this-overrides (the other direction) | `ObjectTree.FindOverriddenProc` | `dm_query_json` `overriddenProc` (0.31) | `dm/overriddenProc` |
 | Folding ranges | `FoldingService` | `dm_folding_ranges` (0.19) | `foldingRange` |
 | Document links (`#include`) | `DocumentLinkService` | `dm_document_links` (0.19) | `documentLink` |
 | Is this file in the project | `Workspace.IsFileInProject` | `dm_file_in_project` (0.19) | `dm/fileInProject` |
@@ -42,21 +43,21 @@ work list.
 | Colour swatches (`rgb()`, `"#rrggbb"`) | `ColorService` | `dm_document_colors` (0.23) | `documentColor` + `colorPresentation`, components as 0-1 floats |
 | `.dmi` icon states | `Dm.Assets.DmiReader` | `dm_icon_states` (0.24) | `dm/iconStates` + the client's **DM: Browse Icon States** command |
 | `icon_state` completion | `CompletionService`, context `IconState` | `dm_complete_at` `context: "IconState"` (0.25) | `completion` — the items, but no context word: LSP has no field for it |
-| Read a `.dme`'s include block, entry by entry | `DmeIncludeBlock.Entries` (public 2026-08-15) | ⬜ nothing | ⬜ nothing |
+| Read a `.dme`'s include block, entry by entry | `DmeIncludeBlock.Entries`, `Workspace.DmeEntries` | `dm_dme_entries` (0.31) | `dm/dmeEntries` |
 | Rename (best-effort + uncertain-site list) | `RenameService` / `Workspace.RenameAt` | `dm_rename_at` (0.27) | `rename` (provable edits only; uncertain count via `window/showMessage`) + `dm/rename` (the full list) |
 
-**One gap is open, and it is the first the §3 rule has caught rather than predicted.**
-`DmeIncludeBlock` went public on 2026-08-15 so an editor can read and edit the block out of a
-buffer the workspace has never been given — the tick/untick half already had both twins, but
-**`Entries` has neither**, so the in-process surface now answers a question the C ABI and the LSP
-cannot. That is precisely the drift §3 exists to make visible: the direct-reference path
-outgrowing the other two shells, one method at a time.
+**No gaps remain on any surface, and the two that opened on 2026-08-15 are the only ones the §3
+rule has ever caught rather than predicted.** Both came from the in-process consumer needing
+something the other shells were never asked for: `DmeIncludeBlock` going public so an editor can
+read and edit the block out of a buffer the workspace has never been given, and
+`ObjectTree.FindOverriddenProc`, which answers the inverse of the `implementation` row — not
+*what overrides this* but *what does this override*. Both were **recorded as gaps for a day**
+rather than exported on sight, then closed together at ABI 0.31 once the user asked for them.
 
-It is left OPEN rather than closed on sight, because an export nobody has asked for is a contract
-we then owe forever. `dm_dme_entries` is half a day whenever a second client wants it; until then
-the row is the record that this is a decision and not an oversight.
+That order is the point. The rule's job is to make the divergence visible; whether to export is a
+product call, because an export nobody has asked for is a contract owed forever.
 
-Before it, **no gaps remained on any surface** — M8 closed the last blank row on 2026-08-08, and the `.dmi` row
+Before them, **no gaps remained on any surface** — M8 closed the last blank row on 2026-08-08, and the `.dmi` row
 gained a caller on 2026-08-12. That row had been recording a second kind of gap, and the one this
 project has been caught by before: the server answered `dm/iconStates` and the VS Code client never
 asked, exactly as it never asked for `dm/objectTree` for two milestones. **A row is not parity until

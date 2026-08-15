@@ -31,7 +31,7 @@ static int g_checks = 0;
 // needs no edit here; losing them fails loudly. That direction is the one that was invisible —
 // a RID where a block silently stopped running still printed "all checks passed", and CI ran
 // ctest with --output-on-failure, so on a pass nothing printed the number at all.
-static const int kMinimumChecks = 263;
+static const int kMinimumChecks = 269;
 
 static void check(bool condition, const char *what)
 {
@@ -856,6 +856,20 @@ static void test_references(const fs::path &dir)
         dm_free(json);
     }
 
+    // What THIS overrides - the inverse of the references query's "override" kind. refs.dm
+    // declares /mob/guy/proc/hurt() fresh, so it overrides nothing, and that is an answer.
+    json = nullptr;
+    check(dm_query_json(
+              ws, "{\"query\":\"overriddenProc\",\"path\":\"/mob/guy\",\"name\":\"hurt\"}", &json) == DM_OK,
+          "overriddenProc: a fresh declaration answers rather than failing");
+
+    if (json)
+    {
+        check(std::string(json).find("\"overrides\":false") != std::string::npos,
+              "overriddenProc: overriding nothing is reported, not an error");
+        dm_free(json);
+    }
+
     // The editor surfaces, added at 0.19 because the LSP had them and the C ABI did not.
     json = nullptr;
     check(dm_folding_ranges(ws, "refs.dm", &json) == DM_OK, "editor: folding succeeds");
@@ -988,6 +1002,28 @@ static void test_references(const fs::path &dir)
     check(dm_dme_is_ticked(tw, "src\\a.dm") == 1, "dme: an entry reads as ticked");
     check(dm_dme_is_ticked(tw, "src/a.dm") == 1, "dme: separators normalise");
     check(dm_dme_is_ticked(tw, "src\\b.dm") == 0, "dme: a missing entry is not ticked");
+
+    // The block's entries, in file order, spelled as the block spells them - which is the same
+    // spelling the tickmark calls take, so an entry from here feeds dm_dme_untick directly.
+    json = nullptr;
+    check(dm_dme_entries(tw, &json) == DM_OK, "dme: entries answers");
+
+    if (json)
+    {
+        check(std::string(json).find("src\\\\a.dm") != std::string::npos,
+              "dme: the entry comes back as the block spells it");
+        dm_free(json);
+    }
+
+    json = nullptr;
+    check(dm_dme_entries(ws, &json) == DM_OK, "dme: entries on a blockless .dme still succeeds");
+
+    if (json)
+    {
+        check(std::string(json).find("\"entries\":[]") != std::string::npos,
+              "dme: no block is an empty list rather than an error");
+        dm_free(json);
+    }
 
     json = nullptr;
     check(dm_dme_tick(tw, "src\\b.dm", &json) == DM_OK, "dme: tick into a real block succeeds");

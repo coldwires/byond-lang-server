@@ -16,9 +16,9 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.33 MB, ABI 0.30, 39 exports, cdecl on every platform
+    dm_core.dll     2.33 MB, ABI 0.31, 40 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,389 green (1,319 core, 45 native, 25 lsp)
+    tests           1,394 green (1,323 core, 45 native, 26 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -26,7 +26,7 @@ WHERE WE ARE
                     re-baseline. The suite is green on it end to end,
                     tripwire included, and so are all four corpus
                     baselines and the language notes' appendix
-    abi-smoke       263 checks from C++, reporting 0.30 on win-x64 AND win-x86
+    abi-smoke       269 checks from C++, reporting 0.31 on win-x64 AND win-x86
                     - both re-published and re-run locally 2026-08-15. FIVE of
                     six RIDs were green in CI at 0.21
                     - win-x64, win-x86, linux-x64, linux-arm64, osx-arm64.
@@ -40,7 +40,13 @@ WHERE WE ARE
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
     include graph   102/102 against dm.exe -l, order identical after M9
-    one keystroke   10 ms on mlaas (target was 30), 909 ms on tgstation
+    one keystroke   13-14 ms on mlaas (target was 30), ~1,340 ms on tgstation
+                    - re-measured 2026-08-15. The 10 ms and 909 ms recorded on
+                    2026-08-04 are not reproducible on this machine today: the
+                    SAME M9 commit now reads 11-12 and ~1,040, so about 15% is
+                    machine state and the rest is eleven days of product
+                    growth. mlaas is still well inside its 30 ms target;
+                    tgstation grew 29% and is the tree-merge item's problem
     diagnostics     ZERO INVENTED EVERYWHERE - mlaas 0, madridspy 0, and
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
@@ -84,18 +90,15 @@ WHAT'S NEXT
        type (4), bad variable (4), then the tail. 74 of 255 agreed. Moved
        DOWN the list 2026-08-15, the user's call - each remaining class is
        its own probe matrix rather than the cheap sweep the count suggests.
-    3. M9's tree merge, diff-patching the previous tree. 411 ms of
-       tgstation's 909 and the last whole-project phase. Three traps in
+    3. M9's tree merge, diff-patching the previous tree - the last
+       whole-project phase, and where tgstation's 29% growth since
+       2026-08-04 lands. Three traps in
        PLAN 6 M9; write the test for each before the code.
     4. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
        probe matrix first, move directive-head detection to collection time,
        retire FlushPending's splitting in the same change.
     5. Type rename; incremental LSP sync and incremental re-lex within a
        file, both waiting for a profile to ask.
-    6. dm_dme_entries on the ABI and the LSP, if the capability matrix's
-       one open gap should close rather than stay recorded. A product call:
-       an export nobody asked for is a contract owed forever, and the
-       in-process consumer is already served.
 
   DROPPED 2026-08-15, the user's call: sending the integration package to the
   Qt dev. He is a year or more from finishing his IDE, so the package waits

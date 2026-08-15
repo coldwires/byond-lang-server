@@ -178,6 +178,42 @@ public sealed class ObjectTree
         return _procsRedeclaredBelow!.Contains((owner, name));
     }
 
+    /// <summary>
+    /// The nearest ancestor of <paramref name="type"/> whose <paramref name="procName"/> this
+    /// type's own definition overrides: its path, and whether that definition is BYOND's own.
+    /// Null when nothing above declares the proc (or the type is unknown), i.e. not an override.
+    /// </summary>
+    public (TypePath Owner, bool IsBuiltin)? FindOverriddenProc(TypePath type, string procName)
+    {
+        if (Find(type) is not { } t)
+            return null;
+
+        // Redefining the type's OWN built-in (mob/Login(), world/New()) is the most common
+        // override of all, and it never involves an ancestor: the builtin and the user's
+        // definition share the symbol.
+        // SITES, not DeclaringCount: DeclaringCount counts only declarations that wrote a `proc/`
+        // segment, and a bare override never does - so keying on it excluded exactly the case
+        // this branch exists for. A seeded builtin carries no sites at all, so any site here is
+        // the project's own definition. Caught by A_bare_override_of_a_builtin_is_an_override,
+        // which returned null against the first version.
+        if (t.FindProc(procName) is { IsBuiltin: true, Sites.Count: > 0 })
+            return (t.Path, true);
+
+        foreach (TypeSymbol ancestor in InheritanceChain(t))
+        {
+            if (ReferenceEquals(ancestor, t) || ancestor.FindProc(procName) is not { } above)
+                continue;
+
+            if (above.IsBuiltin)
+                return (ancestor.Path, true);
+
+            if (above.DeclaringCount > 0)
+                return (ancestor.Path, false);
+        }
+
+        return null;
+    }
+
     /// <summary>Whether a descendant type re-declares this var with a <c>var/</c> segment.</summary>
     internal bool VarRedeclaredBelow(TypePath owner, string name)
     {

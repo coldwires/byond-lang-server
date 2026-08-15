@@ -655,6 +655,26 @@ int32_t dm_dme_is_ticked(dm_workspace workspace, const char* file);
 dm_status dm_dme_tick(dm_workspace workspace, const char* file, char** out_json);
 dm_status dm_dme_untick(dm_workspace workspace, const char* file, char** out_json);
 
+/*
+ * Every file DreamMaker's include block lists, in file order. Added in ABI 0.31.
+ * YOU FREE the result with dm_free.
+ *
+ *   { "entries": ["code\\mob.dm", "code\\obj.dm"] }
+ *
+ * Paths are spelled as the block spells them: relative to the project root, with
+ * backslashes, which is what DreamMaker writes and what the tickmark calls take.
+ *
+ * THE BLOCK, NOT THE INCLUDE GRAPH. This is what the checkbox maintains, which is
+ * a different question from what the project compiles: a file included from
+ * another .dm never appears here, and an entry inside an #if is skipped rather
+ * than guessed at. For what the build actually reaches, walk the graph.
+ *
+ * An empty list is an ANSWER - no .dme, no block, or nothing parseable in it -
+ * and not an error, because a caller drawing a file list has nothing to draw
+ * either way.
+ */
+dm_status dm_dme_entries(dm_workspace workspace, char** out_json);
+
 /* -- editor surfaces ------------------------------------------------------ */
 
 /*
@@ -1006,6 +1026,7 @@ dm_status dm_definition_at(dm_workspace workspace, const char *file,
  *   { "query": "subtypesOf", "path": "/obj", "limit": 500, "includeBuiltins": true }
  *   { "query": "members", "path": "/mob", "inherited": true, "includeBuiltins": true }
  *   { "query": "ancestorsOf", "path": "/mob" }                          0.14
+ *   { "query": "overriddenProc", "path": "/mob", "name": "Login" }      0.31
  *   { "query": "references", "path": "/mob/hp", "limit": 1000,
  *     "encoding": "utf16" }                                             0.14
  *
@@ -1043,6 +1064,21 @@ dm_status dm_definition_at(dm_workspace workspace, const char *file,
  *                                       you asked about
  *              "owner": "/atom",        which ancestor
  *              "file": "code/mob.dm" }
+ *
+ * overriddenProc (0.31) is the INVERSE of the references query's "override" kind:
+ * not what overrides this, but what THIS overrides.
+ *
+ *   { "query": "overriddenProc", "path": "/mob", "name": "Login",
+ *     "overrides": true, "owner": "/mob", "builtin": true }
+ *
+ * "overrides": false with an empty owner is an ANSWER, not an error - a fresh
+ * declaration overrides nothing, which is exactly what dm.exe's own no_parent
+ * warning reports on. Draw your "go to overridden" affordance from the flag.
+ *
+ * The builtin case is the type's OWN: a project writing /mob/Login() overrides
+ * /mob's builtin rather than an ancestor's, so owner is /mob and builtin is true.
+ * There is nothing to open there - nothing declares a builtin - which is why the
+ * flag is separate from the path.
  *
  * ancestorsOf (0.14) answers the whole inheritance chain in one call, nearest
  * first, self excluded, as <node> objects with depth-0 children:

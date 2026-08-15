@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.30** · 1,389 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,394 tests ·
 > Last updated: 2026-08-15
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -477,12 +477,12 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
-- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.30 and passing 263 checks on x64 and
+- ✅ `tests/abi-smoke` — CMake C++ program, current with ABI 0.31 and passing 269 checks on x64 and
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,389 today (1,319
-  core, 45 native, 25 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,394 today (1,323
+  core, 45 native, 26 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -1853,7 +1853,7 @@ keeps ticking around the stopped proc, and `world.time` does not stop.
 
 ## 7. ABI contract
 
-`abi/dm_core.h` is the source of truth. ABI 0.30, 39 exports: version, last error, free, workspace
+`abi/dm_core.h` is the source of truth. ABI 0.31, 40 exports: version, last error, free, workspace
 open/close/root, the standalone open, injected defines, buffer set/close, invalidate, the readiness
 pair (`dm_tree_ready`/`dm_build_tree`), classify plus its three
 accessors, document symbols, completion, definition, hover, signature help, diagnostics,
@@ -3775,6 +3775,22 @@ it.
   open gap since M8**, because `Entries` has no ABI and no LSP equivalent. That gap is left
   RECORDED rather than closed on sight: an export nobody has asked for is a contract owed forever,
   and §3's rule is satisfied by making the divergence visible, not by exporting on reflex.
+- **2026-08-15** — **ABI 0.31 closes both matrix gaps, a day after opening them.** `dm_dme_entries`
+  reads DreamMaker's include block entry by entry, and `dm_query_json` gains `overriddenProc` —
+  what a type's definition of a proc OVERRIDES, the inverse of the `references` query's `override`
+  kind. Both went to the LSP in the same pass (`dm/dmeEntries`, `dm/overriddenProc`).
+  **The order is the point, and it is worth keeping.** Both capabilities appeared in-process on
+  2026-08-15 and were **recorded as gaps rather than exported on sight**, because an export nobody
+  has asked for is a contract owed forever; they shipped when the user asked, a day later. §3's
+  rule exists to make the divergence visible, not to force an export — and the matrix is back to
+  no gaps on any surface.
+  Two answers are deliberately not errors: overriding **nothing** (a fresh declaration, which is
+  what `no_parent` reports on) comes back as `overrides: false`, and an **empty** entry list comes
+  back for a `.dme` with no block. A caller draws its affordance from the flag rather than from
+  whether the call succeeded. The builtin case is the type's own — `/mob/Login()` answers `/mob`
+  with `builtin: true`, and there is nothing to open, since nothing declares a builtin.
+  269 checks reporting 0.31 on x64 and x86, both republished; six smoke checks, a protocol test
+  covering both answers, 1,394 tests, 40 exports.
 - **2026-08-15** — **`ConstantEvaluator` ships at ABI 0.30, and the hard part was DM's arithmetic
   rather than the folding.** `var/cooldown = 5 * 60` now carries the 300 beside the author's text,
   on completion items and hover alike — `constant`, never replacing `value`, because what someone

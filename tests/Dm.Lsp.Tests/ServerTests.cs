@@ -509,6 +509,41 @@ public sealed class ServerTests : IDisposable
     }
 
     /// <summary>
+    /// `dm/overriddenProc` answers what a definition overrides — the inverse of `implementation`.
+    /// Overriding NOTHING is an answer rather than an error, since that is the case dm.exe's own
+    /// `no_parent` warning reports on, and a client draws its affordance from the flag.
+    /// </summary>
+    [Fact]
+    public void Dm_overridden_proc_reports_both_answers()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/mob\\n\\tproc/base()\\n\\t\\treturn 1\\n/mob/guy\\n\\tbase()\\n\\t\\treturn 2\\n\\tproc/fresh()\\n\\t\\treturn 3\\n\"}}}}}}");
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"dm/overriddenProc\",\"params\":{{\"path\":\"/mob/guy\",\"name\":\"base\"}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"dm/overriddenProc\",\"params\":{{\"path\":\"/mob/guy\",\"name\":\"fresh\"}}}}");
+
+        List<JsonDocument> frames = Frames();
+
+        JsonElement overriding = frames.Single(
+            f => f.RootElement.TryGetProperty("id", out JsonElement id) && id.GetInt32() == 60)
+            .RootElement.GetProperty("result");
+
+        Assert.True(overriding.GetProperty("overrides").GetBoolean());
+        Assert.Equal("/mob", overriding.GetProperty("owner").GetString());
+        Assert.False(overriding.GetProperty("builtin").GetBoolean());
+
+        JsonElement fresh = frames.Single(
+            f => f.RootElement.TryGetProperty("id", out JsonElement id) && id.GetInt32() == 61)
+            .RootElement.GetProperty("result");
+
+        Assert.False(fresh.GetProperty("overrides").GetBoolean());
+        Assert.Equal(string.Empty, fresh.GetProperty("owner").GetString());
+    }
+
+    /// <summary>
     /// The dm/* methods answer with the same shapes dm_query_json freezes in abi/schema/: a node
     /// with childCount and parentType, and members that say which ancestor owns them.
     /// </summary>

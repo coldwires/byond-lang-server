@@ -324,6 +324,52 @@ internal static unsafe class Exports
     public static int DmeUntick(IntPtr workspace, byte* filePath, byte** outJson)
         => DmeEditExport(workspace, filePath, outJson, ticking: false);
 
+    /// <summary>
+    /// Every file DreamMaker's own include block lists, in file order. Added in ABI 0.31.
+    /// </summary>
+    /// <remarks>
+    /// The BLOCK, not the include graph — what the checkbox maintains, which is a different
+    /// question from what the project compiles. An empty list is the answer when there is no
+    /// <c>.dme</c>, no block, or nothing parseable in it, not an error.
+    /// </remarks>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "dm_dme_entries")]
+    public static int DmeEntries(IntPtr workspace, byte** outJson)
+    {
+        if (outJson is null)
+            return Fail(DmStatus.InvalidArgument, "out_json is null");
+
+        *outJson = null;
+
+        try
+        {
+            if (!HandleTable.TryGet(workspace, out Workspace ws))
+                return Fail(DmStatus.InvalidHandle, "workspace handle is invalid or closed");
+
+            StringBuilder json = new();
+            json.Append("{\"entries\":[");
+
+            bool first = true;
+
+            foreach (string entry in ws.DmeEntries())
+            {
+                if (!first)
+                    json.Append(',');
+
+                first = false;
+                SymbolJson.AppendString(json, entry);
+            }
+
+            json.Append("]}");
+
+            *outJson = NativeStrings.Allocate(json.ToString());
+            return (int)DmStatus.Ok;
+        }
+        catch (Exception ex)
+        {
+            return Fail(DmStatus.Internal, ex.Message);
+        }
+    }
+
     private static int DmeEditExport(IntPtr workspace, byte* filePath, byte** outJson, bool ticking)
     {
         if (outJson is null)
