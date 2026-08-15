@@ -29,6 +29,54 @@ namespace Dm.Core.Symbols;
 /// </remarks>
 internal static class TypeTreeBuilder
 {
+    private static readonly TypePath ListPath = TypePath.Parse("/list");
+
+    /// <summary>
+    /// Which type, if any, a group header hands its child vars — see the group-header case in
+    /// <see cref="Walk"/>. A header carrying a `var` segment starts fresh from the segments after
+    /// it; a nested header inside a var block EXTENDS what it was given; a proc/verb header and a
+    /// header met outside any var block hand down nothing.
+    /// </summary>
+    private static (bool InVar, TypePath? Type) VarGroupType(
+        PathSyntax path, bool inVarGroup, TypePath? current)
+    {
+        IReadOnlyList<string> segments = path.Segments;
+
+        if (segments.Count > 0 && segments[^1] is "proc" or "verb")
+            return (false, null);
+
+        int varIndex = -1;
+
+        for (int i = 0; i < segments.Count; i++)
+        {
+            if (string.Equals(segments[i], "var", StringComparison.Ordinal))
+            {
+                varIndex = i;
+                break;
+            }
+        }
+
+        if (varIndex < 0 && !inVarGroup)
+            return (false, null);
+
+        List<string>? typeSegments = null;
+
+        for (int i = varIndex < 0 ? 0 : varIndex + 1; i < segments.Count; i++)
+        {
+            if (!SyntaxFacts.IsVarModifier(segments[i]))
+                (typeSegments ??= new List<string>()).Add(segments[i]);
+        }
+
+        TypePath? baseType = varIndex >= 0 ? null : current;
+
+        if (typeSegments is null)
+            return (true, baseType);
+
+        return (true, baseType is { } within
+            ? within.Append(typeSegments)
+            : TypePath.FromSegments(typeSegments));
+    }
+
     /// <summary>Builds a tree from files already in include order.</summary>
     public static ObjectTree Build(
         IEnumerable<(string File, ParseResult Parse)> files,
@@ -91,7 +139,9 @@ internal static class TypeTreeBuilder
         SourceText text,
         DeclarationSyntax declaration,
         TypePath enclosing,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TypePath? inheritedVarType = null,
+        bool inVarGroup = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -103,12 +153,23 @@ internal static class TypeTreeBuilder
             // It can still carry a type path in front of the keyword. `mob/proc` heads a block of
             // procs on /mob, so only the trailing keyword is the marker — passing the enclosing path
             // through unchanged puts every child on the root instead.
+            //
+            // A var-flavoured header's segments AFTER the marker — or a nested header's whole
+            // path, once inside a var block — are the children's DECLARED TYPE: `var/list` heads
+            // /list vars (madridspy's market_items, warklan's ban lists), and `var` over
+            // `obj/small_thing` over names types them /obj/small_thing. Modifier words modify
+            // instead, and a proc/verb header carries no type at all.
             case TypeDeclarationSyntax { IsGroupHeader: true } group:
             {
                 TypePath owner = GroupOwner(enclosing, group.Path);
+                (bool childInVar, TypePath? childVarType) =
+                    VarGroupType(group.Path, inVarGroup, inheritedVarType);
 
                 foreach (DeclarationSyntax member in group.Members)
-                    Walk(contribution, file, text, member, owner, cancellationToken);
+                {
+                    Walk(contribution, file, text, member, owner, cancellationToken,
+                        childVarType, childInVar);
+                }
 
                 break;
             }
@@ -125,10 +186,10 @@ internal static class TypeTreeBuilder
             }
 
             case VarDeclarationSyntax variable:
-                AddVar(contribution, file, text, variable, enclosing);
+                AddVar(contribution, file, text, variable, enclosing, inheritedVarType);
 
                 foreach (VarDeclarationSyntax sibling in variable.Siblings)
-                    AddVar(contribution, file, text, sibling, enclosing);
+                    AddVar(contribution, file, text, sibling, enclosing, inheritedVarType);
 
                 break;
 
@@ -140,7 +201,7 @@ internal static class TypeTreeBuilder
 
     private static void AddVar(
         TreeContribution contribution, string file, SourceText text, VarDeclarationSyntax variable,
-        TypePath enclosing)
+        TypePath enclosing, TypePath? inheritedType = null)
     {
         // What the leading segments mean depends on how the variable was introduced. Under a `var`
         // they are its declared type and it belongs to the enclosing type; without one this is a
@@ -164,9 +225,15 @@ internal static class TypeTreeBuilder
                 parentType = TypePath.FromSegments(path.Path.Segments);
         }
 
+        // Brackets TYPE a var: `var/players[0]` is a /list to dm.exe — mlaas calls
+        // `players.Add()` on exactly that — so a bracketed declaration with no written type
+        // carries ListPath rather than nothing. A written type wins over brackets, and both win
+        // over a group header's inherited type: `var/list/mob/L[]` stays what it says.
         TypePath? declaredType = variable.DeclaredType is { } written && written.Segments.Count > 0
             ? TypePath.FromSegments(written.Segments)
-            : null;
+            : variable.HasBrackets
+                ? ListPath
+                : inheritedType;
 
         // The initialiser AS WRITTEN, rendered from source rather than from the tree, for the same
         // reason a parameter's default is: an expression we model loosely still shows the author's

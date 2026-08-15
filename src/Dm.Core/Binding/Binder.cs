@@ -962,11 +962,26 @@ public sealed class Binder
         // A bare-identifier RECEIVER is not reported by the identifier check: dm.exe's message
         // there folds the whole dotted text into one symbol — `mob.name: undefined var`, pinned
         // by errors/bare_type_receiver — so an identifier-shaped report would be a different
-        // diagnostic than the compiler's, invented and missed at once.
+        // diagnostic than the compiler's, invented and missed at once. Read-marking is deferred
+        // too: dm.exe counts a member access as a USE of its receiver only when the access
+        // COMPILES — unused_var fires beside every failing `.`, untyped receiver and missing
+        // member alike (probed; errors/semantic pins the typed-receiver half) — while a
+        // `:`-family access and a resolving `.` are ordinary reads.
         if (member.Target is IdentifierExpressionSyntax receiverName)
-            BindIdentifier(receiverName, scope, invoked: false, written: false, checkUndefined: false);
+        {
+            BindIdentifier(receiverName, scope, invoked: false, written: false,
+                checkUndefined: false, markRead: false);
+        }
         else
+        {
             BindExpression(member.Target, scope, invoked: false);
+        }
+
+        void MarkReceiverRead()
+        {
+            if (member.Target is IdentifierExpressionSyntax name && scope.Find(name.Name) is { } local)
+                local.Read = true;
+        }
 
         // `:` widens the check to every subtype of the declared type, and on an untyped receiver it
         // asks only whether the name exists as a member of anything in the program. Both are real
@@ -974,6 +989,8 @@ public sealed class Binder
         // code, so it waits until the `.` case is proven at zero invented.
         if (member.Kind != MemberAccessKind.Dot)
         {
+            MarkReceiverRead();
+
             if (UncertainWants(member.Name))
                 _uncertain!(new Services.UncertainSite(
                     _file ?? string.Empty, member.NameSpan, Services.UncertainReason.ColonAccess));
@@ -992,22 +1009,42 @@ public sealed class Binder
                 _uncertain!(new Services.UncertainSite(
                     _file ?? string.Empty, member.NameSpan, Services.UncertainReason.UntypedReceiver));
 
-            // A bare-identifier receiver that resolves as NO var anywhere is not an untyped
-            // receiver — it is dm.exe's error, with the whole dotted text as its symbol:
-            // `mob.name: undefined var` (errors/bare_type_receiver pins the form). An untyped
-            // local, member or global resolves as a var and stays silent here, which keeps the
-            // deliberate `.`-on-untyped miss exactly as it was. Reads only — the invoked form's
-            // message is unprobed.
-            if (!invoked
-                && member.Target is IdentifierExpressionSyntax bare
-                && scope.Find(bare.Name) is null
-                && !IsCompilerProvidedName(bare.Name)
-                && !BareNameIsAVar(bare.Name, scope))
+            // Two errors share dm.exe's dotted-symbol form here, and this branch is Dot-only —
+            // the `:` family returned above. A receiver that resolves as NO var anywhere is
+            // `mob.name: undefined var` (errors/bare_type_receiver). And `.` through an UNTYPED
+            // var rejects every member, the right one included — probed across every spelling:
+            // local, parameter, `as`-clause parameter, a member reached by bare name, and a
+            // global, with the member existing elsewhere or nowhere, and the invoked form as the
+            // proc twin (`x.f: undefined proc`). Certainty is what kept the untyped half out of
+            // the first pass, and it is the guard: a BUILTIN var with no recorded type is OUR
+            // gap — five are deliberately untyped because no probe discriminates them — so only
+            // a declaration we can see reports.
+            if (member.Target is IdentifierExpressionSyntax bare && !IsCompilerProvidedName(bare.Name))
             {
-                _diagnostics.Add(Diagnostic.Error(
-                    "DM0400", member.NameSpan, $"{bare.Name}.{member.Name}: undefined var"));
+                bool untypedDeclared =
+                    scope.Find(bare.Name) is { DeclaredType: null }
+                    || (scope.Find(bare.Name) is null && UntypedProjectVar(bare.Name, scope));
+
+                bool nowhere = scope.Find(bare.Name) is null
+                    && !untypedDeclared
+                    && !BareNameIsAVar(bare.Name, scope);
+
+                // The nowhere-invoked form (`mob.f()`) is unprobed and stays a miss.
+                if (untypedDeclared || (nowhere && !invoked))
+                {
+                    _diagnostics.Add(invoked
+                        ? Diagnostic.Error(
+                            "DM0401", member.NameSpan, $"{bare.Name}.{member.Name}: undefined proc")
+                        : Diagnostic.Error(
+                            "DM0400", member.NameSpan, $"{bare.Name}.{member.Name}: undefined var"));
+
+                    return;
+                }
             }
 
+            // Unreported — a builtin-untyped receiver, a compiler-provided name, or a
+            // non-identifier — is an access dm.exe compiles, so the receiver was used.
+            MarkReceiverRead();
             return;
         }
 
@@ -1016,6 +1053,8 @@ public sealed class Binder
 
         if (exists)
         {
+            MarkReceiverRead();
+
             if (SinkWants(member.Name) && DeclaringOwner(type, member.Name, isProc) is { } declaring)
             {
                 ReferenceKind kind = invoked
@@ -1166,7 +1205,7 @@ public sealed class Binder
     /// </remarks>
     private void BindIdentifier(
         IdentifierExpressionSyntax identifier, Scope scope, bool invoked, bool written,
-        bool checkUndefined = true)
+        bool checkUndefined = true, bool markRead = true)
     {
         // A local shadows a member whatever its type, so it settles the name before anything else
         // asks about it. Marking the read here — ahead of the sink gate rather than behind it — is
@@ -1191,7 +1230,7 @@ public sealed class Binder
                 return;
             }
 
-            if (!written)
+            if (!written && markRead)
                 local.Read = true;
 
             // Locals and parameters are not index symbols.
@@ -1283,6 +1322,38 @@ public sealed class Binder
             || _tree.Root.FindProc(name) is not null;
 
     /// <summary>
+    /// A var whose declarations we can SEE carry no type ANYWHERE on the chain — the certainty
+    /// the untyped-receiver check needs. A typed declaration at any depth wins over the untyped
+    /// override shadowing it (tgstation's bots and `ai_controller`), and a builtin with no
+    /// recorded type at any depth is our own table's gap, never reported.
+    /// </summary>
+    private bool UntypedProjectVar(string name, Scope scope)
+    {
+        if (_tree.Find(scope.EnclosingType) is { } enclosing)
+        {
+            bool anyVar = false;
+            bool anyBuiltin = false;
+
+            foreach (TypeSymbol candidate in _tree.InheritanceChain(enclosing))
+            {
+                if (candidate.FindVar(name) is not { } found)
+                    continue;
+
+                if (found.DeclaredType is not null)
+                    return false;
+
+                anyVar = true;
+                anyBuiltin |= found.IsBuiltin;
+            }
+
+            if (anyVar)
+                return !anyBuiltin;
+        }
+
+        return _tree.Root.FindVar(name) is { IsBuiltin: false, DeclaredType: null };
+    }
+
+    /// <summary>
     /// The receiver's <b>written</b> type, or null when nothing says what it is.
     /// </summary>
     private TypePath? ReceiverType(ExpressionSyntax? target, Scope scope) => target switch
@@ -1324,7 +1395,7 @@ public sealed class Binder
         MemberAccessExpressionSyntax { Kind: MemberAccessKind.Dot } chain
             when ReceiverType(chain.Target, scope) is { } owner
                 && _tree.Find(owner) is { } ownerType
-                && _tree.ResolveVar(ownerType, chain.Name) is { DeclaredType: { } declared }
+                && _tree.ResolveVarType(ownerType, chain.Name) is { } declared
             => declared,
 
         _ => null,
@@ -1346,8 +1417,10 @@ public sealed class Binder
         if (name == "usr")
             return UsrType;
 
+        // The chain's first non-null type, not the first symbol's — an untyped override on a
+        // subtype must not hide the typed declaration above it (see ObjectTree.ResolveVarType).
         if (_tree.Find(scope.EnclosingType) is { } enclosing
-            && _tree.ResolveVar(enclosing, name) is { DeclaredType: { } member })
+            && _tree.ResolveVarType(enclosing, name) is { } member)
         {
             return member;
         }
@@ -1357,6 +1430,7 @@ public sealed class Binder
     }
 
     private static readonly TypePath UsrType = TypePath.Parse("/mob");
+    private static readonly TypePath ListType = TypePath.Parse("/list");
 
     private static TypePath PathOf(PathSyntax path, TypePath enclosing)
         => path.Anchor == PathAnchor.Absolute
@@ -1402,11 +1476,15 @@ public sealed class Binder
 
     private void Declare(LocalVarStatementSyntax local, Scope scope, LocalKind kind)
     {
+        // Brackets TYPE a local: `var/L[0]` is a /list to dm.exe, sized or not, and a written
+        // type still wins — the same rule the tree applies to type-level bracket vars.
         LocalRecord record = new(
             local.Name,
             local.DeclaredType is { Segments.Count: > 0 } declared
                 ? TypePath.FromSegments(declared.Segments)
-                : null,
+                : local.HasBrackets
+                    ? ListType
+                    : null,
             local.NameSpan,
             kind);
 

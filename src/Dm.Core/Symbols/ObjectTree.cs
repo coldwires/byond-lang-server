@@ -247,6 +247,24 @@ public sealed class ObjectTree
         _procsRedeclaredBelow = procs;
     }
 
+    /// <summary>
+    /// The nearest DECLARED type a var of this name carries anywhere along the chain. A bare
+    /// override on a subtype is an untyped <see cref="VarSymbol"/> shadowing the typed
+    /// declaration above it — tgstation's bots override `ai_controller` per type while /atom
+    /// declares it `/datum/ai_controller` — so the type is the chain's first non-null, not the
+    /// first symbol's.
+    /// </summary>
+    internal TypePath? ResolveVarType(TypeSymbol type, string name)
+    {
+        foreach (TypeSymbol candidate in InheritanceChain(type))
+        {
+            if (candidate.FindVar(name) is { DeclaredType: { } declared })
+                return declared;
+        }
+
+        return null;
+    }
+
     /// <summary>Finds a var on a type or anything it inherits from.</summary>
     internal VarSymbol? ResolveVar(TypeSymbol type, string name)
     {

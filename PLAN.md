@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.28** · 1,338 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.28** · 1,345 tests ·
 > Last updated: 2026-08-11
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -475,7 +475,7 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,338 today (1,269
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,345 today (1,276
   core, 44 native, 25 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
@@ -1264,7 +1264,7 @@ because nothing else in a DM toolchain reports them. The parser has to model the
 | A var name colliding with a builtin (`x`/`y` on an atom) | duplicate-definition **error** | already fatal; surface it early |
 | `proc/` declared twice on one type | duplicate-definition error | **shipped as `DM0403`** — on one type, on an ancestor at any depth, and against a builtin (probes dup1–dup9). dm.exe reports a pair, "duplicate definition" on the later line and "previous definition" on the first; each file reports its own half, so a same-file pair matches line for line. **The cross-file "previous definition" half closed 2026-08-13**: the tree carries a once-per-build redeclaration index instead of the per-bind descendant scan the miss was deferred over, dm reports the ancestor's line once however many descendants duplicate (probed), and the var-over-ancestor case pairs the same way (probed — never recorded before). Fixtures `errors/dup_cross_proc` and `dup_cross_var`, exact against dm.exe. Overrides and var/proc name sharing stay clean. The var half SHIPPED 2026-08-12: the same-type pair is inverted (first line called the duplicate), a BARE OVERRIDE is not a declaration, and the sites live on `TypeSymbol` because a `VarSymbol` is cached in a `TreeContribution` and replayed. Fixture `errors/dup_var`. |
 | A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
-| `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | *"`x` is untyped, so `.` cannot compile here — write `var/obj/item/x`"*. This is the warning half of the M6 completion trade, and the fix is a quick-edit rather than prose. |
+| `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | **shipped 2026-08-14 as DM0400/DM0401 in dm.exe's own dotted form** (`x.hp: undefined var`, `x.f: undefined proc`) — the message matches the compiler so diagdiff agrees; the quick-edit wording ("write `var/obj/item/x`") waits for code actions, where it belongs. The certainty guard that kept this deferred is builtins with no recorded type, which stay silent as our own gap. Shipping it flushed out the bracket/`var/list`-header typing rules (§8) across three corpora. |
 
 The first one is **done**, and it is the shape the rest should follow. It was found in a shipped game
 where four mission procs were declared that way and one is called from another file — a runtime
@@ -2253,6 +2253,8 @@ that the two candidate behaviours produce different compiler output.
 | **A lone identifier statement is a LABEL — the colon is optional.** | Probed 2026-08-13: a bare `blah` line in a proc compiles with dm.exe's own `warning (unused_label): blah: unused label`, and a `goto Next` … `Next` pair compiles clean. warklan writes the colonless form throughout its combat code (`Begin`, `Next`, `end`). We read the line as an expression statement — a bare name resolving nowhere. Runtime checks in `ok/parsing.dm`, both directions of the jump. |
 | **The `set` vocabulary is ten names, identical in verbs and procs.** | Probed 2026-08-13, all ten in one verb AND the same ten in a global proc, both compiling clean: `name desc category hidden instant invisibility popup_menu background waitfor src`. An unknown name is *"X: undefined var"* on the `set` line (probes b2_set_unknown, b4_set_bogus_in), and `loop_checks` — once documented — now errors the same way (probe w3012). `SyntaxFacts.SetNames`; runtime check in `ok/parsing.dm`. |
 | **`usr` does not exist in an initializer, and a bare call is PROCS-only.** | Probed 2026-08-13 in three initializer spellings — a datum var, a global var and a bare override (`/world/name = usr`) — each *"usr: undefined var"*. And the call/value split runs both ways: `var/x = 5` then `x()` is *"x: undefined proc"* **plus** `unused_var` on x, so a call neither resolves through a var nor reads it — while the NAME still resolves past the shadowing local to any proc, which is how mlaas calls the builtin `length()` with a parameter named `length` in scope. The value-position twin (§ vars-only, `&f`/`initial(p)`) was pinned the same day. Fixture `errors/undefined_more`. |
+| **`.` on an untyped var rejects in every spelling, and the receiver only counts as used when the access compiles.** | Probed 2026-08-14 across the matrix the original local-only probe left open: an untyped LOCAL, PARAMETER, `as`-clause parameter, MEMBER reached by bare name, and GLOBAL all reject every member — existing elsewhere or nowhere — with the whole dotted text as dm's symbol (`x.hp: undefined var`), and the invoked form is the proc twin (`x.f: undefined proc`). No degradation anywhere: the reference's degrade-to-`:` rule covers expressions, never a bare name. And `unused_var` fires BESIDE the error — for untyped receivers and for typed receivers whose member is missing alike — so a member access is a USE of its receiver only when it compiles. Fixture `errors/untyped_dot`, exact on all eight lines, warnings included. |
+| **Brackets TYPE a var, and a `var/list` block header types its children.** | `var/players[0]` is a `/list` — mlaas calls `players.Add()` on exactly that shape throughout — as is `var/L[]`, sized or not, at type level and proc level alike. And a block header's segments are its children's DECLARED TYPE: madridspy's `var/list` block heads `/list` vars, and the nested forms — `var` over `list` over names, `var` over `obj/small_thing` over names, the same at proc level — all type their children (probed, all four shapes in one unit). A written type wins over brackets, and both win over a header's type — and an untyped OVERRIDE on a subtype hides none of them: the effective type is the inheritance chain's first non-null, which is how tgstation's bots override `ai_controller` per type while /atom's declaration keeps it `/datum/ai_controller`. These were invisible until the reject-everything check ran: nothing had ever asked what type an untyped-looking var carried. Runtime check in `ok/parsing.dm`. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
 comment would otherwise nest and swallow the remainder of the file. Found in real code.
@@ -3606,7 +3608,32 @@ it.
   Fixture `errors/undefined_more` (0 missed, 0 invented), nine binder tests, five expander
   tests, four runtime checks (`ok/` at 108), all four corpora at baseline, and the ratchet moves
   **69 → 74 of 255** (`b2_name_mob`, `b2_set_unknown`, `b4_set_bogus_in`, `w3009_call_by_ref`,
-  `w3012_loop_checks`). `FlushPending` splits a pending run at any line-starting object-like macro
+  `w3012_loop_checks`).
+- **2026-08-14** — **`.` on an untyped var ships — the deliberate miss since the binder's first
+  day — and the three typing rules it flushed out.** The probes first widened the rule far past
+  the recorded local-only case: every spelling rejects (local, parameter, `as`-clause parameter,
+  member by bare name, global; member existing elsewhere or nowhere), the invoked form is
+  `x.f: undefined proc`, and `unused_var` fires BESIDE the error — a member access counts as a
+  use of its receiver only when it compiles, typed receivers with missing members included, so
+  the binder's read-marking moved to the resolution points. The certainty guard that kept this
+  deferred is narrow now: a builtin var with no recorded type stays silent as our own table's
+  gap (five are deliberately untyped).
+  **The gate then found the real work: four typing rules nothing had ever asked about**, 122
+  invented across three corpora and 319 on tgstation at first run. Brackets TYPE a var
+  (`var/players[0]` is a /list — mlaas calls `.Add()` on it throughout), so `HasBrackets` now
+  rides the declaration nodes at both levels and yields /list where no type is written. A
+  `var/list` BLOCK HEADER types its children (madridspy's market block, warklan's ban lists),
+  so the tree walk threads an inherited var type through group headers — segments after `var`,
+  modifiers excluded, nested headers extending it — and the statement parser hands a child
+  header's path to the block beneath it (mlaas's `var` over `obj/small/egg` over names). Probed
+  as four shapes in one unit; all four had lost the type. And an untyped OVERRIDE must not hide
+  the typed declaration above it: tgstation's bots override `ai_controller` per type while
+  /atom declares it `/datum/ai_controller`, and the nearest-symbol read called it untyped —
+  `ObjectTree.ResolveVarType` now takes the chain's first non-null type, used by the receiver
+  resolution, the chain case and the untyped check alike.
+  Fixture `errors/untyped_dot` exact on all eight lines, warnings included; four binder tests
+  reshaped to dm's error-plus-unused pairs; `ok/` runtime check for the typing rules; all four
+  corpora at baseline 0/0/0. `FlushPending` splits a pending run at any line-starting object-like macro
   whose body begins with `#`; the line renders to synthetic text and goes through the same
   lexer/scanner/`MacroDefinition.Parse` a written directive uses — the `CommandLineDefine`
   pattern — and the remainder expands after the table changed, so a later line of the same run

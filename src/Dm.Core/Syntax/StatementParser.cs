@@ -921,6 +921,35 @@ internal sealed class StatementParser
         return ParseLocalVarNames(start);
     }
 
+    /// <summary>
+    /// The type a var-block child header names for the block beneath it: its own declared-type
+    /// segments plus its name — `obj/small/egg` heads /obj/small/egg. A modifier-named header
+    /// (`tmp`) modifies rather than types, and heads nothing here.
+    /// </summary>
+    private static PathSyntax? HeaderTypePath(LocalVarStatementSyntax header)
+    {
+        if (header.DeclaredType is null && SyntaxFacts.IsVarModifier(header.Name))
+            return null;
+
+        List<string> segments = new();
+        List<TextSpan> spans = new();
+
+        if (header.DeclaredType is { } declared)
+        {
+            segments.AddRange(declared.Segments);
+            spans.AddRange(declared.SegmentSpans);
+        }
+
+        segments.Add(header.Name);
+        spans.Add(header.NameSpan);
+
+        return new PathSyntax(
+            PathAnchor.Absolute,
+            segments,
+            TextSpan.FromBounds(spans[0].Start, spans[^1].End),
+            spans);
+    }
+
     /// <summary>A copy carrying the block header's type where the child wrote none, siblings too.</summary>
     private static LocalVarStatementSyntax WithDeclaredType(
         LocalVarStatementSyntax child, PathSyntax declaredType)
@@ -938,7 +967,8 @@ internal sealed class StatementParser
             child.Initializer,
             siblings,
             child.Span,
-            child.Dimensions);
+            child.Dimensions,
+            child.HasBrackets);
     }
 
     /// <summary>Parses the indented children of a bare <c>var</c> block, each one a declaration.</summary>
@@ -1024,8 +1054,11 @@ internal sealed class StatementParser
 
         // `var/L[]` and `var/M[10]` are declaration brackets, not indexing. A size is an ordinary
         // expression and often reads a variable — `var/list/tier_list[max_tier]` — so it is kept
-        // rather than skipped; discarding it hid those reads from every consumer of the AST.
+        // rather than skipped; discarding it hid those reads from every consumer of the AST. The
+        // brackets themselves TYPE the var as /list, sized or not, which is why `var/L[0]` then
+        // `L.Add(x)` compiles — the fact rides separately because `[]` leaves no dimension.
         List<ExpressionSyntax>? dimensions = null;
+        bool hasBrackets = Current == TokenKind.OpenBracket;
 
         while (Current == TokenKind.OpenBracket)
         {
@@ -1147,7 +1180,8 @@ internal sealed class StatementParser
         }
 
         return new LocalVarStatementSyntax(
-            name, nameSpan, declaredType, modifiers, initializer, siblings, SpanFrom(start), dimensions);
+            name, nameSpan, declaredType, modifiers, initializer, siblings, SpanFrom(start),
+            dimensions, hasBrackets);
     }
 
     /// <summary>
@@ -1232,7 +1266,33 @@ internal sealed class StatementParser
             if (Current == TokenKind.Indent)
             {
                 _position++;
-                children.AddRange(ParseVarBlockChildren(modifiers));
+
+                // The child heading this deeper block contributes its TYPE to everything under
+                // it — mlaas writes
+                //     var
+                //         obj/small/egg
+                //             E
+                //             mine = null
+                // and reads E.bless() through /obj/small/egg. The header was parsed as the
+                // previous child; a modifier-named or initialised one heads nothing.
+                PathSyntax? nestedType =
+                    children.Count > 0
+                    && children[^1] is LocalVarStatementSyntax { Initializer: null, HasBrackets: false } header
+                        ? HeaderTypePath(header)
+                        : null;
+
+                List<StatementSyntax> nested = ParseVarBlockChildren(modifiers);
+
+                if (nestedType is not null)
+                {
+                    for (int i = 0; i < nested.Count; i++)
+                    {
+                        if (nested[i] is LocalVarStatementSyntax child)
+                            nested[i] = WithDeclaredType(child, nestedType);
+                    }
+                }
+
+                children.AddRange(nested);
 
                 if (Current == TokenKind.Dedent)
                     _position++;

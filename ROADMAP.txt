@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.29 MB, ABI 0.28, 39 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,338 green (1,269 core, 44 native, 25 lsp)
+    tests           1,345 green (1,276 core, 44 native, 25 lsp)
     BYOND 516.1686  the goldens are STAMPED to it and CI runs against it.
                     516.1686 is the newest build (2026-08-05); the suite is
                     green on it end to end, tripwire included

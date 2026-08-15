@@ -39,7 +39,8 @@ internal sealed class LocalVarStatementSyntax : StatementSyntax
         ExpressionSyntax? initializer,
         IReadOnlyList<LocalVarStatementSyntax> siblings,
         TextSpan span,
-        IReadOnlyList<ExpressionSyntax>? dimensions = null)
+        IReadOnlyList<ExpressionSyntax>? dimensions = null,
+        bool hasBrackets = false)
         : base(span)
     {
         Name = name;
@@ -49,7 +50,14 @@ internal sealed class LocalVarStatementSyntax : StatementSyntax
         Initializer = initializer;
         Siblings = siblings;
         Dimensions = dimensions ?? System.Array.Empty<ExpressionSyntax>();
+        HasBrackets = hasBrackets;
     }
+
+    /// <summary>
+    /// Whether the declaration carried brackets at all — <see cref="Dimensions"/> is empty for
+    /// both <c>var/L[]</c> and a bracketless declaration, and only the first is a <c>/list</c>.
+    /// </summary>
+    public bool HasBrackets { get; }
 
     public string Name { get; }
 

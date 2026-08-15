@@ -126,7 +126,8 @@ internal sealed class VarDeclarationSyntax : DeclarationSyntax
         ExpressionSyntax? initializer,
         IReadOnlyList<VarDeclarationSyntax> siblings,
         TextSpan span,
-        bool inVarContext = true)
+        bool inVarContext = true,
+        bool hasBrackets = false)
         : base(path, span)
     {
         Modifiers = modifiers;
@@ -135,7 +136,15 @@ internal sealed class VarDeclarationSyntax : DeclarationSyntax
         Initializer = initializer;
         Siblings = siblings;
         InVarContext = inVarContext;
+        HasBrackets = hasBrackets;
     }
+
+    /// <summary>
+    /// Whether the declaration carried <c>[]</c> / <c>[10]</c> brackets, which TYPE the var:
+    /// <c>var/players[0]</c> is a <c>/list</c> to dm.exe — mlaas calls <c>players.Add()</c> on
+    /// exactly that — so a bracketed var with no written type still resolves as one.
+    /// </summary>
+    public bool HasBrackets { get; }
 
     /// <summary>
     /// True when a <c>var</c> introduced this, either as a path segment or as the block heading it.
