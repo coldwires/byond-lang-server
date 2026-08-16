@@ -6,7 +6,7 @@ way -code_tree is the oracle for the parser: it answers "did this become a var
 on this type", which no amount of clean compiling can.
 
 Committed rather than rebuilt per session, which is the -code_tree lesson: this
-one has four traps and each produces a confident wrong answer.
+one has eight traps and each produces a confident wrong answer.
 
   1. `<verb>` IS ITS OWN ELEMENT. `dmc tree --procs` lists verbs, so counting
      only <proc> reports every verb as invented - exactly 138 phantom extras on
@@ -29,6 +29,28 @@ one has four traps and each produces a confident wrong answer.
      on whatever type element it last saw, which is not even their own. Three
      phantom vars on mlaas, under a type twenty lines away. Everything inside a
      <val> is value detail; the fix is to skip the subtree, not the tag.
+  6. THE DUMP IS NOT IN THE CONSOLE CODE PAGE. `text=True` decodes with the
+     locale - cp1252 here - and tgstation's 54 MB dump carries a byte cp1252
+     cannot map, so the dump side came back EMPTY and the report read
+     "vars dump 0 ... extra 125315", a wall of extras that were entirely the
+     harness. Both sides are read as UTF-8 with replacement now. The three
+     small corpora never showed it because their dumps happen to be
+     ASCII-safe, which is the "known-exact control" below cutting the other
+     way: a control that passes says nothing about an input it did not cover.
+  7. THE BLIND SPOT HAS A SECOND SHAPE. A member declared on a type -o omits
+     is not dropped - it is printed at ROOT, as if global: tgstation's
+     `/image/proc/add_overlay` sits at depth 1 in the dump. Read naively that
+     is a root proc we lack; it is /image's, and ours. Every one of
+     tgstation's 23 root "misses" was this, and the report now names them.
+  8. -o OMITS A ROOT VAR DECLARED `/var/x`, initialised or not, while listing
+     `var/x` - and both compile (probed 2026-08-16). tgstation's `/var/__rust_g`
+     and its two dreamluau globals are the three "extras" left on the largest
+     project, and they are ours being right. Our side cannot tell the spelling
+     apart, so this one is flagged in the report rather than filtered.
+
+With 6-8 in hand tgstation is EXACT both ways too (2026-08-16): 64,870 procs and
+224,145 vars in the dump, nothing missing, nothing extra beyond the three
+`/var/` globals, on top of the 43 + 478 members in omitted branches.
 
 RUN IT AGAINST A KNOWN-EXACT PROJECT BEFORE TRUSTING IT ON A NEW ONE. mlaas is
 documented exact both ways - 1153/1153 procs and 1493/1493 vars - and getting
@@ -71,7 +93,7 @@ def dump_side(dme, defines):
     """{'procs': {(owner, name)}, 'vars': {(owner, name)}} from dm.exe -o."""
     result = subprocess.run(
         [DM, "-o", *defines, str(dme.name)],
-        capture_output=True, text=True, cwd=str(dme.parent), timeout=1800)
+        capture_output=True, encoding="utf-8", errors="replace", cwd=str(dme.parent), timeout=1800)
 
     found = {"procs": set(), "vars": set()}
     stack = []  # owner segments, indexed by depth
@@ -128,7 +150,7 @@ def our_side(dme, defines):
     for kind, flag in (("procs", "--procs"), ("vars", "--vars")):
         result = subprocess.run(
             [*DMC, "tree", str(dme), "--no-builtins", flag, *defines],
-            capture_output=True, text=True, timeout=1800)
+            capture_output=True, encoding="utf-8", errors="replace", timeout=1800)
 
         pairs = set()
 
@@ -163,9 +185,20 @@ def main():
         hidden = [p for p in extra if blind_spot(p[0])]
         real = [p for p in extra if not blind_spot(p[0])]
 
+        # Trap 7. A member declared on a type the dump omits is not dropped by -o - it is
+        # printed at ROOT, as if it were global: tgstation's `/image/proc/add_overlay` sits at
+        # depth 1 in the dump. So a root member the dump has and we do not, whose name we hold on
+        # a blind-spot type, is that misattribution and not a miss of ours. All 23 of tgstation's
+        # root "misses" were this shape.
+        ours_hidden_names = {name for owner, name in ours[kind] if blind_spot(owner)}
+        rehung = [p for p in missing if p[0] == "/" and p[1] in ours_hidden_names]
+        missing = [p for p in missing if p not in rehung]
+
         print(f"{kind:6} dump {len(dump[kind]):6}  ours {len(ours[kind]):6}  "
               f"missing {len(missing):5}  extra {len(real):5}  "
-              f"(+{len(hidden)} in the dump's blind spot, ours being right)")
+              f"(+{len(hidden)} in the dump's blind spot, ours being right"
+              + (f"; +{len(rehung)} rehung at root by the dump, ours being right" if rehung else "")
+              + ")")
 
         failed = failed or bool(missing) or bool(real)
 
@@ -175,6 +208,14 @@ def main():
                 print(f"\n  {label}, first 30 of {len(rows)}:")
                 for owner, name in rows[:30]:
                     print(f"    {owner} {name}")
+
+        # Trap 8, reported rather than filtered, since our side cannot tell the spelling apart:
+        # -o OMITS a root var declared with a leading slash - `/var/x`, initialised or not - while
+        # listing `var/x`, and both compile. tgstation's `/var/__rust_g` and the two dreamluau
+        # globals are its three "extras". A root var here is that shape until proven otherwise.
+        if kind == "vars" and any(p[0] == "/" for p in real):
+            print("\n  (a root var among the extras is usually a `/var/x` declaration, which -o omits"
+                  " - probe the spelling before calling it ours)")
 
     return 1 if failed else 0
 

@@ -37,6 +37,65 @@ public class BinderTests
     }
 
     /// <summary>
+    /// The second <c>new_name</c> message: <c>message()</c> after <c>&lt;&lt;</c>, whatever the
+    /// receiver or argument count — and never an "undefined proc" beside it, since it is a
+    /// reserved word rather than a proc. Probed 2026-08-16; fixture <c>errors/output_methods</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/f()\n\tusr << message(\"hi\")\n")]
+    [InlineData("/proc/f()\n\tworld << message(\"hi\", \"two\")\n")]
+    [InlineData("/proc/f()\n\tusr << message()\n")]
+    public void Message_after_the_output_operator_is_the_deprecation_and_not_an_undefined_proc(string source)
+    {
+        IReadOnlyList<Diagnostic> found = Bind(source);
+
+        Assert.Contains(found, d => d.Id == "new_name" && d.Message.Contains("browse()"));
+        Assert.DoesNotContain(found, d => d.Id == "DM0401");
+    }
+
+    /// <summary>
+    /// A reserved output method anywhere else is dm.exe's error, not the warning: <c>message</c>,
+    /// <c>link</c>, <c>run</c> and <c>ftp</c> alike. And <c>link</c> after <c>&lt;&lt;</c> is
+    /// current, so it says nothing there.
+    /// </summary>
+    [Fact]
+    public void An_output_method_outside_the_output_operator_has_no_effect()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "var/x\n/proc/f()\n\tvar/m = message(\"hi\")\n\tlink(\"x\")\n\tx = ftp(\"f\")\n"
+            + "\tworld << link(\"x\")\n\tusr << run(\"f\")\n\treturn m\n");
+
+        Assert.Equal(3, found.Count(d => d.Id == "DM0405"));
+        Assert.DoesNotContain(found, d => d.Id == "new_name");
+        Assert.DoesNotContain(found, d => d.Id == "DM0401");
+    }
+
+    /// <summary>A reserved output method is not a proc name, on a type any more than at root.</summary>
+    [Theory]
+    [InlineData("/proc/message(t)\n\treturn t\n")]
+    [InlineData("/datum/d\n\tproc/link(t)\n\t\treturn t\n")]
+    public void An_output_method_is_not_a_proc_name(string source)
+    {
+        Assert.Contains(Bind(source), d => d.Id == "DM0405" && d.Message.Contains("reserved word"));
+    }
+
+    /// <summary>
+    /// The third <c>new_name</c> message: the legacy <c>rand</c> STATEMENT, on every
+    /// statement-position <c>rand(</c> — indented body, inline body, next-line body, no body — and
+    /// on none of the expression uses. Fixture <c>errors/rand_statement</c>.
+    /// </summary>
+    [Fact]
+    public void The_rand_statement_is_the_deprecation_and_the_rand_call_is_not()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "var/x\n/proc/a()\n\trand(50)\n\t\tx = 1\n/proc/b()\n\trand(50) x = 1\n"
+            + "/proc/c()\n\trand(50)\n\tx = 1\n/proc/d()\n\tx = rand(50)\n/proc/e()\n\tif(rand(50))\n\t\tx = 4\n");
+
+        Assert.Equal(3, found.Count(d => d.Id == "new_name" && d.Message.Contains("rand statement")));
+        Assert.DoesNotContain(found, d => d.Id == "DM0400" || d.Id == "DM0401");
+    }
+
+    /// <summary>
     /// <c>no_parent</c>: a <c>proc/</c> new declaration has nothing above it. Compiler-verified
     /// one case per proc — the global and the fresh declaration warn, every override does not.
     /// </summary>

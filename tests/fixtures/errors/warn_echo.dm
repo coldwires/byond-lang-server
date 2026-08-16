@@ -15,5 +15,11 @@
 
 #warning this is the long spelling
 
+// A `\`-continued body is joined - the break and the backslash removed - and
+// echoed at the directive's LAST line. Read as a line end, the continuation was
+// a code line at column 0 that declared a type. Probed 2026-08-16.
+#warn (this one is continued \
+onto a second line)
+
 /proc/still_compiles()
 	return 1

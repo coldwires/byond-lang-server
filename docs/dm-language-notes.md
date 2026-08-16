@@ -9,11 +9,19 @@ Originally established against **DM compiler 516.1666**, and the appendix has be
 identical line for line to the 516.1686 run before it. Results may differ on other versions; the
 file at the end re-runs everything in about ten seconds.
 
-The compile-only sections are not in the appendix and so are not covered by that run. Several of
-them are pinned against 1687 by `tests/fixtures` instead — the keyword type names, the local-var
-`in` rule, undefined members through `.`, and duplicate definitions all have fixtures the CI job
-compiles with it. The rest still rest on their original 1666 testing, which is called out here
-rather than papered over: a version claim is only as good as the run behind it.
+The compile-only sections are not in the appendix and so are not covered by that run. **Since
+2026-08-16 every one of them is pinned against 1687 by `tests/fixtures` instead**, and the CI job
+compiles them with it: the keyword type names, the local-var `in` rule, `.`/`:`/`?:`, duplicate
+definitions, the modified-type scope, the const fold, the leading-`.` search (`ok/notes.dm` by
+value, `errors/leading_dot` for the rejections), the brace/indentation nesting shapes, the
+indentation rule (`ok/notes.dm`, `errors/indent_*`), the `#if` grammar (`errors/if_*`), the
+`#pragma syntax` grammars by value, `1#INF`, name escapes, `usr` under `world.mob`
+(`errors/usr_type`), the leading-`:` path (`errors/colon_path`), the two lints' trigger set
+(`errors/lint_triggers`) and the reserved output methods. Pinning them found two claims that did
+not survive: the indentation table (below) and the string continuation's whitespace rule (§10),
+both corrected here from 1687 rather than left standing on 1666. What remains on the 1666 run
+alone is the library search order — environment-dependent, and re-probed by hand on 1687 — and
+nothing else.
 
 Nothing here is taken from the DM Reference on trust. Where the reference and the compiler disagree,
 that disagreement is called out.
@@ -219,7 +227,9 @@ two"
 one two
 ```
 
-The line break and the next line's leading whitespace are both discarded. Common in long
+The line break and **every whitespace character that follows** are discarded — the next line's
+indentation, and blank lines too: `"a\` + newline + newline + `b"` is `ab`, runtime-verified on
+516.1687. tgstation writes a continued description with an empty line inside it. Common in long
 description text.
 
 One consequence worth knowing: this is a **string** continuation. Getting the byte handling wrong
@@ -1066,6 +1076,76 @@ A bare override shows up in `-o` as a second entry rather than replacing the fir
 
 ---
 
+## Compile-only: a type-level initialiser may name a `const`, and nothing else
+
+A var declared on a type takes a compile-time constant, a `new`, a `list()` or a call — and a
+**name only when it is a `const`**. Probed 2026-08-16 on 516.1687, one case per compilation unit:
+
+| Written on `/datum/holder`, with `var/plain = 7` and `var/const/K = 40` at root | Result |
+|---|---|
+| `var/x = plain + 1` — a non-const global | **`=: expected a constant expression`** |
+| `var/x = K + 1` — a global const | compiles |
+| `var/x = OWN - 5` — the type's own `var/const/OWN` | compiles |
+| `var/x = OWN + 1` on a **subtype** — the const reached through inheritance | compiles |
+| `var/const/TWICE = OWN * 2` then `var/x = TWICE + 1` — a const of a const | compiles |
+| `var/x = STR + "x"` — a string const | compiles |
+| `var/x = /datum/holder/child::OWN + 1` — the static form, from a **sibling** | compiles |
+| the same static form written from an **ancestor** of the path | **`compile failed (possible infinite cross-reference loop)`** |
+
+Whether the compiling forms are folded at compile time or evaluated in the hidden init proc is not
+visible from a clean compile. `init_proc` is what tells them apart: it fires on any `/turf` var
+whose initialiser needs the runtime, so under `#pragma warn init_proc` a `= list()` control warns
+and **every const-derived line above stays silent** — the compiler folds all of them. That is
+what a tool's folded-value display can safely follow: a `const` by name resolves nearest-first up
+the owner's inheritance chain and then among the globals, and a non-const name never resolves,
+because the program it would describe does not compile.
+
+The ancestor `::` case is a trap that reads as a bug: the descendant inherits the very const being
+asked for, and dm.exe treats the reference as a cycle. Ask a sibling, or name the const directly.
+
+Fixtures `errors/const_fold` (silence under the live pragma, pinned by its summary line),
+`errors/const_nonconst`, `errors/const_static_loop`; the values run in `ok/constants.dm`.
+
+---
+
+## Compile-only: the reserved output methods, and the `rand` statement
+
+Both are `new_name` warnings the reference never mentions, probed 2026-08-16 on 516.1687.
+
+**`message`, `link`, `run` and `ftp` are reserved words**, legal only as the right side of `<<`:
+
+| Written | Result |
+|---|---|
+| `usr << message("hi")` — any receiver, any argument count | compiles, *"warning (new_name): The message() output method is being replaced by browse()."* |
+| `world << link("x")`, `usr << run("f")` | compiles, silent — those are current |
+| `usr << (link("x"))` — parenthesised | compiles: still the position |
+| `usr << link("a") + "b"` — combined | **`link: output method has no effect here`** |
+| `var/m = message("hi")`, `link("x")` alone, `x = ftp("f")` | **`output method has no effect here`** |
+| `/proc/message()`, `/datum/proc/link()` | **`invalid proc name: reserved word`** — no project can shadow them |
+
+The documented output procs are not in that set and behave differently: a standalone `browse("a")` —
+even as `var/x = browse("a")` — is read as a **label** named `browse`, with `unused_label`, and
+`output`, `load_resource` and `browse_rsc` likewise. `message` is in no reference at all, which is
+how a tool built from the reference reports `usr << message("hi")` as an undefined proc.
+
+**`rand(…)` at statement start is a statement**, and its body is the next expression wherever it
+sits:
+
+| Written | Result |
+|---|---|
+| `rand(50)` then an indented `x = 1` | compiles, *"warning (new_name): The rand statement is being faded out.  Use pick() instead if possible."* |
+| `rand(50) x = 1` — same line | the same |
+| `rand(50)` then `x = 1` on the next line at the SAME indent | the same — the next line is the body |
+| `rand(50)` then `return 2` | warning, then **`: missing expression`** on the `return` — the body must be an expression |
+| `rand(50)` then an indented `if(x)` | warning, then **`: invalid expression`** |
+| `rand(1, 2)` then two indented lines | warning, then **`: invalid expression`** — one expression only |
+| `rand(50)` as the last line of a proc | warning, then an error on the NEXT declaration's header, which it tried to take as its body |
+| `x = rand(50)`, `if(rand(50))` | ordinary calls, silent |
+
+Fixtures `errors/output_methods`, `errors/output_method_name`, `errors/rand_statement`.
+
+---
+
 ## The two lint warnings, and what actually triggers them
 
 There are at least three warning names, and they do not all behave the same way. **`unused_var` is
@@ -1182,21 +1262,43 @@ of binding strength. Reading the table alone will not tell you that `cond ? a:b`
 
 ## Indentation, since nothing documents it
 
-Measured against a sibling declared at one tab:
+**A tab and a space each count as one column, and each top-level declaration sets its own unit.**
+Probed as a matrix on 516.1687 and re-checked on 516.1686, 2026-08-16. Against a sibling declared
+at one tab:
 
-| Indentation | Result |
+| Second line | Result |
 |---|---|
-| `"\t"` | same level |
-| `" \t"` — space then tab | same level |
-| `"\t "` — tab then space | same level |
-| `" "` — one space | same level |
-| `"    "` — four spaces | **rejected**, "inconsistent indentation" |
+| `"\t"`, `" "` — one column either way | same level |
+| `"  "`, `" \t"`, `"\t "` — two columns | one level **deeper**: `: empty type name (indentation error?)` on a var, the same as a nested var block |
+| `"   "`, `"    "` — three or four columns | **`inconsistent indentation`** |
 
-Prefix comparison does not explain this, since neither `"\t"` nor `" \t"` is a prefix of the other.
-The simplest model consistent with every accepted case: **depth is the leading tab count, falling
-back to the space count when there are no tabs.**
+And with the first indented line at other widths:
+
+| First line | Second line | Result |
+|---|---|---|
+| `"  "` (2) | `"    "` (4) | deeper |
+| `"  "` (2) | `" "` (1), `"\t"` (1), `"   "` (3) | inconsistent |
+| `"    "` (4) | `"        "` (8) | deeper |
+| `"    "` (4) | `"\t"` (1), `"  "` (2), `"      "` (6) | inconsistent |
+| `"\t\t"` (2) | `"\t "` (2) | same level |
+| `"\t\t"` (2) | `"\t"` (1) | inconsistent |
+
+The rule in one line: **within a top-level declaration, the first indented line's width is the
+unit, a line's depth is its width divided by that unit, and a non-multiple or a skipped level is
+"inconsistent indentation".** Unit 1 then a body at 3 is rejected (level 2 skipped); unit 2 then 4
+is fine and 6 is not; unit 4 then 8 is fine and 6 is not. Two declarations may use different units
+— a tab-indented proc beside a four-space one compiles — and comment-only lines and directives take
+no part.
+
+An earlier revision of this section had `" \t"` and `"\t "` as the **same** level as `"\t"`, from
+516.1666 probing that does not reproduce on 1686 or 1687; writing the runtime fixture for it is what
+disproved it, and a decompiler's output in the archive — indented 7 then 15 spaces — is rejected by
+the compiler at exactly the line the rule predicts.
 
 The compiler has an "inconsistent indentation" diagnostic that the reference never mentions.
+
+Fixtures `ok/notes.dm` (one space beside one tab; a four-space declaration beside a tab one),
+`errors/indent_spaces`, `errors/indent_deeper`, `errors/indent_skip`.
 
 ---
 

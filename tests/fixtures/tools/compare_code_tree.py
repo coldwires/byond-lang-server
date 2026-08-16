@@ -53,7 +53,7 @@ GROUPS = ("var", "proc", "verb")
 def dump_side(dme, defines, proc_chains):
     result = subprocess.run(
         [DM, "-code_tree", *defines, str(dme.name)],
-        capture_output=True, text=True, cwd=str(dme.parent), timeout=900)
+        capture_output=True, encoding="utf-8", errors="replace", cwd=str(dme.parent), timeout=900)
 
     marked, unmarked = set(), set()
     stack = []  # (depth, name or None)
@@ -149,7 +149,7 @@ def sibling_names(dme, file):
     names every sibling, so it supplies the rest, keyed by line."""
     result = subprocess.run(
         [*DMC, "symbols", str(dme.parent / file)],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, encoding="utf-8", errors="replace", timeout=600)
 
     by_line = {}
 
@@ -166,7 +166,7 @@ def outline_side(dme, files):
     for file in sorted(files):
         result = subprocess.run(
             [*DMC, "outline", str(dme.parent / file)],
-            capture_output=True, text=True, timeout=600)
+            capture_output=True, encoding="utf-8", errors="replace", timeout=600)
 
         text = result.stdout or ""
         siblings = sibling_names(dme, file) if SIBLING.search(text) else {}
@@ -209,7 +209,7 @@ def project_files(dme, defines):
     errors - madridspy no longer compiles on 516.1686 at all."""
     result = subprocess.run(
         [*DMC, "includes", str(dme), *defines],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, encoding="utf-8", errors="replace", timeout=900)
 
     files = []
 

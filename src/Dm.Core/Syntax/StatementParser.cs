@@ -415,7 +415,88 @@ internal sealed class StatementParser
 
     // -- statements --------------------------------------------------------
 
+    private int _nesting;
+    private bool _nestingReported;
+
+    /// <summary>
+    /// Every nested statement — a body under an <c>if</c>, a brace block, a stray indent — comes
+    /// back through here, which is where the depth is counted. See
+    /// <see cref="SyntaxFacts.MaxNesting"/>.
+    /// </summary>
     private StatementSyntax ParseStatement()
+    {
+        if (_nesting >= SyntaxFacts.MaxNesting)
+        {
+            TextSpan span = CurrentSpan;
+
+            if (!_nestingReported)
+            {
+                _nestingReported = true;
+                _diagnostics.Add(Diagnostic.Error("DM0205", span, SyntaxFacts.NestingMessage));
+            }
+
+            // The statement and whatever hangs under it: to the end of its line, then any block the
+            // line opened, indented or braced, balanced. Leaves the enclosing block's own closer.
+            SkipStatementSubtree();
+            return new ExpressionStatementSyntax(new ErrorExpressionSyntax(span), span);
+        }
+
+        _nesting++;
+
+        try
+        {
+            return ParseStatementCore();
+        }
+        finally
+        {
+            _nesting--;
+        }
+    }
+
+    private void SkipStatementSubtree()
+    {
+        int braces = 0;
+
+        // The line, with any brace block it opens; a Newline at brace depth 0 ends it.
+        while (!AtEnd)
+        {
+            if (Current == TokenKind.OpenBrace)
+                braces++;
+            else if (Current == TokenKind.CloseBrace)
+            {
+                if (braces == 0)
+                    return;
+
+                braces--;
+            }
+            else if (braces == 0 && Current is TokenKind.Newline or TokenKind.Dedent)
+                break;
+
+            _position++;
+        }
+
+        // Then an indented block under it, if the line opened one.
+        while (Current == TokenKind.Newline)
+            _position++;
+
+        if (Current != TokenKind.Indent)
+            return;
+
+        int depth = 0;
+
+        do
+        {
+            if (Current == TokenKind.Indent)
+                depth++;
+            else if (Current == TokenKind.Dedent)
+                depth--;
+
+            _position++;
+        }
+        while (depth > 0 && !AtEnd);
+    }
+
+    private StatementSyntax ParseStatementCore()
     {
         int start = _position;
 
@@ -531,10 +612,97 @@ internal sealed class StatementParser
                     return new LabelStatementSyntax(name, null, SpanFrom(start));
                 }
 
+                // `rand(...)` at statement start is the legacy rand STATEMENT to dm.exe, whatever
+                // follows - see RandStatementSyntax. Only the invoked form: a bare `rand` line is
+                // the label above, and `x = rand(50)` never reaches statement start.
+                if (Current == TokenKind.Identifier && CurrentText == "rand" && Peek() == TokenKind.OpenParen)
+                    return ParseRand(start);
+
                 ExpressionSyntax expression = ParseExpression();
                 return new ExpressionStatementSyntax(expression, SpanFrom(start));
             }
         }
+    }
+
+    /// <summary>
+    /// <c>rand(…)</c> and the one expression it governs. See <see cref="RandStatementSyntax"/> for
+    /// the shape, which was probed rather than assumed.
+    /// </summary>
+    private StatementSyntax ParseRand(int start)
+    {
+        ExpressionSyntax head = ParseExpression();
+
+        // `rand(50) - 1` and the like parse past the call; that is an ordinary expression statement,
+        // and it is not the rand statement dm.exe warns on. Only a bare call is.
+        if (head is not InvocationExpressionSyntax call)
+            return new ExpressionStatementSyntax(head, SpanFrom(start));
+
+        // The body: on this line, or on the next line whatever its indentation. An Indent is
+        // consumed so the expression under it is read as the body rather than as a stray block;
+        // its Dedent is consumed on the way out, and anything else in the block is the compiler's
+        // "invalid expression".
+        bool indented = false;
+
+        if (IsStatementEnd() && Current != TokenKind.CloseBrace && Current != TokenKind.CloseParen)
+        {
+            while (Current is TokenKind.Newline or TokenKind.Semicolon)
+                _position++;
+
+            if (Current == TokenKind.Indent)
+            {
+                _position++;
+                indented = true;
+                SkipNewlines();
+            }
+        }
+
+        ExpressionSyntax? body = null;
+
+        // A statement keyword cannot start an expression - dm.exe says "missing expression" for
+        // `return`, "invalid expression" for `if` - and neither is consumed, so it still parses as
+        // the statement it is. Anything that can start an expression is the body.
+        if (AtEnd || Current is TokenKind.Dedent or TokenKind.CloseBrace or TokenKind.Newline)
+            Report(CurrentSpan, "missing expression");
+        else if (Current is TokenKind.KeywordReturn or TokenKind.KeywordBreak or TokenKind.KeywordContinue
+            or TokenKind.KeywordGoto or TokenKind.KeywordDel or TokenKind.KeywordVar)
+            Report(CurrentSpan, "missing expression");
+        else if (Current is TokenKind.KeywordIf or TokenKind.KeywordElse or TokenKind.KeywordFor
+            or TokenKind.KeywordWhile or TokenKind.KeywordSwitch or TokenKind.KeywordDo
+            or TokenKind.KeywordTry or TokenKind.KeywordCatch or TokenKind.KeywordThrow
+            or TokenKind.KeywordSpawn)
+            Report(CurrentSpan, "invalid expression");
+        else
+            body = ParseExpression();
+
+        if (indented)
+        {
+            SkipNewlines();
+
+            // A second line under the header: dm.exe reports "invalid expression" on the BODY line
+            // for a two-line block and on the second for a three-line one - its own inconsistency
+            // on input nothing writes - so the body's line is where this reports.
+            if (Current != TokenKind.Dedent && !AtEnd)
+                Report(body?.Span ?? CurrentSpan, "invalid expression");
+
+            // Whatever else the block held: dm.exe rejected it, and it is not the statement's.
+            int depth = 1;
+
+            while (!AtEnd && depth > 0)
+            {
+                if (Current == TokenKind.Indent)
+                    depth++;
+                else if (Current == TokenKind.Dedent)
+                    depth--;
+
+                if (depth > 0)
+                    _position++;
+            }
+
+            if (Current == TokenKind.Dedent)
+                _position++;
+        }
+
+        return new RandStatementSyntax(call, body, SpanFrom(start));
     }
 
     private bool IsStatementEnd() => AtEnd || Current is TokenKind.Newline or TokenKind.Indent

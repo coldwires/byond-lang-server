@@ -2,7 +2,7 @@
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-15
+ Last updated: 2026-08-16
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -16,9 +16,9 @@ WHERE WE ARE
   M0-M10 COMPLETE. M9 past its target. M11 started, and holding zero invented.
   M8 was passed over at the M8/M9 fork and landed 2026-08-08.
 
-    dm_core.dll     2.33 MB, ABI 0.31, 40 exports, cdecl on every platform
+    dm_core.dll     2.35 MB, ABI 0.31, 40 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,394 green (1,323 core, 45 native, 26 lsp)
+    tests           1,506 green (1,433 core, 46 native, 27 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -51,7 +51,14 @@ WHERE WE ARE
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
     fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 255-probe ratchet
-                    at 74/255 agreed
+                    at 79/255 agreed. It moved 76 -> 79 on 2026-08-16 with no
+                    check written for it: surfacing the LEXER's diagnostics
+                    through the parse and the walk answered three probes at
+                    once - an unterminated resource literal, a junk character
+                    in a #pragma line (both of dm.exe's lines, not one), and
+                    "inconsistent indentation" from the new DM0106. The
+                    session that did that work was cut before it could re-run
+                    -Probes, so the ratchet sat three behind its own product
                     - and it now runs IN CI against the real compiler, which it
                     never did before: the byond-fixtures job fetches the
                     standalone zip, so a BYOND release that changes what DM
@@ -81,13 +88,13 @@ WHAT WE ARE BUILDING
 
 WHAT'S NEXT
 --------------------------------------------------------------------------------
-  THE QUEUE, as of 2026-08-15, cheapest first. Detail for each is in PLAN's
+  THE QUEUE, as of 2026-08-16, cheapest first. Detail for each is in PLAN's
   changelog and in the section it belongs to; this is the order.
 
     1. Code actions, then formatting. DM0400's quick-edit wording waits on
        the first.
     2. The ratchet's remaining classes: out of bounds (5), invalid parent
-       type (4), bad variable (4), then the tail. 74 of 255 agreed. Moved
+       type (4), bad variable (4), then the tail. 79 of 255 agreed. Moved
        DOWN the list 2026-08-15, the user's call - each remaining class is
        its own probe matrix rather than the cheap sweep the count suggests.
     3. M9's tree merge, diff-patching the previous tree - the last
@@ -99,6 +106,19 @@ WHAT'S NEXT
        retire FlushPending's splitting in the same change.
     5. Type rename; incremental LSP sync and incremental re-lex within a
        file, both waiting for a profile to ask.
+
+    DONE 2026-08-16, item 0: WALK-TIME DIAGNOSTICS REACH BOTH SHELLS.
+       Workspace.GetWalkDiagnostics keeps the walk's list and filters it per
+       file; dm_diagnostics and publishDiagnostics add it. No ABI change -
+       the array is the same shape with more in it. The estimate was right
+       that the plumbing is small and wrong about it being the whole job:
+       the lexer's diagnostics reach the parse AND the walk keeps its own
+       copy, so adding the list naively DOUBLED every unterminated string.
+       Caught by a test written for the invariant (one report per site)
+       rather than by the corpora, which cannot see it - diagdiff reads the
+       walk's list directly and never assembles the shells' set.
+       dm_document_symbols deliberately does NOT carry them: it needs no
+       object tree today and these do, so the outline keeps its cheap path.
 
   DROPPED 2026-08-15, the user's call: sending the integration package to the
   Qt dev. He is a year or more from finishing his IDE, so the package waits
@@ -406,14 +426,25 @@ YOUR CORPUS - RUN scan AFTER ANY LEXER CHANGE
     ~\Documents\BYOND\lib                third-party libs your code #includes
     W:\new-reorg\projects\games\byond    2,269 files / 2.47M tokens
 
-  Clean everywhere. The only files still flagged are 8 in the W: archive that
-  are PROSE saved with a .dm extension - story text, design notes, one pasted
-  chat log. dm.exe rejects them too, so flagging them is correct:
+  Clean everywhere. The only files still flagged are 12 in the W: archive, and
+  dm.exe rejects every one, so flagging them is correct: 8 are PROSE saved with
+  a .dm extension - story text, design notes, one pasted chat log - and since
+  2026-08-16, when the lexer learned dm.exe's indentation rule and started
+  reporting "inconsistent indentation" (DM0106), 2 chat logs and 2 decompiler
+  outputs indented 7-then-15 spaces, which the compiler rejects at exactly the
+  line we do:
 
     a-game-like-redcap\Story.dm             mspy\...\rules.dm
     mlaas-ideas\mlaas ideas.dm              old-spies-byond\...\rules.dm
     alien-warfare\with-4.0\summary.dm       spies-prehistory\...\Skills.dm  (x2)
-                                            spies-prehistory\...\stuff.dm
+    mspy\design\originals\ideas.dm  (x2)    spies-prehistory\...\stuff.dm
+    mspy\assets\dm\vendor-decompiled-mlaas.dm  (x2)
+
+  That scan is also what found two lexer bugs on 2026-08-16 - a `\`-continued
+  #warn body read as a code line at column 0, and a `\`-continued string that
+  crosses a BLANK line (tgstation ships one) read as unterminated - once the
+  lexer's diagnostics were surfaced at all: until then only `dmc scan` saw
+  them, and nothing had ever pointed at scan's output.
 
   NOTE: scan globs *.dm off disk and does NOT follow the include graph, so it
   misses library code behind "#include <vendor/name>". That is why the BYOND

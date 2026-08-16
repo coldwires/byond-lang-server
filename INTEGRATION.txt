@@ -6,7 +6,7 @@
  bug in the doc - say so.
 
  ABI version at last update: 0.31  (40 exports, cdecl, six RIDs)
- Last updated: 2026-08-15
+ Last updated: 2026-08-16
 ================================================================================
 
 
@@ -425,9 +425,24 @@ WHAT YOU GET TODAY
       reconstruct it by slicing other fields.
 
       Diagnostics in the same document are the syntax errors for that file -
-      enough for squiggles. The SEMANTIC set arrives through dm_diagnostics,
-      below, which also repeats the syntax errors so one call carries
-      everything a squiggle pass needs.
+      enough for squiggles - and, since 2026-08-16, the LEXER'S own: an
+      unterminated string or block comment, and dm.exe's "inconsistent
+      indentation" (DM0106), which is measured the way the compiler measures
+      it (a tab and a space each one column, against the unit a declaration's
+      first indented line sets). Those reached only `dmc scan` before. The
+      SEMANTIC set arrives through dm_diagnostics, below, which also repeats
+      the syntax errors so one call carries everything a squiggle pass needs.
+
+      What this call does NOT carry, and dm_diagnostics does: the WALK'S OWN
+      diagnostics - a `#warn` echo, an unterminated `#if`, a missing
+      `#include`, an unknown pragma name. They live on the include walk rather
+      than in any one file's syntax, so no parse holds them, and reaching them
+      means walking the project. This call deliberately needs no object tree
+      and answers before the project has been walked; making it carry them
+      would put a whole-project walk on the outline path. Ask dm_diagnostics
+      for a complete set. Until 2026-08-16 NEITHER call carried them while
+      `dmc diagdiff` did, so the zero-invented figure was measured over a set
+      no editor ever showed.
 
       ** ONE WARNING ALREADY ARRIVES HERE: DM0300 **
       A proc block indented one level too far, into a var block, declares
@@ -454,10 +469,27 @@ WHAT YOU GET TODAY
       so a diagnostic from this call on a project that builds clean is a
       bug worth reporting.
 
-      Elements are byte-identical to dm_document_symbols' diagnostics:
-      id, severity (a WORD - "error", "warning"), message, and a zero-based
-      range in your encoding. An empty array with DM_OK is the ordinary
-      answer on a clean file.
+      ** IT ALSO CARRIES THE WALK'S OWN, SINCE 2026-08-16 **
+      A `#warn` echo, an unterminated `#if`, a missing `#include`, an unknown
+      pragma name. These belong to the include walk rather than to this
+      file's syntax, so no parse can hold them and dm_document_symbols does
+      not - it needs no object tree and these do. Reported against the file
+      that wrote them, at that file's own line, which is what lets them match
+      dm.exe at all; one that cannot be attributed belongs to the .dme.
+
+      They were the last set `dmc diagdiff` counted and no shell showed. If
+      you pinned an earlier minor you were not missing a field - the
+      diagnostics simply were not in the array, so a project whose build
+      prints a #warn showed nothing here. No ABI change: the array is the
+      same shape and just has more in it.
+
+      Each ELEMENT is byte-identical to dm_document_symbols' diagnostics -
+      one writer produces both - so a parser written for either reads the
+      other: id, severity (a WORD - "error", "warning"), message, and a
+      zero-based range in your encoding. The SETS are not the same, and
+      since 2026-08-16 differ by more than the semantic half: this call is
+      the superset, and it is the one to ask for squiggles. An empty array
+      with DM_OK is the ordinary answer on a clean file.
 
       ** WE OBEY #pragma ignore **
       Some of what we report carries dm.exe's OWN warning name rather than a
@@ -698,7 +730,17 @@ WHAT YOU GET TODAY
       Beside "value", never instead of it - `= 5 * 60` gives you both the
       author's `5 * 60` and the `300` it folds to, and a reader wants both.
       Empty when the initialiser is not a compile-time constant: a `new`, a
-      `list(...)`, anything naming another symbol.
+      `list(...)`, a name that is not a `const`.
+
+      A `const` VAR NAMED IN IT FOLDS TOO, since 2026-08-16 - `var/hp =
+      MAX_HP - 5` shows what MAX_HP - 5 comes to, with MAX_HP found the way
+      dm.exe finds it: the owning type's inheritance chain nearest first,
+      then the globals, and the `/path::NAME` static form against that
+      path. Only a `const` resolves, because a non-const name in a
+      type-level initialiser is "expected a constant expression" to the
+      compiler and a value there would be one the program never has. That
+      dm.exe folds these at COMPILE time rather than in the init proc was
+      probed with `-warn init_proc`, which stays silent on every one of them.
 
       A BARE LITERAL FOLDS TO NOTHING, on purpose. `123456789` would come
       back as "1.23457e+08" - which is exactly what the compiler holds, since
@@ -1344,9 +1386,21 @@ WHAT YOU GET TODAY
   Anything we hand you, you release. Nothing we hand you points into memory we
   might move.
 
-    char *          from dm_last_error, dm_workspace_root  -> dm_free()
+    char *          from dm_last_error, dm_workspace_root,
+                    and EVERY out_json - dm_document_symbols,
+                    dm_complete_at and its brief/resolve pair,
+                    dm_definition_at, dm_type_definition_at,
+                    dm_hover_at, dm_signature_at, dm_rename_at,
+                    dm_diagnostics, dm_inlay_hints, dm_folding_ranges,
+                    dm_document_links, dm_document_colors,
+                    dm_icon_states, dm_dme_tick, dm_dme_untick,
+                    dm_dme_entries, dm_workspace_symbols,
+                    dm_query_json                          -> dm_free()
     dm_classification                                      -> dm_classification_free()
     dm_workspace                                           -> dm_workspace_close()
+
+  The rule is simpler than the list: any char* this library hands you goes
+  back through dm_free, whatever call produced it.
 
   Anything you hand us is copied before the call returns. Free your own copy
   whenever you like.

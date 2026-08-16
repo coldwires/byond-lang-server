@@ -745,6 +745,11 @@ internal static class Program
         Console.Out.WriteLine(hover.Detail);
         Console.Out.WriteLine(hover.Signature);
 
+        // What the initialiser comes to (0.30) - beside the signature, as the LSP renders it.
+        // Absent until 2026-08-16, which left the ABI's `constant` with no arbiter.
+        if (hover.ConstantValue.Length > 0)
+            Console.Out.WriteLine($"= {hover.ConstantValue}");
+
         if (hover.Documentation.Length > 0)
         {
             Console.Out.WriteLine();
@@ -1164,7 +1169,7 @@ internal static class Program
         {
             string documentation = CompletionService.ResolveDocumentation(
                 workspace.GetObjectTree(), document, line - 1, column - 1, args[resolveAt + 1],
-                workspace.GetMacroNames(), workspace.GetFileText);
+                workspace.GetMacroNamesFor(document.Path), workspace.GetFileText);
 
             Console.Out.WriteLine(documentation.Length > 0 ? documentation : "(no documentation)");
             return 0;
@@ -1176,13 +1181,13 @@ internal static class Program
 
         CompletionResult result = brief
             ? CompletionService.CompleteBriefAt(
-                workspace.GetObjectTree(), document, line - 1, column - 1, workspace.GetMacroNames())
+                workspace.GetObjectTree(), document, line - 1, column - 1, workspace.GetMacroNamesFor(document.Path))
             : CompletionService.CompleteAt(
                 workspace.GetObjectTree(),
                 document,
                 line - 1,
                 column - 1,
-                workspace.GetMacroNames(),
+                workspace.GetMacroNamesFor(document.Path),
                 workspace.GetFileText);
 
         Console.Out.WriteLine($"context: {result.Context}");
@@ -1191,7 +1196,15 @@ internal static class Program
         {
             string mark = item.IsBuiltin ? "*" : item.Inferred ? "~" : " ";
             string detail = string.IsNullOrEmpty(item.Detail) ? string.Empty : $"   {item.Detail}";
-            Console.Out.WriteLine($" {mark} {item.Kind.ToString().ToLowerInvariant(),-9} {item.Name}{detail}");
+
+            // The ABI's `value` and `constant` (0.21, 0.30), so they can be checked from here: the
+            // author's initialiser as written, then what it folds to when that says something the
+            // text does not. `= 5 * 60 -> 300`.
+            string value = item.InitialValue.Length > 0 ? $"   = {item.InitialValue}" : string.Empty;
+            string constant = item.ConstantValue.Length > 0 ? $" -> {item.ConstantValue}" : string.Empty;
+
+            Console.Out.WriteLine(
+                $" {mark} {item.Kind.ToString().ToLowerInvariant(),-9} {item.Name}{detail}{value}{constant}");
 
             // The first line only: a completion list is a list, not a documentation browser.
             if (item.Documentation.Length > 0)

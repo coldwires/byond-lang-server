@@ -29,7 +29,18 @@ public sealed class Workspace : IDisposable
     private ObjectTree? _tree;
     private IReadOnlyList<(string File, ParseResult Parse)>? _parses;
     private MacroTable? _macros;
+
+    // Compile-order position of every file the walk reached, directive-only files included - the
+    // include graph's list rather than the parses, which skip a file that emitted no tokens, and a
+    // defines-only header is exactly the file a macro comes from. Reset with the tree.
+    private Dictionary<string, int>? _compileOrder;
     private Preprocessing.PragmaLevels? _suppressedWarnings;
+
+    // The walk's OWN diagnostics - a #warn echo, an unterminated #if, a missing #include, an
+    // unknown pragma name. No parse can hold them: they belong to the include walk rather than to
+    // any one file's syntax, which is why they reached `dmc diagdiff` and neither shell until
+    // 2026-08-16. Kept whole and filtered per file on the way out; see GetWalkDiagnostics.
+    private IReadOnlyList<Diagnostics.Diagnostic>? _walkDiagnostics;
 
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ParseResult, TreeContribution>
         _contributions = new();
@@ -54,7 +65,7 @@ public sealed class Workspace : IDisposable
     /// <remarks>
     /// Pass whatever the project's build passes. The flags decide which <c>#ifdef</c> branches
     /// exist, so a workspace opened without them describes a different program from the one the
-    /// build produces â€” /tg/station needs <c>CBT</c>.
+    /// build produces — /tg/station needs <c>CBT</c>.
     /// </remarks>
     public IReadOnlyList<string>? Defines { get; private set; }
 
@@ -63,15 +74,13 @@ public sealed class Workspace : IDisposable
     /// </summary>
     /// <remarks>
     /// Separate from <see cref="Open(string)"/> because the tree is built lazily, so a client can set these
-    /// immediately after opening and still have them apply â€” and can change build flags later
+    /// immediately after opening and still have them apply — and can change build flags later
     /// without reopening the project.
     /// </remarks>
     public void SetDefines(IReadOnlyList<string>? defines)
     {
         Defines = defines;
-        _tree = null;
-        _parses = null;
-        _macros = null;
+        DropDerived();
     }
 
     /// <summary>
@@ -198,9 +207,7 @@ public sealed class Workspace : IDisposable
         _documents[key] = document;
 
         // The tree was built from the previous text, so it no longer describes the project.
-        _tree = null;
-        _parses = null;
-        _macros = null;
+        DropDerived();
 
         return document;
     }
@@ -208,9 +215,7 @@ public sealed class Workspace : IDisposable
     /// <summary>Drops a client buffer. Later reads for that path fall back to disk.</summary>
     public bool CloseBuffer(string path)
     {
-        _tree = null;
-        _parses = null;
-        _macros = null;
+        DropDerived();
         return _documents.Remove(NormalisePath(path));
     }
 
@@ -222,7 +227,7 @@ public sealed class Workspace : IDisposable
     /// <remarks>
     /// <para>
     /// Built from the include graph so files arrive in compile order, which is what decides override
-    /// resolution â€” a directory walk would silently produce a different program. Pushed buffers win
+    /// resolution — a directory walk would silently produce a different program. Pushed buffers win
     /// over disk for the files that have them, so the tree describes what the client is looking at.
     /// </para>
     /// <para>
@@ -245,6 +250,7 @@ public sealed class Workspace : IDisposable
         if (!HasEnvironmentFile)
         {
             _parses = System.Array.Empty<(string, ParseResult)>();
+            _walkDiagnostics = System.Array.Empty<Diagnostics.Diagnostic>();
             _tree = tree;
             return tree;
         }
@@ -256,7 +262,7 @@ public sealed class Workspace : IDisposable
         {
             Defines = Defines,
 
-            // Pushed buffers are authoritative (PLAN.md Â§4). Without this the walk reads the file as
+            // Pushed buffers are authoritative (PLAN.md §4). Without this the walk reads the file as
             // last saved, and every unsaved keystroke would be analysed against stale text.
             SourceProvider = path => _documents.TryGetValue(path, out Document? open)
                 ? open.Text
@@ -277,6 +283,14 @@ public sealed class Workspace : IDisposable
         PreprocessResult preprocessed = Preprocessor.Run(DmePath, options);
         _macros = preprocessed.Macros;
         _suppressedWarnings = preprocessed.Graph.Warnings;
+        _walkDiagnostics = preprocessed.Diagnostics;
+
+        Dictionary<string, int> order = new(PathComparer);
+
+        for (int i = 0; i < preprocessed.Graph.Files.Count; i++)
+            order.TryAdd(preprocessed.Graph.Files[i].Path, i);
+
+        _compileOrder = order;
 
         // Reuses the token source and the parse of every file whose run came out identical, which
         // after an edit is nearly all of them.
@@ -338,6 +352,78 @@ public sealed class Workspace : IDisposable
 
     /// <summary>Whether a tree exists right now — the readiness signal, costing nothing to ask.</summary>
     public bool IsTreeBuilt => _tree is not null;
+
+    /// <summary>
+    /// The include walk's own diagnostics for one file — a <c>#warn</c> echo, an unterminated
+    /// <c>#if</c>, a missing <c>#include</c>, an unknown pragma name.
+    /// </summary>
+    /// <remarks>
+    /// These belong to the walk rather than to any one file's syntax, so no <see cref="ParseResult"/>
+    /// can carry them and a shell assembling <c>parse.Diagnostics + Binder.Bind</c> misses them
+    /// entirely. That is what they did until 2026-08-16: <c>dmc diagdiff</c> counted them — which is
+    /// why the zero-invented figure counts a set the editors never saw — and neither shell showed
+    /// them.
+    ///
+    /// Attribution is the walk's own, backfilled at each file boundary, so the span indexes
+    /// <paramref name="path"/>'s text and converts against that document like any other diagnostic.
+    /// A diagnostic the walk could not attribute belongs to the <c>.dme</c>, which is where
+    /// <c>diagdiff</c> puts it too — one set, three consumers, so they cannot disagree.
+    ///
+    /// <b>The lexer's own are excluded, because the parse already carries them.</b> The walk keeps a
+    /// copy of every file's <c>lex.Diagnostics</c>, and since 2026-08-16 the parse carries them too,
+    /// so a caller adding both lists would report every unterminated string twice. Filtered on the
+    /// invariant — one report per site — rather than on a list of lexer ids, which the next id added
+    /// to the lexer would silently fall out of.
+    ///
+    /// Builds the tree if it has not been built, since the walk is where these come from.
+    /// </remarks>
+    public IReadOnlyList<Diagnostics.Diagnostic> GetWalkDiagnostics(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !HasEnvironmentFile)
+            return System.Array.Empty<Diagnostics.Diagnostic>();
+
+        if (_walkDiagnostics is null)
+            GetObjectTree(cancellationToken);
+
+        if (_walkDiagnostics is not { Count: > 0 })
+            return System.Array.Empty<Diagnostics.Diagnostic>();
+
+        string key = NormalisePath(path);
+        List<Diagnostics.Diagnostic>? mine = null;
+        HashSet<(string, int, int)>? alreadyReported = null;
+
+        foreach (Diagnostics.Diagnostic diagnostic in _walkDiagnostics)
+        {
+            // An unattributed one is the .dme's, so it surfaces on the .dme and nowhere else.
+            // Hanging it on whichever document happened to ask would put it on the wrong file.
+            string file = diagnostic.File ?? DmePath;
+
+            if (!PathComparer.Equals(file, key))
+                continue;
+
+            // Built once, and only for a file that actually has walk diagnostics to weigh.
+            if (alreadyReported is null)
+            {
+                alreadyReported = new();
+
+                if (TryGetDocument(key, out Document document))
+                {
+                    foreach (Diagnostics.Diagnostic parsed in document.Parse.Diagnostics)
+                        alreadyReported.Add((parsed.Id, parsed.Span.Start, parsed.Span.Length));
+                }
+            }
+
+            if (alreadyReported.Contains((diagnostic.Id, diagnostic.Span.Start, diagnostic.Span.Length)))
+                continue;
+
+            (mine ??= new()).Add(diagnostic);
+        }
+
+        return (IReadOnlyList<Diagnostics.Diagnostic>?)mine
+            ?? System.Array.Empty<Diagnostics.Diagnostic>();
+    }
 
     // -- the .dme's tickmarks ----------------------------------------------
 
@@ -509,11 +595,26 @@ public sealed class Workspace : IDisposable
     /// revalidate by write time and length during a rebuild, so this is cheap: only files that
     /// actually changed are re-read, re-walked and re-parsed. Pushed buffers stay authoritative.
     /// </remarks>
-    public void Invalidate()
+    public void Invalidate() => DropDerived();
+
+    /// <summary>
+    /// Drops everything derived from the walk, so the next question rebuilds it.
+    /// </summary>
+    /// <remarks>
+    /// One method rather than the four identical blocks this replaced — buffer set, buffer close,
+    /// define change, invalidate. They had already drifted: <c>_suppressedWarnings</c> was in none
+    /// of them, harmless only because it is reassigned before anything reads it. A fifth field
+    /// (<c>_walkDiagnostics</c>) would have been a fifth chance to forget one, which is the shape
+    /// this project keeps paying for.
+    /// </remarks>
+    private void DropDerived()
     {
         _tree = null;
         _parses = null;
         _macros = null;
+        _compileOrder = null;
+        _suppressedWarnings = null;
+        _walkDiagnostics = null;
     }
 
     /// <summary>
@@ -522,7 +623,7 @@ public sealed class Workspace : IDisposable
     /// <remarks>
     /// Deliberately does <b>not</b> build the tree. Classification runs on every scroll and every
     /// keystroke, and a whole-project walk on the paint path would be a serious regression. Type
-    /// names therefore stay lexical until something else â€” a completion, a symbol query â€” has built
+    /// names therefore stay lexical until something else — a completion, a symbol query — has built
     /// a tree, and light up from then on.
     /// </remarks>
     public Services.SemanticContext GetSemanticContext() => new(_tree, _macros?.Names);
@@ -542,10 +643,81 @@ public sealed class Workspace : IDisposable
     /// </summary>
     /// <remarks>
     /// Builds the tree if it has not been built, since both come from the same walk. The names are
-    /// the walk's end state rather than what any one line saw â€” see <see cref="IncludeGraph.Macros"/>.
+    /// the walk's end state rather than what any one line saw — see <see cref="IncludeGraph.Macros"/>.
+    /// <see cref="GetMacroNamesFor"/> narrows that to what a given file could see, and is what a
+    /// completion should ask.
     /// </remarks>
     public IReadOnlyCollection<string> GetMacroNames(CancellationToken cancellationToken = default)
         => GetMacroTable(cancellationToken)?.Names ?? System.Array.Empty<string>();
+
+    /// <summary>
+    /// The macros a file could see, for its completion list: those defined at or before it in
+    /// compile order, the predefined seeds and <c>-D</c> injects, and <c>__MAIN__</c> only in the
+    /// <c>.dme</c> itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The macro table is sequential state and the walk's end state is not what any one file saw:
+    /// a name defined in a later file was offered in an earlier one, and <c>__MAIN__</c> - which the
+    /// walk defines only while inside the <c>.dme</c> - was offered everywhere, since the walk ends
+    /// back in the <c>.dme</c> with it defined. This is the M3 boundary snapshot in its cheapest
+    /// form: file granularity, from the include graph's compile order, which is the same order the
+    /// compiler's own table would have been in.
+    /// </para>
+    /// <para>
+    /// File granularity, so two things are approximate: a macro defined in a file AFTER an
+    /// <c>#include</c> it contains still counts as visible in the included file, and a macro
+    /// <c>#undef</c>ed later is absent everywhere (it is absent from the end state). A file the
+    /// walk never reached - out of the project, or standalone - gets the whole table, as before,
+    /// since nothing says where it would sit.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyCollection<string> GetMacroNamesFor(string documentPath, CancellationToken cancellationToken = default)
+    {
+        MacroTable? table = GetMacroTable(cancellationToken);
+
+        if (table is null)
+            return System.Array.Empty<string>();
+
+        string key = NormalisePath(documentPath);
+        bool isMain = PathComparer.Equals(key, DmePath);
+
+        if (_compileOrder is null || (!isMain && !_compileOrder.TryGetValue(key, out _)))
+            return table.Names;
+
+        int at = isMain ? int.MaxValue : _compileOrder[key];
+        List<string> visible = new(table.Names.Count);
+
+        foreach (string name in table.Names)
+        {
+            if (!table.TryGet(name, out MacroDefinition definition))
+                continue;
+
+            string? source = definition.Source.Path;
+
+            // A seed or a -D inject carries a synthetic `<...>` source and is visible everywhere;
+            // `__MAIN__` is the one seed that is not, since the walk undefines it on every include.
+            if (source is null || source.StartsWith('<'))
+            {
+                if (isMain || name != "__MAIN__")
+                    visible.Add(name);
+
+                continue;
+            }
+
+            // Defined in the .dme itself, or in a file at or before this one in compile order. A
+            // definition in a file the order does not hold cannot be placed and stays visible
+            // rather than vanishing.
+            if (PathComparer.Equals(source, DmePath)
+                || !_compileOrder.TryGetValue(source, out int defined)
+                || defined <= at)
+            {
+                visible.Add(name);
+            }
+        }
+
+        return visible;
+    }
 
     /// <summary>
     /// The walk's final macro table, for definition and hover on a macro name.

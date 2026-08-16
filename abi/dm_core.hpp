@@ -423,6 +423,15 @@ public:
         return detail::take(out);
     }
 
+    /// Every file the include block lists, in file order — the BLOCK, not the include graph. Spelled
+    /// as DreamMaker spells them (project-relative, backslashes), which is what dme_tick/dme_untick
+    /// take. An empty list is an answer: no `.dme`, no block, or nothing parseable.
+    std::string dme_entries() const {
+        char *out = nullptr;
+        detail::check(dm_dme_entries(handle_, &out), "dm_dme_entries");
+        return detail::take(out);
+    }
+
 private:
     explicit workspace(dm_workspace handle) noexcept : handle_(handle) {}
 

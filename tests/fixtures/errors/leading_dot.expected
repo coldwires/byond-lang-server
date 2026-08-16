@@ -1,0 +1,4 @@
+10 error .target: undefined type path
+15 error .sword/nonexistent: undefined type path
+20 error return.only_here: undefined type path
+total 5 errors, 0 warnings

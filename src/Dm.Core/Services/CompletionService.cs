@@ -384,7 +384,7 @@ public static class CompletionService
         foreach (TypeSymbol step in tree.InheritanceChain(receiver))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            AddMembers(items, step, fileText, inferred, documentOnly, Rank.Member, typeSource);
+            AddMembers(tree, items,step, fileText, inferred, documentOnly, Rank.Member, typeSource);
         }
 
         // `:` also reaches members declared on subtypes, which is what makes it a wider check
@@ -394,7 +394,7 @@ public static class CompletionService
             foreach (TypeSymbol descendant in Descendants(receiver))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                AddMembers(items, descendant, fileText, inferred, documentOnly);
+                AddMembers(tree, items,descendant, fileText, inferred, documentOnly);
             }
         }
 
@@ -413,9 +413,9 @@ public static class CompletionService
     }
 
     private static void AddMembers(
-        Dictionary<string, CompletionItem> items, TypeSymbol type, Func<string, SourceText?>? fileText,
-        bool inferred = false, string? documentOnly = null, int rank = Rank.Member,
-        TypeSource typeSource = TypeSource.None)
+        ObjectTree tree, Dictionary<string, CompletionItem> items, TypeSymbol type,
+        Func<string, SourceText?>? fileText, bool inferred = false, string? documentOnly = null,
+        int rank = Rank.Member, TypeSource typeSource = TypeSource.None)
     {
         foreach (VarSymbol variable in type.Vars)
         {
@@ -432,7 +432,9 @@ public static class CompletionService
                 variable.DeclaredType?.Text ?? string.Empty,
                 variable.InitialValue,
                 typeSource,
-                variable.ConstantValue));
+                // The tree's answer rather than the symbol's: it finishes the fold for an
+                // initialiser that names a const, which the per-file fold cannot.
+                tree.ConstantValueOf(type, variable)));
         }
 
         foreach (ProcSymbol proc in type.Procs)
@@ -707,11 +709,11 @@ public static class CompletionService
         if (EnclosingType(tree, document, offset) is { } enclosing)
         {
             foreach (TypeSymbol step in tree.InheritanceChain(enclosing))
-                AddMembers(items, step, fileText, inferred: false, documentOnly, Rank.Member);
+                AddMembers(tree, items,step, fileText, inferred: false, documentOnly, Rank.Member);
         }
 
         // Globals last. These are the root's procs and vars, which is where the builtins live.
-        AddMembers(items, tree.Root, fileText, inferred: false, documentOnly, Rank.Global);
+        AddMembers(tree, items,tree.Root, fileText, inferred: false, documentOnly, Rank.Global);
 
         // Macros do not live on any type - the preprocessor has removed them long before the parser
         // runs - so they are carried in separately and go last, behind anything really in scope.

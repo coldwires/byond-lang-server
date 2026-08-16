@@ -63,6 +63,11 @@ function Compile($dme) {
 # for each diagnostic dm.exe must produce. That covers must-compile-clean,
 # must-fail, and the third shape - a case that needs its own compilation unit
 # yet still compiles clean, like the numeric-pragma one.
+#
+# A line `total N errors, M warnings` pins the compiler's own summary as well,
+# which is how a fixture asserts SILENCE: "these lines are reported" cannot say
+# "and nothing else is", and a case whose whole point is that dm.exe stays
+# quiet under a live `#pragma warn` needs the count beside its control.
 
 Write-Host "`n[1] every fixture compiles as recorded" -ForegroundColor Cyan
 
@@ -91,6 +96,11 @@ foreach ($expected in Get-ChildItem $root -Recurse -Filter '*.expected' |
     $missing = @()
 
     foreach ($line in $wanted) {
+        if ($line -match '^total\s+(.+)$') {
+            if ($out -notmatch [regex]::Escape($Matches[1].Trim())) { $missing += $line }
+            continue
+        }
+
         $parts = $line -split '\s+', 3
         $where = ":$($parts[0]):$($parts[1])"
 

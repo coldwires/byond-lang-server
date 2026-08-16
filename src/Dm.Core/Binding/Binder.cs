@@ -166,8 +166,17 @@ public sealed class Binder
     {
         TypePath owner = TypeTreeBuilder.ProcOwner(enclosing, proc.Path);
 
-        if (proc.IsNewDeclaration)
+        // A reserved output method is not a proc name anywhere - `/datum/proc/link()` fails the
+        // same as `/proc/link()` - and dm.exe says so with its own words. Probed 2026-08-16.
+        if (proc.IsNewDeclaration && SyntaxFacts.IsOutputMethod(proc.Name))
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0405", proc.NameSpan, $"{proc.Name}: invalid proc name: reserved word"));
+        }
+        else if (proc.IsNewDeclaration)
+        {
             CheckDuplicateProc(proc, owner);
+        }
         else
             EmitOverrideReference(proc, owner);
 
@@ -510,12 +519,13 @@ public sealed class Binder
     /// silences <c>new_name</c> in source expects it silenced here too. Id 4005, on by default.
     /// </para>
     /// <para>
-    /// <b>One entry, because one is what the compiler has.</b> Sixteen candidate renames were
+    /// <b>One rename, because one is what the compiler has.</b> Sixteen candidate renames were
     /// compiled against 516.1686 and only <c>lentext</c> warns — <c>text2list</c> and
     /// <c>list2text</c> are removed outright rather than deprecated, and everything else is
-    /// current. The lab catalogue lists two more messages under this name, an output-operator
-    /// <c>message()</c> and a <c>rand</c> STATEMENT, both different constructs and neither present
-    /// in any corpus project, so they are left until something asks for them.
+    /// current. The name's other two messages are different constructs and live where they are
+    /// recognised: the <c>message()</c> output method in <see cref="BindOutput"/>, and the
+    /// <c>rand</c> statement in <see cref="BindStatement"/>'s <see cref="RandStatementSyntax"/>
+    /// case. Both shipped 2026-08-16.
     /// </para>
     /// <para>
     /// A project declaring its own <c>lentext</c> shadows the builtin, and warning there would be
@@ -542,6 +552,50 @@ public sealed class Binder
 
         _diagnostics.Add(Diagnostic.Warning(
             "new_name", callee.Span, "lentext: lentext is being phased out; replace with length"));
+    }
+
+    /// <summary>
+    /// The right side of <c>&lt;&lt;</c> when it is a reserved output method: <c>message(…)</c>,
+    /// <c>link(…)</c>, <c>run(…)</c>, <c>ftp(…)</c>. True when it was, and has been bound here.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These are keywords, not procs — <c>/proc/message()</c> is <i>"invalid proc name: reserved
+    /// word"</i>, on a type as well as at root — legal only in this position, so the arguments are
+    /// bound and the callee is not resolved. <c>message</c> is also the second of the compiler's
+    /// three <c>new_name</c> messages: <i>"The message() output method is being replaced by
+    /// browse()."</i>, on every <c>&lt;&lt; message(…)</c> whatever the receiver or argument count.
+    /// Probed 2026-08-16 on 516.1687; the third, the <c>rand</c> statement, is the statement
+    /// parser's.
+    /// </para>
+    /// <para>
+    /// Before this the table had no <c>message</c> at all — the reference does not document it —
+    /// so <c>usr &lt;&lt; message("hi")</c>, which compiles, was an invented "undefined proc". No
+    /// corpus writes it, which is how a deprecated keyword hides.
+    /// </para>
+    /// </remarks>
+    private bool BindOutput(ExpressionSyntax? right, Scope scope)
+    {
+        if (right is not InvocationExpressionSyntax
+            {
+                Target: IdentifierExpressionSyntax { Name: var callee } target,
+            } invocation
+            || !SyntaxFacts.IsOutputMethod(callee))
+        {
+            return false;
+        }
+
+        if (callee == "message" && !Silenced("new_name", target.Span))
+        {
+            _diagnostics.Add(Diagnostic.Warning(
+                "new_name", target.Span,
+                "message: The message() output method is being replaced by browse()."));
+        }
+
+        foreach (ArgumentSyntax argument in invocation.Arguments)
+            BindArgument(argument, scope);
+
+        return true;
     }
 
     private void BindPath(PathExpressionSyntax path)
@@ -709,6 +763,21 @@ public sealed class Binder
                 BindStatement(spawn.Body, scope);
                 break;
 
+            // The legacy rand statement: the third `new_name` message, on every statement-position
+            // `rand(` - block or inline, argument or none. The call's arguments and the governed
+            // expression are ordinary reads; `rand` itself is the builtin and resolves.
+            case RandStatementSyntax rand:
+                if (!Silenced("new_name", rand.Call.Target.Span))
+                {
+                    _diagnostics.Add(Diagnostic.Warning(
+                        "new_name", rand.Call.Target.Span,
+                        "rand: The rand statement is being faded out.  Use pick() instead if possible."));
+                }
+
+                BindExpression(rand.Call, scope, invoked: false);
+                BindExpression(rand.Body, scope, invoked: false, discarded: true);
+                break;
+
             case UnaryStatementSyntax unary:
                 BindExpression(unary.Operand, scope, invoked: false);
                 break;
@@ -799,6 +868,22 @@ public sealed class Binder
                 break;
 
             case InvocationExpressionSyntax invocation:
+                // A reserved output method - `message(...)`, `link(...)`, `run(...)`, `ftp(...)` -
+                // is legal only as the right side of `<<`, which BindOutput handles; anywhere else
+                // dm.exe says so and stops. Bound here as arguments only, so `message` is not
+                // reported as an undefined proc on top - it is not a proc, it is a keyword.
+                if (invocation.Target is IdentifierExpressionSyntax { Name: var callee }
+                    && SyntaxFacts.IsOutputMethod(callee))
+                {
+                    _diagnostics.Add(Diagnostic.Error(
+                        "DM0405", invocation.Target.Span, $"{callee}: output method has no effect here"));
+
+                    foreach (ArgumentSyntax argument in invocation.Arguments)
+                        BindArgument(argument, scope);
+
+                    break;
+                }
+
                 // The callee is being called, which decides whether a miss is an undefined proc or
                 // an undefined var — dm.exe reports them differently.
                 BindExpression(invocation.Target, scope, invoked: true);
@@ -820,6 +905,10 @@ public sealed class Binder
 
             case BinaryExpressionSyntax binary:
                 BindExpression(binary.Left, scope, invoked: false);
+
+                if (binary.OperatorToken == TokenKind.LeftShift && BindOutput(binary.Right, scope))
+                    break;
+
                 BindExpression(binary.Right, scope, invoked: false);
                 break;
 

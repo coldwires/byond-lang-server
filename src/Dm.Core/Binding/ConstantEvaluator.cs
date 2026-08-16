@@ -30,13 +30,27 @@ namespace Dm.Core.Binding;
 /// them something the source does not.
 /// </para>
 /// <para>
-/// Identifiers are not resolved. A macro is already gone by the time the parser runs, which is the
-/// common case; a DM <c>const</c> var would need a tree walk and a cycle guard, and is the obvious
-/// next step rather than part of this one.
+/// A macro is already gone by the time the parser runs, which is the common case for a name in
+/// an initialiser. A DM <c>const</c> var is the other case, and it is resolved through the
+/// <see cref="Resolver"/> a caller supplies — the tree walk and the cycle guard live in
+/// <see cref="Symbols.ObjectTree.ConstantValueOf"/>, because they need the finished tree and this
+/// runs per file. Probed 2026-08-16 with <c>-warn init_proc</c>, which fires on a <c>/turf</c>
+/// var whose initialiser is not a compile-time constant: every const-derived initialiser is
+/// silent — a const on the same type, on an ancestor, at root, a const of a const, a string
+/// const, and the <c>/path::NAME</c> static form — so dm.exe folds all of them. A non-const var
+/// named in a type-level initialiser is <i>"expected a constant expression"</i>, which is why the
+/// resolver is asked only for consts.
 /// </para>
 /// </remarks>
 internal static class ConstantEvaluator
 {
+    /// <summary>
+    /// Answers a name in an initialiser: a bare identifier when <paramref name="scope"/> is null,
+    /// or <c>NAME</c> in <c>scope::NAME</c> when it is a path. Null when the name is not a
+    /// constant the caller can see.
+    /// </summary>
+    internal delegate Constant? Resolver(string name, PathSyntax? scope);
+
     /// <summary>A folded value, or nothing when the expression is not a compile-time constant.</summary>
     internal readonly struct Constant
     {
@@ -68,16 +82,41 @@ internal static class ConstantEvaluator
     /// <summary>
     /// The value an initialiser folds to, or null when it is not constant or is already a literal.
     /// </summary>
-    internal static string? Fold(ExpressionSyntax? expression)
+    internal static string? Fold(ExpressionSyntax? expression) => Fold(expression, null);
+
+    /// <summary>
+    /// The value an initialiser folds to with names answered by <paramref name="resolve"/>, or
+    /// null when it is not constant or is already a literal.
+    /// </summary>
+    internal static string? Fold(ExpressionSyntax? expression, Resolver? resolve)
     {
         // A literal is its own best rendering - see the class remarks.
         if (expression is null or LiteralExpressionSyntax)
             return null;
 
-        return Evaluate(expression, 0) is { } value ? value.Render() : null;
+        return Evaluate(expression, resolve, 0) is { } value ? value.Render() : null;
     }
 
-    private static Constant? Evaluate(ExpressionSyntax expression, int depth)
+    /// <summary>
+    /// Whether the expression names anything at all - the case the per-file fold cannot answer and
+    /// the tree's lazy pass exists for. Cheap, so the tree asks it before building a resolver.
+    /// </summary>
+    internal static bool NamesAnything(ExpressionSyntax? expression)
+    {
+        return expression switch
+        {
+            null => false,
+            IdentifierExpressionSyntax => true,
+            MemberAccessExpressionSyntax { Kind: MemberAccessKind.Scope } => true,
+            UnaryExpressionSyntax unary => NamesAnything(unary.Operand),
+            BinaryExpressionSyntax binary => NamesAnything(binary.Left) || NamesAnything(binary.Right),
+            ConditionalExpressionSyntax conditional => NamesAnything(conditional.Condition)
+                || NamesAnything(conditional.WhenTrue) || NamesAnything(conditional.WhenFalse),
+            _ => false,
+        };
+    }
+
+    private static Constant? Evaluate(ExpressionSyntax expression, Resolver? resolve, int depth)
     {
         // Guards a pathological nesting rather than any known construct: an editor buffer is
         // malformed on every keystroke and this runs on it.
@@ -89,22 +128,44 @@ internal static class ConstantEvaluator
             case LiteralExpressionSyntax literal:
                 return FromLiteral(literal);
 
-            case UnaryExpressionSyntax unary when Evaluate(unary.Operand, depth + 1) is { } operand:
+            // A bare name: a const var the caller can see, or nothing. Macros never reach here -
+            // the preprocessor replaced them before the parser looked.
+            case IdentifierExpressionSyntax identifier:
+                return resolve?.Invoke(identifier.Name, null);
+
+            // `/turf/probe::TYPE_MAX` - the static form, folded by dm.exe like a bare const.
+            case MemberAccessExpressionSyntax
+            {
+                Kind: MemberAccessKind.Scope, IsProcReference: false,
+                Target: PathExpressionSyntax { Path.Anchor: PathAnchor.Absolute } target,
+            } scoped:
+                return resolve?.Invoke(scoped.Name, target.Path);
+
+            case UnaryExpressionSyntax unary when Evaluate(unary.Operand, resolve, depth + 1) is { } operand:
                 return ApplyUnary(unary.Kind, operand);
 
             case BinaryExpressionSyntax binary
-                when Evaluate(binary.Left, depth + 1) is { } left
-                    && Evaluate(binary.Right, depth + 1) is { } right:
+                when Evaluate(binary.Left, resolve, depth + 1) is { } left
+                    && Evaluate(binary.Right, resolve, depth + 1) is { } right:
                 return ApplyBinary(binary.OperatorToken, left, right);
 
             case ConditionalExpressionSyntax conditional
-                when Evaluate(conditional.Condition, depth + 1) is { Text: null } test:
-                return Evaluate(test.Number != 0 ? conditional.WhenTrue : conditional.WhenFalse, depth + 1);
+                when Evaluate(conditional.Condition, resolve, depth + 1) is { Text: null } test:
+                return Evaluate(
+                    test.Number != 0 ? conditional.WhenTrue : conditional.WhenFalse, resolve, depth + 1);
 
             default:
                 return null;
         }
     }
+
+    /// <summary>
+    /// The unrendered value, for a caller that will feed it back into another fold — a const of a
+    /// const has to carry the 32-bit float, not its six-digit rendering, or <c>1/3</c> times 3
+    /// stops being 1.
+    /// </summary>
+    internal static Constant? Value(ExpressionSyntax? expression, Resolver? resolve)
+        => expression is null ? null : Evaluate(expression, resolve, 0);
 
     private static Constant? FromLiteral(LiteralExpressionSyntax literal)
     {

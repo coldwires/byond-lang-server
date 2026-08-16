@@ -428,4 +428,87 @@ public sealed class ObjectTree
 
         return null;
     }
+
+    // Folded initialisers that name a const, memoised per var. Keyed by the VarSymbol itself:
+    // the tree is rebuilt on any change, so the memo lives and dies with it. The in-progress set
+    // is the cycle guard - `var/const/A = B` with `var/const/B = A` is a compile error in dm.exe
+    // and a stack overflow here without it.
+    private Dictionary<VarSymbol, Binding.ConstantEvaluator.Constant?>? _constants;
+    private HashSet<VarSymbol>? _folding;
+
+    /// <summary>
+    /// What a var's initialiser comes to, with a name in it resolved to a <c>const</c> the var's
+    /// owner can see, or empty. Supersedes <see cref="VarSymbol.ConstantValue"/> where the two
+    /// differ; identical where the initialiser names nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The per-file fold answers <c>5 * 60</c> and cannot answer <c>TYPE_MAX - 5</c>, because
+    /// <c>TYPE_MAX</c> may be declared in another file, on an ancestor, or at root. This is the
+    /// half that needs the finished tree. Names resolve in dm.exe's own order for a type-level
+    /// initialiser - the owner's inheritance chain nearest-first, then root - and only to a var
+    /// that is <c>const</c>, since a non-const name there is <i>"expected a constant
+    /// expression"</i> to the compiler and folding it would claim a value the program never has.
+    /// The <c>/path::NAME</c> static form resolves against that path's chain instead. Probed
+    /// 2026-08-16 with <c>-warn init_proc</c>; see <see cref="Binding.ConstantEvaluator"/>.
+    /// </para>
+    /// <para>
+    /// A const whose value depends on another const gets the other's 32-bit value, not its
+    /// six-digit rendering, so the arithmetic matches what dm.exe computes.
+    /// </para>
+    /// </remarks>
+    internal string ConstantValueOf(TypeSymbol owner, VarSymbol variable)
+    {
+        // The eager fold already answered, or there is nothing a name lookup could add.
+        if (variable.ConstantValue.Length > 0
+            || !Binding.ConstantEvaluator.NamesAnything(variable.Initializer))
+            return variable.ConstantValue;
+
+        return ConstantOf(owner, variable)?.Render() ?? string.Empty;
+    }
+
+    private Binding.ConstantEvaluator.Constant? ConstantOf(TypeSymbol owner, VarSymbol variable)
+    {
+        _constants ??= new Dictionary<VarSymbol, Binding.ConstantEvaluator.Constant?>(
+            ReferenceEqualityComparer.Instance);
+        _folding ??= new HashSet<VarSymbol>(ReferenceEqualityComparer.Instance);
+
+        if (_constants.TryGetValue(variable, out Binding.ConstantEvaluator.Constant? memo))
+            return memo;
+
+        // A cycle: dm.exe rejects it, and the honest answer here is "not a constant".
+        if (!_folding.Add(variable))
+            return null;
+
+        try
+        {
+            Binding.ConstantEvaluator.Constant? value = Binding.ConstantEvaluator.Value(
+                variable.Initializer,
+                (name, scope) => ResolveConst(scope is null ? owner : Find(TypePath.FromSegments(scope.Segments)), name));
+
+            _constants[variable] = value;
+            return value;
+        }
+        finally
+        {
+            _folding.Remove(variable);
+        }
+    }
+
+    // A const var by name from a type: its chain nearest-first, then root. `IsConst` is the gate -
+    // a bare override on a subtype (`hp = 3`) is not const even when its parent's declaration is,
+    // and dm.exe would not fold through it.
+    private Binding.ConstantEvaluator.Constant? ResolveConst(TypeSymbol? from, string name)
+    {
+        if (from is null)
+            return null;
+
+        foreach (TypeSymbol candidate in InheritanceChain(from))
+        {
+            if (candidate.FindVar(name) is { } found)
+                return found.IsConst ? ConstantOf(candidate, found) : null;
+        }
+
+        return Root.FindVar(name) is { IsConst: true } global ? ConstantOf(Root, global) : null;
+    }
 }

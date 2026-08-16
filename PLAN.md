@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,394 tests ·
-> Last updated: 2026-08-15
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,506 tests ·
+> Last updated: 2026-08-16
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -473,7 +473,7 @@ reason — a per-file outline needs the AST, not the object tree.
 
 The ABI is the riskiest infrastructure. Proven before any compiler code.
 
-- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.33 MB, 39 exports) via NativeAOT, for six
+- ✅ `Dm.Core` + `Dm.Native`, publishing `dm_core.dll` (2.35 MB, 40 exports) via NativeAOT, for six
   RIDs. `win-x86` was added for the DreamMaker patcher and earns its place: the handle table
   packed a generation into the high 32 bits of a pointer and silently had none there, which a
   64-bit-only matrix could not have caught.
@@ -481,8 +481,8 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,394 today (1,323
-  core, 45 native, 26 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,506 today (1,433
+  core, 46 native, 27 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -508,9 +508,11 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
 - ✅ `SourceText`, content preserved exactly rather than normalised. Both UTF-8 and UTF-16 offsets
   exposed; all three terminator forms recognised per §4b. An offset inside a terminator clamps to
   the end of that line's content.
-- ✅ Lexer emitting `Newline`/`Indent`/`Dedent`. Indentation is compared by **prefix**, not by
-  counting columns, so no tab width is assumed — this sidesteps open question 7 for now. Blank and
-  comment-only lines never change the level.
+- ✅ Lexer emitting `Newline`/`Indent`/`Dedent`. Indentation is width in columns — a tab and a
+  space each one — against the unit each top-level declaration's first indented line sets, which is
+  the compiler's own measure (§8, probed 2026-08-16); a line off the unit is `DM0106`, dm.exe's
+  "inconsistent indentation". It was prefix comparison, then a tabs-decide model, before the matrix.
+  Blank and comment-only lines never change the level.
 - ✅ Multiline `{" ... "}` strings, interpolation as a flat token run, `\` line continuation,
   nesting `/* */` comments, resource literals, `#` stringification, the full operator table.
 - ✅ Never throws. Unrecognised input becomes an `Unknown` token plus a diagnostic, so a buffer
@@ -791,7 +793,7 @@ declarations, so statement parsing slots in later without disturbing this.
 - ✅ `TypeTreeBuilder`, driven off the include graph so files arrive in compile order.
 - ✅ `dmc tree`, with `--under` and `--members`.
 - ✅ `tools/builtins-gen` and `Resources/builtins.txt`, embedded in `Dm.Core`. **1,031 entries**
-  built from BYOND 516.1666's reference and `stddef.dm`: 35 types, 390 procs, 377 vars, 17
+  built from BYOND 516.1666's reference and `stddef.dm`: 35 types, 403 procs, 377 vars, 17
   inheritance links and **199 `#define` constants**. 570 carry the reference anchor they were
   scraped from, which is what `dm_hover_at`'s `reference` link is built from — a `V#` or `P#` line
   marks one. `Builtins.Seed` puts the tree entries in before the project's own files;
@@ -875,10 +877,14 @@ completion list after `mob.`.
   silently falling back to the path parent, matching what an unresolvable absolute one does.
 - ✅ Macros in the bare-identifier list, carried from the workspace since the preprocessor has
   removed them long before the parser runs. Bare identifiers only — a macro is not a member of
-  anything, so nothing after `.` or `:` offers one. The names are the walk's **end state** rather
-  than what a given line saw, so `__MAIN__` is offered inside an included file where the compiler
-  would not define it; the M3 boundary snapshots are what would fix that, and it is not worth the
-  cost yet.
+  anything, so nothing after `.` or `:` offers one. **Per file since 2026-08-16**
+  (`Workspace.GetMacroNamesFor`): a completion sees the macros defined at or before its file in
+  the include graph's compile order, the seeds and `-D` injects everywhere, and `__MAIN__` only in
+  the `.dme` itself — the M3 boundary snapshot in its cheapest form. Until then the list was the
+  walk's end state, so a name defined in a later file was offered in an earlier one and `__MAIN__`
+  everywhere. File granularity, so two approximations remain: a macro defined after an `#include`
+  in the same file still counts for the included file, and a later `#undef` hides a name from
+  every file. `GetMacroNames` still returns the end state, for hover and definition.
 - ✅ Semantic classification refinement, M2's reserved kinds 12–15, in `SemanticContext`. Refines
   only what the lexer called an identifier and never moves a span, so a client ignoring the new
   kinds sees exactly the M2 output. Deliberately conservative: a name before `(` is a proc, a member
@@ -1991,13 +1997,13 @@ question we also answer, so we can diff against it instead of hand-checking.
 
 | Flag | Does | Worth to us |
 |---|---|---|
-| `-o` | dumps the **resolved** object tree as XML | Already our oracle for `ObjectTree`; three declaration bugs and the proc/var matching came out of it. Lists types, vars and constant values. It does **not** record a var's declared type, so it can confirm that `feet` is a var on `/mob` but not that it is a `/clothing`. A bare override appears as a second `<var>` entry rather than replacing the first. |
+| `-o` | dumps the **resolved** object tree as XML | Already our oracle for `ObjectTree`; three declaration bugs and the proc/var matching came out of it. Lists types, vars and constant values. It does **not** record a var's declared type, so it can confirm that `feet` is a var on `/mob` but not that it is a `/clothing`. A bare override appears as a second `<var>` entry rather than replacing the first. Three blind spots, all ours-being-right when the diff disagrees: whole builtin branches (`/image`, `/icon`, `/particles`, `/client`…) are absent; a member the project declares on one of those is printed at ROOT as if global; and a root var written `/var/x` — leading slash — is omitted while `var/x` is listed, though both compile (2026-08-16). |
 | `-l` | lists every source file the `.dme` reaches | **Oracle for `IncludeGraph`.** Prints a `Source Files:` block — the `.dme` first, then each file in compile order, relative to the `.dme` directory with `\` separators. `stddef.dm` is not listed. It still writes a `.dmb`, so it is a build with a report rather than a dry run. |
 | `-code_tree` | dumps the **syntactic** tree, before resolution, **plus the builtin branches** | An oracle for the *parser*, not for the type tree — it shows `mob / var / clothing / feet` as literal nested nodes exactly as written, including nesting that resolution later discards. Noisy: it emits the whole of `stddef.dm` ahead of the project and renders each initialiser as an indented `=` node. |
 | `-D<name>[=value]` | defines a macro | See §8's table. Bare `-DNAME` defines it empty, not `1`. |
 | `-clean` | full rebuild, ignoring incremental state | Only relevant if we ever shell out to the compiler. |
 | `-verbose` | verbose progress | — |
-| `-max_errors N` | caps reported errors, default 10000, `0` unlimited | Worth matching in spirit: our own diagnostics need a cap for the same reason. |
+| `-max_errors N` | caps reported errors, default 10000, `0` unlimited | **Measured 2026-08-16 rather than matched.** Recovery is per line, so a broken file yields about one diagnostic per line at worst — 3,699 on a 3,732-line file with every line sabotaged — and nothing superlinear was found across a dozen pathological shapes. No count cap. What the same probing DID find was the cap that mattered: unbounded **nesting** overflowed the stack (a crash the ABI cannot catch), so the parsers now stop at 256 levels with `DM0205` — see the §8 row on nesting. |
 | `-full_paths` | full paths in messages rather than relative | Recommend it to any IDE that parses build output — relative paths are ambiguous once a project has two files of the same name. |
 | `-ignore` / `-warn` / `-error <names,...>` | sets a warning's level; `-error` promotes it to a hard failure | See below. |
 
@@ -2238,7 +2244,9 @@ that the two candidate behaviours produce different compiler output.
 | **`unused_var` is a third warning name, and it is ON by default.** | `var/unused = 1` in an otherwise clean file reports `warning (unused_var): unused: variable defined but not used` with no flags passed. §8's earlier note recorded only `init_proc` and `frequent_call`, both off by default, which left the impression those were the vocabulary. They are the off-by-default half of it. |
 | **`#pragma ignore` flows through include order rather than per file.** | With `#pragma ignore unused_var` in the first-included file, an offending var in the *second* file is silent; swap the two `#include` lines and it warns. So pragma level is sequential state like the macro table, and a diagnostic's level depends on what the compiler had already read — the same shape as §4a's include-order dependence. |
 | **A duplicate definition is two diagnostics, not one.** | `dup: duplicate definition` on the second declaration and `dup: previous definition` on the first, as separate lines. A model with one span per diagnostic cannot express it; the pair wants related locations. |
-| **Indentation depth is not a prefix comparison.** | Against a sibling at one tab, dm.exe accepts `" \t"`, `"\t "` and `" "` as the same level, but rejects `"    "` with its own *"inconsistent indentation"*. Modelled as: tab count decides depth, spaces count only when there are no tabs. |
+| **Indentation is width in columns — a tab and a space each count one — against a per-declaration unit.** | Probed as a matrix on 516.1687 and 516.1686, 2026-08-16. Against a sibling at `"\t"`: `" "` is the same level; `"  "`, `" \t"` and `"\t "` are one level DEEPER (the same "empty type name" a nested var block draws); `"   "` and `"    "` are *"inconsistent indentation"*. The first indented line under a top-level declaration sets its unit and every nested line must be exactly one unit deeper: unit 1 then 3 is inconsistent (level 2 skipped), unit 2 then 4 fine and 6 not, unit 4 then 8 fine and 6 not, and a dedent to a fraction of the unit is inconsistent too. Two declarations may use different units — a tab proc beside a four-space one compiles. **This row used to say `" \t"` and `"\t "` were the same level as `"\t"`**, from 1666 probing that does not reproduce; the fixture for it is what disproved it, and the lexer's model — "tabs decide, spaces only without tabs" — was built on it. `Lexer` now measures width against the unit and reports `DM0106` where dm.exe reports; the four corpora hold at zero invented with it, and the W: archive's decompiler output is rejected at the line the rule predicts, by both. Fixtures `ok/notes.dm`, `errors/indent_spaces`, `indent_deeper`, `indent_skip`. |
+| **A `\`-continued string discards EVERY whitespace character after the break, blank lines included.** | Runtime-verified 2026-08-16 on 516.1687: `"a\` + newline + newline + `b"` is `ab`, and so with three breaks, a whitespace-only line, or a tab. tgstation's `fishing_equipment.dm` writes a continued description with an empty line inside it, which the lexer read as an unterminated string — invisible until the lexer's diagnostics were surfaced, since nothing had ever looked at them. `ok/notes.dm` does not carry it (a string value in a runtime check is the appendix's §10 shape); the lexer test does. |
+| **A `\`-continued `#warn`/`#error` body is one directive, echoed joined at its LAST line.** | Verified 2026-08-16: `#warn (a \` + `b)` prints `warning: #warn (a b)` at the second line. Read as a line end, the continuation was a code line at column 0 — the W: archive's `ssg/movement.dm` declared a type named `NPCs` and dedented the proc it sat in. Fixture `errors/warn_echo`. |
 | **A `;` run before `else`, do's `while`, or `catch` is skipped.** | `if(a) { r = 1; }; else { r = 2; };` compiles, as do `};;`, `};` before a line break, and a bare `;` line between two indented bodies; the same holds for `do { }; while()` and `try { }; catch()`, in brace and inline forms alike. The separator is still required — `if(a) r = 1 else r = 2` is *"expected end of statement"* — and an orphan `else` is still *"'else' clause without preceding 'if' statement"*. Runtime-verified that the keywords bind: both branches reachable, the `while` closes the `do` rather than opening a fresh loop, the `catch` catches. The idiom every `\`-continued macro body forces; worth 44 invented diagnostics on /tg/station. Language notes §19. |
 | **A `switch`'s arm list may be a brace block.** | `switch(pH) { if(7 to 10) { c = "high" } if(2 to 7) { c = "mid" } else { c = "other" } }` compiles and dispatches to the right arm at runtime — the range arms and the `else` all verified by value on 516.1666, with the braces on the header line or the next one and indented arms inside them working identically. Another face of "braces and indentation nest freely", and again what a `\`-continued macro body has to write: tgstation's `CONVERT_PH_TO_COLOR` is exactly this shape. Worth 90 invented diagnostics — the entire "expected ')'" cluster and half the "expected an expression" one. |
 | **Thirteen statement keywords are legal type-path segments.** | `throw`, `set`, `step`, `if`, `else`, `for`, `while`, `switch`, `catch`, `try`, `do`, `spawn`, `null` — probed one per compilation unit, declaring `/datum/<kw>` and then reading a member through `var/datum/<kw>/x`, since the declaration compiling alone proves nothing. Rejected: `in`/`to` (*"missing expression"*), `as` (breaks at the use), `return`/`break`/`continue`/`del`/`new`/`goto` (*"instruction not allowed here"*), and `var`/`list`/`tmp`/`global`/`static`/`const`/`proc`/`verb`, which read as modifiers or group markers and declare no type. A keyword is still not a variable **name**: `var/throw = 1` is *"missing left-hand argument to ="*. Identical on 516.1686. tgstation declares `/datum/manipulator_task/cargo/dropoff_base/throw`. |
@@ -2252,7 +2260,7 @@ that the two candidate behaviours produce different compiler output.
 | **`new /path(args).member` is checked at the widest setting, not against `/path`.** | `new /mob/test(1).elsewhere` compiles where `elsewhere` exists only on an unrelated type, while `new /mob/test(1).nowhere_at_all` is *"`<expression>`.nowhere_at_all: undefined var"* — the compiler names the receiver `<expression>`, so it holds no type for it. This is §8's degrade-to-`:` rule, and it means a `new` expression is NOT typed by the path written two characters earlier. Parentheses are what make it member access at all. |
 | **The `as` clause takes a closed vocabulary of eighteen input types, and it is not the type system.** | Compiled one verb parameter per candidate, `as bogus_xyz` as the control that must fail. Accepted: `anything null text message num icon sound file key color command_text password mob obj turf area movable atom`. **Rejected: `datum`, `list` and `client`** — while `movable` and `atom` are fine, which no rule about types predicts. These are the filters DreamSeeker knows how to prompt for, a different question from what a value may hold. The reference says the vocabulary exists and that `\|` combines it, and never enumerates it. `SyntaxFacts.InputTypes`; completion offers it after `as` and after a `\|` continuing one. 516.1686. |
 | **`usr` is always a `/mob`, and does not take the enclosing type the way `src` does.** | `usr.key` compiles inside a proc on `/obj`, where `key` is a `/mob` var and `/obj` has no such member — so `usr` is not src-shaped. `usr.nonexistent_xyz` is *"undefined var"* in the same position, which is the control saying the compiler checks it at all rather than treating `usr` as untyped. `usr.density`, an `/atom` var, compiles too, consistent with `/mob` and its inheritance chain. **`world.mob` does not change it**, which is the obvious next question since nearly every real game sets one: with `world/mob = /mob/player`, `usr.player_only` is still *"undefined var"* — identical to the no-`world.mob` control — while a written `/mob/player` receiver reaches the same var clean and `usr.key` still resolves. So `world.mob` is a runtime default for what a connecting client gets, not a static retype of `usr`. 516.1686. |
-| **A member reached through a builtin var is type-checked, so builtin vars carry declared types the reference does not state.** | `src.client.nonexistent_xyz` is *"undefined var"* while `src.client.key` compiles, so `client` is known to be a `/client`. `info.html`'s `<h2>` gives only `<name> [list] var (<owner>)`, so the object types appear in prose alone — the same shape as the inheritance links, stated for four of fourteen. Swept all 380 by compiling: `o.VAR.type` compiles only for a var with a declared type (`.` on an untyped var rejects everything), and **only 43 of 380 are object-typed at all**, which is why the reference says so little. `builtins.txt` now records 39 of them; the other four are object-typed and not identifiable — `appearance` cannot be told from `/atom` or `/image` because their member sets are identical, and `pixloc` carries `x` but neither `contents` nor `override`, so it is an internal type with no name. |
+| **A member reached through a builtin var is type-checked, so builtin vars carry declared types the reference does not state.** | `src.client.nonexistent_xyz` is *"undefined var"* while `src.client.key` compiles, so `client` is known to be a `/client`. `info.html`'s `<h2>` gives only `<name> [list] var (<owner>)`, so the object types appear in prose alone — the same shape as the inheritance links, stated for four of fourteen. Swept all 380 by compiling: `o.VAR.type` compiles only for a var with a declared type (`.` on an untyped var rejects everything), and **only 43 of 380 are object-typed at all**, which is why the reference says so little. `builtins.txt` now records 40 of them (`/database/query database` joined 2026-08-16 as a `/database`: `Open()` and `Error()` compile through it, a query's `Execute()` does not); the other three are object-typed and not nameable — `appearance` cannot be told from `/atom` or `/image` because their member sets are identical, `pixloc` carries `x` but neither `contents` nor `override`, so it is an internal type with no name, and `callee.proc` accepts exactly `name`, `desc`, `category`, `invisibility` and `type` (probed 2026-08-16), a proc reference carrying the verb-setting vars, which no type in the tree has and a `/proc` node could not be, since that segment means "declare new". |
 | **A number is no longer allowed as an associative list key.** | `list(1 = "a")` compiles on **516.1666** and is *"list: numbers are not allowed as associative list keys except in alist()"* on **516.1686** — a breaking change rather than a new warning, since code that built clean stops building. `list("k" = "a")` and `alist(1 = "a")` compile on both, which pins it to numbers rather than to associative keys or to `list()`. Found by moving the goldens to 1686 and re-running the corpus: madridspy goes 0 errors → 2 on unchanged source. **We report it as `DM0404`**, and the shape had to be probed too: dm.exe reports **once per list**, on the line the call opens, not once per key — reporting per key invented 12 on madridspy against its 2, caught by the zero-invented gate. An identifier key is accepted — and the reason recorded here first ("a variable the compiler cannot know") was WRONG, runtime-probed 2026-08-13: `list(k1 = "a")` stores the STRING key `"k1"`; the identifier is sugar and the variable is never read. The true variable spelling is parenthesized — `list((v) = "a")` — and with a numeric value it is a POSITIONAL SET, not an association: `list((k1) = "a")` with `k1 = 1` is a one-element list whose `L[1]` is `"a"` and whose assoc half is empty, which is what the banned literal form built on 1666 and why madridspy's guns list was simply positional. A parenthesized LITERAL `list((1) = "a")` still errors and we agree. Only a literal is reported, and the unary minus in `-1` has to be seen through. Fixture `errors/assoc_numeric_key`, both controls in `ok/parsing.dm`, nine unit tests. |
 | **A `for(x in L)` over a pre-declared variable nulls it on normal termination, and `break` does not.** | Runtime-verified on 516.1686 with three exits, because one data point cannot tell "nulled on the way out" from "nulled always": the list exhausting leaves `x` null, a `break` leaves it holding the element it stopped on (`"b"` of `list("a","b","c")`), and an **empty** list — where the body never runs at all — still turns a preset `"preset"` into null. So the null is the loop's termination rather than a consequence of having iterated, and reading a loop variable after its loop is a bug wherever the loop can finish normally. Found by writing the fixture for the `for(x in L)` misparse and predicting `"c"`; the compiler disagreed. Fixture `ok/parsing.dm`, four checks. |
 | **A macro's body can be a directive, and the expansion is RE-PROCESSED.** | `#define int #define` then `int DEAD 2` defines `DEAD` — madridspy builds its whole status-flag vocabulary this way. Macro-made `#undef` works too, a macro can carry a COMPLETE directive (`#define MK #define DEAD 2`, bare `MK`), and mid-line the compiler still attempts the directive ("invalid macro name"). **We re-process since 2026-08-13**, hours after the `-code_tree` oracle surfaced the gap: `FlushPending` splits the run at a line-starting macro whose body begins with `#`, renders the line through the `CommandLineDefine` path, and expands the remainder after — so a later line of the same run sees the macro. Only the HEAD expands: a directive's arguments are raw, or `#undef FOO` would undefine FOO's VALUE — the first version did exactly that and the unit test caught it. Pinned as `ok/macros.dm`'s macro-made-macro check and three preprocessor units; replay verified on madridspy itself. |
@@ -2271,6 +2279,10 @@ that the two candidate behaviours produce different compiler output.
 | **`:` and `?:` ask DIFFERENT questions, and neither is unchecked.** | Probed one case per compilation unit on 516.1687. On a WRITTEN receiver type, `:` searches the declared type, its ancestors **and its subtypes** — `M:on_subtype` compiles where `M.on_subtype` does not, while `M:elsewhere`, on an unrelated type, is *"undefined var"*. **`?:` asks the widest question there is**: whether the name is a member of anything at all. `M?:elsewhere` **compiles** where `M:elsewhere` errors — same receiver, same member, one character apart — and `M?:nowhere_xyz` still errors, so it is wider rather than absent. An UNTYPED receiver asks that same widest question through either operator (`x:hp` and `x:icon_state` compile, builtins counting; `x:nowhere_xyz` does not). The search is **kind-sensitive**: `x:only_a_proc` read as a var is *"undefined var"* though the proc exists. **Subtype means INHERITANCE, not path** — a `/datum/adopted` carrying `parent_type = /mob/test` satisfies `M:only_there`, so a path-children walk misses every re-parented type. And the read-marking splits by operator: a failing `:` draws `unused_var` on its receiver while a failing `?:` does not, which reads as `?:` evaluating the receiver for its null test before the lookup fails. Fixture `errors/colon_access` (10 diagnostics exact, pairings included); the compiling forms are asserted by value in `ok/parsing.dm`. |
 | **A modified-type initializer's values cannot see proc locals.** | `new /obj/pouch{capacity = 5}` compiles and so does `{capacity = POUCH_MAX}` — a **macro** works, because the preprocessor substitutes before the parser looks at scope — while a local `n` and a member `g.ammo` are each *"undefined var"*, **and dm.exe reports `unused_var` on the local beside the error**, which is it saying the name was never read rather than resolved elsewhere. Probed one case per compilation unit on 516.1687 (dm.exe stops at the first error). The braces are mandatory in this position and legal anywhere a type value is (§4c), so the values look like ordinary expressions and are not scoped like them. Consequence for us is coverage rather than correctness: `ModifiedTypeExpressionSyntax` is bound (one of the six holes closed 2026-08-12) and **no code dm.exe accepts can put a project symbol there**, so the reference index cannot be asserted through it — recorded in `tests/fixtures/services/code.dm` where someone would look. Fixture `errors/modified_type_scope`; the compiling halves are asserted by value in `ok/parsing.dm`. |
 | **Brackets TYPE a var, and a `var/list` block header types its children.** | `var/players[0]` is a `/list` — mlaas calls `players.Add()` on exactly that shape throughout — as is `var/L[]`, sized or not, at type level and proc level alike. And a block header's segments are its children's DECLARED TYPE: madridspy's `var/list` block heads `/list` vars, and the nested forms — `var` over `list` over names, `var` over `obj/small_thing` over names, the same at proc level — all type their children (probed, all four shapes in one unit). A written type wins over brackets, and both win over a header's type — and an untyped OVERRIDE on a subtype hides none of them: the effective type is the inheritance chain's first non-null, which is how tgstation's bots override `ai_controller` per type while /atom's declaration keeps it `/datum/ai_controller`. These were invisible until the reject-everything check ran: nothing had ever asked what type an untyped-looking var carried. Runtime check in `ok/parsing.dm`. |
+| **A type-level initialiser may name a `const` — folded at COMPILE time — and nothing else.** | Probed 2026-08-16 on 516.1687, one case per unit. `var/x = plain + 1` with `plain` a non-const global is *"=: expected a constant expression"*; a `const` compiles from every scope — the type's own, an ancestor's through inheritance, a global, a const of a const, a string const, and the `/path::NAME` static form from a sibling. That the compiler FOLDS rather than defers them is not visible from a clean compile: `-warn init_proc` is the discriminator (it fires on a `/turf` var whose initialiser needs the runtime), and under a live pragma the `= list()` control warns while every const-derived line stays silent. One trap: the static form written from an **ancestor** of the path is *"compile failed (possible infinite cross-reference loop)"* — the descendant inherits the const being asked for. This is what `ConstantEvaluator` follows for a name: resolve only to a `const`, nearest-first up the owner's chain then root, never a non-const. Fixtures `errors/const_fold` (silence pinned by the new `total` line), `errors/const_nonconst`, `errors/const_static_loop`; values in `ok/constants.dm`. |
+| **`dm.exe` dies, rather than reports, past ~1,050 nested groups.** | Bisected 2026-08-16 on 516.1687: `return (((…1…)))` compiles at 1,040 levels and at 1,060 the compiler exits 127 with no summary line, closed or unclosed alike. So there is no valid program deeper than that, and a tool's own nesting limit anywhere below it invents nothing on code the compiler accepts. Ours is 256 (`SyntaxFacts.MaxNesting`), one `DM0205` per expression, statement block or declaration block that reaches it, the subtree skipped to its own closer — chosen against measured stack overflows: our Debug build died at ~900 nested parens and Release between 1,200 and 2,000, and a host's thread stack is not ours to size. Not a fixture, since a crash has no golden. |
+| **`message`, `link`, `run` and `ftp` are RESERVED output methods — legal only right of `<<`.** | Probed 2026-08-16 on 516.1687. `var/x = message("a")`, `link(...)` alone, `x = ftp(...)`: each is *"X: output method has no effect here"*, and `/proc/message()`, `/proc/link()`, `/proc/run()`, `/proc/ftp()` and `/datum/proc/link()` are each *"invalid proc name: reserved word"* — so no project can shadow them and a bare invocation is unambiguous. `usr << message(...)`, `world << message(...)`, `L << message()`, `message("a", "b")` — any receiver, any argument count — is `new_name`'s second message, *"The message() output method is being replaced by browse()."*; `link`/`run`/`ftp` there are current and silent. Parenthesised is still the position (`usr << (link("x"))` compiles); combined with an operator (`link("a") + "b"`) is not. **`message` is in no reference and was in no table**, so it had been an invented "undefined proc" on code that compiles. The documented output procs behave differently and are not in the set: a standalone `browse("a")` — even `var/x = browse("a")` — is read as a LABEL named `browse` with `unused_label`, of all things; `output`, `load_resource`, `browse_rsc` likewise. `SyntaxFacts.IsOutputMethod`; `DM0405` for the misuse and the reserved name; fixtures `errors/output_methods`, `errors/output_method_name`. |
+| **The legacy `rand(…)` STATEMENT governs the one expression that follows, wherever it sits.** | Undocumented; probed 2026-08-16 on 516.1687. Every statement-position `rand(` is `new_name`'s third message, *"The rand statement is being faded out.  Use pick() instead if possible."* — with an argument or none. Its body is the NEXT EXPRESSION: on the same line (`rand(50) x = 1`), on the next line at the same indent, or indented — and exactly one. A non-expression body is the compiler's error: `return 1` is *": missing expression"*, `if(x)` *": invalid expression"*, a second indented line *": invalid expression"* (on the FIRST body line for a two-line block and the second for three — dm.exe's own inconsistency), and a `rand(50)` closing a proc swallows the next declaration's header and errors on it. `x = rand(50)` and `if(rand(50))` are ordinary calls. Read as an expression statement the indented body was a silent stray block; `RandStatementSyntax` now. Fixture `errors/rand_statement`. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
 comment would otherwise nest and swallow the remainder of the file. Found in real code.
@@ -2280,7 +2292,8 @@ comment would otherwise nest and swallow the remainder of the file. Found in rea
 - **`@"..."` raw strings exist**, with neither escape processing nor interpolation. Found as
   `new(@"[^\x01-\xFFŐ-š…]", "g")` — the `\x` sequences and the leading `[` both prove it,
   since either would otherwise be consumed. `@{"..."}` is supported defensively.
-- **A backslash before a line break continues a string literal.** Used constantly for long
+- **A backslash before a line break continues a string literal**, discarding every whitespace
+  character that follows — blank lines included (§8, 2026-08-16). Used constantly for long
   description text. The terminator must be consumed whole; skipping a fixed two characters eats the
   CR of a CRLF pair and leaves the LF, which then reads as an unterminated string. Invisible on
   LF-only files.
@@ -2677,11 +2690,20 @@ name* showed `dir` 1792, `icon_state` 1161, `pixel_x`/`pixel_y` 900 each — the
 shared cause spread thin across thousands of owners. Both views cost a single command; only one was
 informative, and picking the wrong one nearly closed the investigation early.
 
-**Residue: 26 vars and 55 procs out of roughly 289,000.** Two leads if it is ever worth another
-pass. Several root-level members are missing while the same names appear invented under builtin
-branches — `/icon AddAlphaMask`, `/mutable_appearance/... appearance_ref` — so an owner is resolving
-to a builtin type where it should be the root. And one invented entry has the owner `/else`, which
-means a conditional branch is being read as a declaration somewhere.
+**Residue: 26 vars and 55 procs out of roughly 289,000** — as measured 2026-08-03. **Re-measured
+2026-08-16 with the committed harness: exact both ways.** 64,870 procs and 224,145 vars in the
+dump, nothing missing, nothing extra — once the harness knew two more things about the dump.
+The "root-level members missing while the same names appear under builtin branches" lead was
+the dump's doing, not ours: a member declared on a type `-o` omits (`/image`,
+`/mutable_appearance`, `/client`, `/matrix`, `/particles`) is printed at ROOT, as if global —
+tgstation's `/image/proc/add_overlay` sits at depth 1 in the XML — and all 16 procs and 7 vars
+of the remaining "misses" were that shape, ours holding each on its declaring type. The
+`/else` owner from the first pass is gone. What remains is three root vars the dump lacks and we
+have — `/var/__rust_g` and the two dreamluau globals — because **`-o` omits a root var declared
+with a leading slash**, `/var/x`, initialised or not, while listing `var/x`; both compile
+(probed). And the reason the residue was ever measured wrong: the harness decoded the dump with
+the console code page, and one byte cp1252 cannot map made the dump side read as empty. Traps
+6–8 in `compare_object_tree.py`, beside the five that came before.
 
 The third cause was **indentation across a skipped `#if` region**, found on mlaas rather than here:
 the region takes its `Indent` tokens with it while the matching `Dedent`s survive in live code, so
@@ -2712,7 +2734,7 @@ it.
 | 6 | AOT `Dm.Lsp` for startup latency, or keep a reflection-based LSP library | M10 | **Resolved** — neither: hand-rolled JSON-RPC over `System.Text.Json`, dependency-free, so AOT stays open and no library is carried. See M10. |
 | 7 | Can a brace block contain indented sub-blocks? | M4 | **Resolved** — yes, and the two nest freely. `-o` prints an identical tree for the braced and indented forms. See §8. |
 | 8 | Access to the team's game codebase for M3 onward | M3, M5, M6 | **Resolved** — mlaas is the correctness harness and is exact against `dm.exe -o`. See §9. |
-| 9 | DM's exact "inconsistent indentation" rule | M4 | **Partly resolved** — see §8. Our model matches every case dm.exe accepts; the one divergence is `"    "` against a tab, which DM rejects and we silently nest. Under-reporting is deliberate. |
+| 9 | DM's exact "inconsistent indentation" rule | M4 | **Resolved 2026-08-16** — probed as a matrix (§8): width in columns with tab = space = 1, a per-declaration unit from the first indented line, exactly one unit per level. The lexer measures it that way and reports `DM0106` where dm.exe reports; the earlier "partly resolved" model rested on a 1666 table that does not reproduce. |
 | 10 | Source encoding: some old files are Windows-1252, not UTF-8 | M3 | **Resolved** — `SourceFileReader` detects it. |
 | 11 | What does `#include` do inside a false `#ifdef`? | M3 | **Resolved** — not followed. `IncludeGraph` walks includes only while `ConditionalStack.IsActive`. |
 | 12 | A bare identifier offers 19,898 items on /tg/station. Should the cap default on, and the prefix filter move server-side with it? | completion payload | **Answered 2026-08-06 by the patcher client, and shipped**: cap opt-in via `dm_set_completion_limit` with `truncated` / `isIncomplete` reported, ranked by scope distance, and the prefix filter stays client-side — moving it costs a call per keystroke (~909 ms on /tg/station) to fix a problem confined to one context. See §9. |
@@ -3842,3 +3864,192 @@ it.
   madridspy exact but for the blind spot, mlaas 100 files position-for-position against `-l`, and
   warklan **not comparable** there, exiting 2 rather than reporting a false difference, because an
   erroring build emits no `Source Files:` block.
+- **2026-08-15** — **Doc-drift pass after 0.31, found by reading every doc end to end.** The one
+  that mattered: `abi/schema/` still enumerated three queries — `objectTree`, `subtypesOf`,
+  `members` — while `ancestorsOf` and `references` had shipped at 0.14 and `overriddenProc` at
+  0.31, and four docs say the `dm/*` methods mirror the schema "field for field". The request
+  schema gains `name` and `encoding` and the wider `limit`; the response schema gains the three
+  shapes, read off `QueryJson.cs` rather than the header prose, including the fact that
+  `references` answers an unknown path with `DM_OK` and an empty list rather than
+  `DM_ERR_NOT_FOUND`. Smaller: `dm_core.hpp` had no `dme_entries` wrapper (every other export is
+  wrapped, and `state.md` calls hpp + smoke "a complete integration package"); INTEGRATION §9's
+  free-table named two `char*` sources out of twenty; `docs/lsp.md` and `docs/api.md` were dated
+  08-13 with 08-15 content; PLAN's M0 bullet said 39 exports; and `state.md`'s Position block —
+  the block that exists to hold the countable facts once — was at 0.30/263 checks with the
+  pick-up section below it at 0.31/269, the same self-contradiction for the third time. DLL
+  re-measured at 2.35 MB (2,466,816 bytes) against the recorded 2.33. Smoke rebuilt on x64 to
+  compile the hpp change: 269 checks reporting 0.31. `DocConsistencyTests` green — and it saw
+  none of this, since it gates the version and export count and nothing here was either.
+- **2026-08-16** — **A `const` by name folds — the piece 0.30 named as not done — and the probe
+  rewrote its shape before any code.** The question was whether dm.exe folds `TYPE_MAX - 5` at
+  compile time or evaluates it in the init proc, and `-o` cannot say (it renders the initialiser's
+  source tokens, `TYPE_MAX5`); `-warn init_proc` can, since it fires on exactly a `/turf` var the
+  compiler did not fold. Every const-derived form is silent under a live pragma beside a `list()`
+  control that warns — own const, ancestor's, global, const of a const, string const, the
+  `/path::NAME` static form — so the fold is the compiler's own. Two things the probe added: a
+  NON-const name in a type-level initialiser is *"expected a constant expression"* (which is why the
+  resolver answers only for `IsConst` vars), and the static form from an **ancestor** of the path
+  is *"possible infinite cross-reference loop"* — found by writing the ok/ fixture the obvious way
+  first. Implementation: `VarSymbol` keeps its initialiser expression, `ObjectTree.ConstantValueOf`
+  resolves names lazily against the finished tree (chain nearest-first, then root; memoised per
+  var; cycle-guarded, since `A = B` / `B = A` is a compile error and would otherwise be a stack
+  overflow) and carries the 32-bit value between consts rather than the six-digit rendering, so
+  `THIRD * 3` is still `1`. Hover and completion ask the tree; the eager per-file fold stands where
+  nothing is named. **And the CLI never printed the constant** — 0.30 shipped it on the ABI and
+  LSP and skipped the arbiter, whose own comment says it shows every field the ABI carries; `dmc
+  hover` renders `= 35` and `dmc complete` renders `= OWN_MAX - 5 -> 35` now. The fixture harness
+  gained one convention on the way: a `.expected` row `total 0 errors, 1 warning` pins dm.exe's
+  summary, which is how a fixture asserts silence. Fixtures `errors/const_fold`,
+  `const_nonconst`, `const_static_loop`; `ok/` at 117 runtime checks; nine tree-level unit tests;
+  1,415 tests; mlaas keystroke 11 ms.
+- **2026-08-16** — **The `-max_errors` item turned into a crash fix.** §8's note that "our own
+  diagnostics need a cap for the same reason" was measured before it was matched: recovery is per
+  line, so a sabotaged 3,732-line file yields 3,699 diagnostics and nothing superlinear across a
+  dozen shapes — no count cap is needed. But `(` × 5,000 was a **stack overflow**, which .NET cannot
+  catch and which across the C ABI kills the host, and so were nested calls, indexes,
+  interpolations, ternaries, assignment chains, indented and braced statement blocks and indented
+  and braced type blocks. `dm.exe` itself dies between 1,040 and 1,060 nested groups (exit 127, no
+  summary), so no compiling program is deeper than any limit under that. The three parsers now
+  count depth separately — the expression parser at `ParseAssignment` (every operand path passes
+  it; the ternary and assignment recursion re-enters there and never through `ParseUnary` twice,
+  which the first version missed) plus the unary-operator recursion; the statement parser at
+  `ParseStatement`; the declaration parser at both block entries — stop at 256
+  (`SyntaxFacts.MaxNesting`), report `DM0205` once, and skip the subtree to its own closer so the
+  enclosing levels stay quiet. 256 sits under the measured overflows (Debug ~900, Release
+  1,200–2,000) with a host's unknown stack in mind. Fifteen tests, thirteen of them 5,000-deep
+  shapes that would take the test host down on regression; all four corpora at zero invented with
+  the guard live.
+- **2026-08-16** — **`new_name`'s other two messages, and the invented diagnostic they were
+  hiding.** The `message()` output method and the `rand` statement, both "left until something
+  asks" since 2026-08-11. Probing rewrote both before code. `message`, `link`, `run` and `ftp` are
+  RESERVED WORDS — `/datum/proc/link()` is *"invalid proc name: reserved word"* — legal only right
+  of `<<`, an error anywhere else, and `message` is in no reference and was in no table, so
+  `usr << message("hi")`, which compiles, had been an invented "undefined proc" all along; no
+  corpus writes it, which is how a deprecated keyword hides. `SyntaxFacts.IsOutputMethod`,
+  `Binder.BindOutput` for the `<<` position (the `new_name` on `message`, whatever the receiver or
+  argument count), `DM0405` for the misuse and the reserved name. The `rand` STATEMENT is
+  undocumented and its body is the NEXT EXPRESSION wherever it sits — same line, next line at the
+  same indent, or indented; exactly one; `return`/`if` bodies and second lines are the compiler's
+  own errors, matched — and read as an expression statement its indented body was a silent stray
+  block: `RandStatementSyntax` now, the binder warning on every statement-position `rand(`. Two
+  language findings on the way: a standalone `browse("a")` — even `var/x = browse("a")` — is a
+  LABEL to dm.exe, and a `rand(50)` closing a proc swallows the next declaration's header. Fixtures
+  `errors/output_methods`, `output_method_name`, `rand_statement`; six binder tests, three parser
+  tests; ratchet **74 → 76 of 255** (`b2_message_output`, `b3_rand_block`); all four corpora at
+  0/0/0; 1,451 tests.
+- **2026-08-16** — **Completion's macro list is per file.** Since M6 the bare-identifier list
+  carried the walk's END state, so a macro defined in a later file was offered in an earlier one
+  and `__MAIN__` — which the walk defines only inside the `.dme` — was offered everywhere, since
+  the walk ends back in the `.dme` with it defined. `Workspace.GetMacroNamesFor(document)` filters
+  by the include graph's compile order (`Graph.Files`, which lists directive-only files — the
+  parses do not, and a defines-only header is exactly where macros come from): a name is visible
+  when its definition sits at or before the file, seeds and `-D` injects everywhere, `__MAIN__` in
+  the `.dme` alone; a file the walk never reached gets the whole table as before. All seven
+  completion call sites — CLI, LSP, the three ABI exports — ask the per-file form; hover and
+  definition keep the end state. tgstation's `atoms_movable.dm:281` goes 19,898 → 19,841 items.
+  **And two ABI exports were on the wrong tree**: `dm_complete_brief` and `dm_complete_resolve`
+  still called `GetObjectTree()` where the 0.20 standalone fix moved every other position-shaped
+  export to `GetTreeFor(path)`, so a lone file's own members did not complete through the brief
+  path. Fixed in the same call-site pass. Also fixed: five double-encoded `—`/`§` in
+  `Workspace.cs`'s comments, the only file carrying any. One workspace test.
+- **2026-08-16** — **The four untyped builtin vars, re-probed: one gets a type, three are
+  unnameable.** `/database/query database` is a `/database` — `q.database.Open()` and `.Error()`
+  compile, a query's `.Execute()` and a control do not — and is typed in the generator's verified
+  table; `builtins.txt` moved one line. `callee.proc` accepts exactly `name`, `desc`, `category`,
+  `invisibility` and `type` and rejects `hidden`, `loc`, `tag`, `vars`, `parent_type`: a proc
+  reference carrying the verb-setting vars, a member set no type in the tree has, and a `/proc`
+  node cannot exist since that segment means "declare new" — so it stays untyped by finding rather
+  than by omission, beside `appearance` and `pixloc`. Corpora at 0/0/0 with the new type live;
+  two builtins tests pin the typed and the deliberately untyped rows.
+- **2026-08-16** — **Every compile-only section of the language notes is pinned against 1687, and
+  pinning them broke two claims and found two lexer bugs.** `ok/notes.dm` asserts by value the
+  leading-`.` search (backtracking, nearest wins, root from any depth, a global proc's anchor), the
+  three brace/indentation nesting shapes, both `#pragma syntax` grammars, `1#INF`, a name escape,
+  directive layout-neutrality and the `#if` grammar it accepts; must-fail units cover the search's
+  three rejections (`errors/leading_dot`), the leading-`:` path (`colon_path`), `usr` under
+  `world.mob` (`usr_type`), the `#if` grammar it rejects (`if_undefined_name`, `if_defined_parens`,
+  `if_grammar`), and the two lints' trigger set under a live pragma (`lint_triggers` — /datum,
+  /atom, /turf exactly plus the /turf subtree, nine warnings, the total pinning every silence).
+  **The indentation table did not survive**: `" \t"` and `"\t "` are one level DEEPER than `"\t"`
+  on 1686 and 1687 alike, not the same level, and a matrix settled the rule — width in columns
+  with tab = space = 1, a per-declaration unit from the first indented line, exactly one unit per
+  level (§8, open question 9 closed). The lexer's model was built on the old table; it now measures
+  the compiler's way and reports `DM0106` "inconsistent indentation" where dm.exe does, and the
+  W: archive's decompiler output is rejected by both at the same line. Then, because a lexer that
+  reports needs its reports seen, **the lexer's diagnostics now reach the parse and the walk** —
+  `DeclarationParser.Parse(LexResult)` and `IncludeGraph.WalkFileCore` forward them — where until
+  now only `dmc scan` had ever looked at them. That found the two bugs: **a `\`-continued string
+  crossing a BLANK line** (tgstation's `fishing_equipment.dm`; the compiler discards every
+  whitespace character after the break, runtime-verified — §10 corrected) read as unterminated, and
+  **a `\`-continued `#warn` body** (the archive's `ssg/movement.dm`) read as a code line at column
+  0 that declared a type; both fixed, the echo now joined and reported at the directive's last line
+  as dm.exe does (`errors/warn_echo` extended). **And a finding recorded rather than fixed**: the
+  preprocessor's own diagnostics reach `dmc diagdiff` and neither `dm_diagnostics` nor
+  `publishDiagnostics` — queue item 0. `ok/` at 134 runtime checks, 96 fixture rows, corpora at
+  0/0/0 with everything live, W: archive 8 → 12 flagged files and every one rejected by dm.exe.
+- **2026-08-16** — **tgstation is exact against `dm.exe -o` both ways, and the 26/55 residue was
+  the harness and the dump.** Re-measured with the committed harness: 64,870 procs and 224,145
+  vars, nothing missing, nothing extra beyond three root vars the dump omits. Three traps joined
+  the five: the harness decoded the dump with the console code page and one unmappable byte made
+  the dump side read as EMPTY (`dump 0 … extra 125315`); a member declared on a type `-o` omits is
+  printed at ROOT as if global (`/image/proc/add_overlay` at depth 1 — all 23 remaining "misses",
+  ours holding each on its declaring type); and `-o` omits a root var declared `/var/x` while
+  listing `var/x`, both compiling (probed) — tgstation's `/var/__rust_g` and two dreamluau
+  globals. The report now names the rehung members and flags a root-var extra. §9's residue
+  paragraph and the `-o` flag row carry it. A runtime check for the `/var/x` spelling is owed to
+  `ok/notes.dm` — written, then withdrawn unverified at session end.
+- **2026-08-16** — **The `/var/x` check is in, and the ratchet moved three without a check being
+  written.** `ok/notes.dm` declares a global each way and **writes** as well as reads both, since a
+  value the compiler folded rather than declared would take the read and refuse the write; 134 →
+  **135 runtime checks**, compiled and run under 1687 before committing, which is what the previous
+  session could not finish. Then `run.ps1 -Probes` came back **79/255 against a baseline of 76**,
+  and the three are one cause: surfacing the LEXER's diagnostics through the parse and the walk
+  (the same commit that fixed the two `\`-continuation bugs) answered `b1_unterm_squote`, and
+  `b1_pragma_warn_junk` on **both** of dm.exe's lines rather than one, while the new `DM0106`
+  answered `e_bad_indentation`. Nothing was written for any of them. **The ratchet was three behind
+  its own product for a session**, because the session that shipped the change was cut at
+  compaction before it could re-run `-Probes` — so re-run the ratchet in the session that ships a
+  diagnostic change rather than the next one. Raised deliberately after reading each difference,
+  per the fixtures README.
+- **2026-08-16** — Doc drift, measured rather than re-read. §5's builtins breakdown said **390
+  procs** against 403 on disk: the thirteen `_char` text procs went in on 2026-08-13 and moved the
+  **total** to 1,031, which every doc carries correctly, while the split beneath it was never
+  re-added up. The anchor count in the same sentence re-measured at 570 and was already right (the
+  changelog's 572 is that day's run, not a claim about now). `BASELINE.txt`'s header said "252
+  messages" twice with its own `total 255` nine lines below — so it now points at that line instead
+  of carrying a second copy, which is the fix that stops it recurring rather than the one that
+  corrects it once.
+- **2026-08-16** — **Walk-time diagnostics reach both shells (ROADMAP item 0), and the plumbing was
+  not the whole job.** `Workspace.GetWalkDiagnostics(path)` keeps the walk's own list — a `#warn`
+  echo, an unterminated `#if`, a missing `#include`, an unknown pragma name — and filters it to one
+  file; `dm_diagnostics` and `publishDiagnostics` add it. These belong to the include walk rather
+  than to any one file's syntax, so no `ParseResult` can hold them and a shell assembling
+  `parse.Diagnostics + Binder.Bind` misses them however complete both halves are. **`dmc diagdiff`
+  counted them the whole time, so the zero-invented figure was measured over a set no editor ever
+  showed.**
+  **The trap was double-reporting, and only a test could see it.** Since 2026-08-16 the lexer's
+  diagnostics reach the parse, *and* the walk keeps its own copy of every file's `lex.Diagnostics` —
+  so adding the walk's list to the shells' reported every unterminated string **twice**. The corpora
+  are structurally blind to it, and for a sharper reason than "they never assemble the shells' set":
+  **`diagdiff` compares SETS.** `ourKeys` is a `HashSet<Entry>` keyed on (file, line, severity), so a
+  diagnostic reported twice collapses to one before anything is counted — the instrument cannot
+  express duplication at all, and `dmc diagdiff` already double-counts lexer diagnostics today
+  without ever being able to say so. Zero invented is therefore not evidence about duplicate
+  reporting, on any project, at any size. Filtered on
+  the invariant — one report per site, matched by (id, span) against the file's own parse — rather
+  than on a list of lexer ids, which the next id added to the lexer would have silently fallen out
+  of. The failing test came first and is the reason the bug is in this entry rather than in a later
+  one.
+  **No ABI bump**, on the precedent `INTEGRATION.txt` §13 already sets: no export, field or enum
+  value changed, and the semantic set has always grown inside `dm_diagnostics` without one. A
+  client cannot pin against "more diagnostics" the way it could against 0.29's `parameter` kind.
+  `dm_document_symbols` deliberately does not carry them — it needs no object tree today and these
+  do, so the outline keeps its cheap path, and both docs say which call to ask.
+  Nine tests: seven on the workspace (attribution to the right file, the span indexing that file,
+  an edit clearing it, standalone empty, and the no-double invariant), one at the C ABI because the
+  last defect of this shape (0.29's `parameter` kind crossing as `"unknown"`) was invisible to
+  everything that stopped short of the boundary, and one LSP protocol test — run with the wiring
+  removed to confirm it fails, since a check that cannot fail proves nothing. 1,497 → 1,506, all
+  four corpora at baseline.
+  `DropDerived()` replaces the four identical invalidation blocks it would otherwise have been a
+  fifth copy in. They had already drifted: `_suppressedWarnings` was in none of them.

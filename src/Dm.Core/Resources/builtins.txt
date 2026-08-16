@@ -789,7 +789,7 @@ V# /client view
 V# /client virtual_eye
 V /database _binobj
 V /database _dm_interface
-V /database/query database
+V /database/query database /database
 V# /datum parent_type
 V# /datum tag
 V# /datum type

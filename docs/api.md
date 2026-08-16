@@ -4,7 +4,7 @@ The C# surface, for a host that references the assembly directly — the third s
 C ABI (`INTEGRATION.txt`) and the LSP (`docs/lsp.md`).
 
 > **Live document.** A public type appearing, disappearing or changing meaning belongs in this
-> file in the same commit. Last updated: 2026-08-13.
+> file in the same commit. Last updated: 2026-08-16.
 
 **What this file is for.** The XML documentation ships with the assembly and carries every
 member's contract — an undocumented public member fails the build, so IntelliSense is the
@@ -42,6 +42,11 @@ ObjectTree tree = ws.GetObjectTree();                     // built on demand, ca
 - **Change** `SetDefines`, `Invalidate` (the disk moved: a checkout, a build — cheap, per-file
   caches revalidate by write time), `CompletionLimit`, `IconStateReader` (inject a `.dmi` reader;
   `Dm.Core` does not reference `Dm.Assets`).
+- **Diagnostics the walk raised** `GetWalkDiagnostics(path)` — a `#warn` echo, an unterminated
+  `#if`, a missing `#include`, an unknown pragma name. A host assembling
+  `ParseResult.Diagnostics + Binder.Bind` has a complete-looking set that is missing these, because
+  they belong to the include walk rather than to any one file's syntax. It excludes the lexer's,
+  which the parse already carries, so the three lists add up to one report per site.
 - **Project questions** `IsFileInProject`, `HasEnvironmentFile`, `DmePath`, `RootDirectory`,
   `ResolvePath`, `LibraryRoot`, `Defines`.
 - **`.dme` tickmarks** `IsFileTicked`, `TickFile`, `UntickFile` — an edit (`DmeEdit`) comes back
@@ -71,6 +76,7 @@ aborts at the next token check.
 | Every use of a symbol | `ReferenceService` → `ReferenceListing` / `Reference` |
 | Rename, best-effort | `RenameService` → `RenameResult` (or `Workspace.RenameAt`) |
 | Semantic diagnostics | `Binder.Bind` → `Diagnostic` list (syntax half: `ParseResult.Diagnostics`) |
+| The walk's own diagnostics | `Workspace.GetWalkDiagnostics` → `Diagnostic` list |
 | Outline | `DocumentSymbolService` → `DocumentSymbol` |
 | Search by name | `WorkspaceSymbolService` → `WorkspaceSymbol` |
 | Tree panel / bulk queries | `TreeQueryService` → `TreeNode`, `TypeMembers`, `SubtypeListing` |
@@ -99,7 +105,11 @@ until a buffer, define or `Invalidate` changes it.
 
 `MacroTable` (`GetMacroTable`), `SemanticContext` (`GetSemanticContext`), `LexResult`
 (`Document.Lex`), and `FileSyntax` / `SyntaxNode` (`ParseResult.Root`) are public so they can be
-obtained from the workspace and handed to the services that want them. Their internals are not
+obtained from the workspace and handed to the services that want them. For a completion list,
+hand `CompletionService` **`GetMacroNamesFor(documentPath)`** rather than `GetMacroNames()`: the
+first is what that file could see — defined at or before it in compile order, `__MAIN__` only in
+the `.dme` — and the second is the walk's end state, which is right for hover and definition and
+wrong for a list of what can be typed. Their internals are not
 API: a host shuttles them, the services read them. The AST behind `SyntaxNode` is `internal` on
 purpose — an in-process consumer gets the same analysis surface the other shells get, not a
 parser.

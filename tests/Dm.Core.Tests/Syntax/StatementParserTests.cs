@@ -546,6 +546,55 @@ public class StatementParserTests
         Assert.Equal(DiagnosticSeverity.Warning, reported.Severity);
     }
 
+    // -- the rand statement -------------------------------------------------
+
+    /// <summary>
+    /// <c>rand(…)</c> at statement start governs the ONE expression that follows, wherever it
+    /// sits: same line, next line at the same indent, or indented. Probed 2026-08-16 (PLAN §8);
+    /// read as an expression statement the indented body was a silent stray block.
+    /// </summary>
+    [Theory]
+    [InlineData("\trand(50)\n\t\tx = 1\n")]
+    [InlineData("\trand(50) x = 1\n")]
+    [InlineData("\trand(50)\n\tx = 1\n")]
+    public void Rand_governs_the_next_expression(string statements)
+    {
+        RandStatementSyntax rand = Single<RandStatementSyntax>(statements);
+
+        Assert.Equal("rand", Assert.IsType<IdentifierExpressionSyntax>(rand.Call.Target).Name);
+        Assert.IsType<AssignmentExpressionSyntax>(rand.Body);
+    }
+
+    /// <summary>
+    /// The body must be an expression, and dm.exe's own words say which way it failed:
+    /// <c>return 1</c> is "missing expression", <c>if(x)</c> "invalid expression", a second
+    /// indented line "invalid expression". The non-expression is left for the block, so
+    /// <c>return 2</c> still parses as the statement it is.
+    /// </summary>
+    [Fact]
+    public void A_rand_body_that_is_not_an_expression_is_reported_and_left()
+    {
+        BlockStatementSyntax body = Body(
+            "/mob/proc/F()\n\trand(50)\n\treturn 2\n", out IReadOnlyList<Diagnostic> diagnostics);
+
+        Assert.Equal(2, body.Statements.Count);
+        Assert.IsType<RandStatementSyntax>(body.Statements[0]);
+        Assert.IsType<ReturnStatementSyntax>(body.Statements[1]);
+        Assert.Contains(diagnostics, d => d.Message == "missing expression");
+
+        Body("/mob/proc/F()\n\trand(1, 2)\n\t\tx = 1\n\t\tx = 2\n", out diagnostics);
+        Assert.Contains(diagnostics, d => d.Message == "invalid expression");
+    }
+
+    /// <summary>An expression use of <c>rand()</c> is a call like any other.</summary>
+    [Fact]
+    public void Rand_in_expression_position_is_not_the_statement()
+    {
+        Assert.IsType<AssignmentExpressionSyntax>(
+            Single<ExpressionStatementSyntax>("\tx = rand(50)\n").Expression);
+        Assert.IsType<IfStatementSyntax>(Single<IfStatementSyntax>("\tif(rand(50))\n\t\tx = 1\n"));
+    }
+
     // -- recovery -----------------------------------------------------------
 
     [Fact]

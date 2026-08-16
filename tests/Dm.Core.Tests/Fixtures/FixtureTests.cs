@@ -149,6 +149,16 @@ public class FixtureTests
 
         foreach (string line in wanted)
         {
+            // `total 0 errors, 1 warnings` pins the compiler's summary, which is how a fixture
+            // asserts SILENCE - "these lines are reported" cannot say "and nothing else is".
+            if (line.StartsWith("total ", StringComparison.Ordinal))
+            {
+                Assert.True(
+                    output.Contains(line["total ".Length..].Trim(), StringComparison.Ordinal),
+                    $"{relative} summary moved from '{line}':\n{output}");
+                continue;
+            }
+
             string[] parts = line.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
 
             Assert.True(

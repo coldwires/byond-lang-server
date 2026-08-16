@@ -301,6 +301,11 @@ public class LexerTests
     [InlineData("\"one \\\ntwo\"")]      // LF
     [InlineData("\"one \\\r\ntwo\"")]    // CRLF
     [InlineData("\"one \\\rtwo\"")]      // lone CR
+    // The continuation discards EVERY whitespace character after the break, blank lines
+    // included - `"a\` + newline + newline + `b"` is `ab`, runtime-verified 2026-08-16.
+    // tgstation writes a continued description with an empty line inside it.
+    [InlineData("\"one \\\n\ntwo\"")]
+    [InlineData("\"one \\\r\n\r\n   \r\n\ttwo\"")]
     public void A_backslash_before_a_line_break_continues_the_string(string source)
     {
         LexResult result = Lex(source);
@@ -309,6 +314,21 @@ public class LexerTests
         Assert.Equal(
             new[] { TokenKind.StringStart, TokenKind.StringText, TokenKind.StringEnd },
             Kinds(source));
+    }
+
+    /// <summary>
+    /// A `#warn` body continued with a backslash is one directive, not a directive and a code
+    /// line at column 0 - which is what `NPCs are Obsolete)` became, declaring a type. Found in the
+    /// W: archive by the indentation diagnostic.
+    /// </summary>
+    [Fact]
+    public void A_continued_warn_body_is_one_directive_text_token()
+    {
+        LexResult result = Lex("/proc/f()\n\tvar/a = 1\n#warn (this is \\\ncontinued)\n\treturn a\n");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, CountOf(result, TokenKind.DirectiveText));
+        Assert.Equal(1, CountOf(result, TokenKind.Indent));
     }
 
     /// <summary>
@@ -577,32 +597,56 @@ public class LexerTests
     }
 
     /// <summary>
-    /// Depth follows dm.exe, not a tidier rule. Against a sibling at one tab, the compiler accepts
-    /// <c>" \t"</c>, <c>"\t "</c> and <c>" "</c> as the same level. Prefix comparison — which this
-    /// used to do — rejected the first two, flagging code DM compiles.
+    /// Depth is width in columns, a tab and a space each counting one - the compiler's own measure,
+    /// probed as a matrix on 516.1687 and 516.1686 (PLAN §8). Against a sibling at one tab, one
+    /// space is the SAME level; a space and a tab in either order is one level DEEPER. The
+    /// previous model here ("tabs decide, spaces only without tabs") came from the language notes'
+    /// original 516.1666 table, which had those as the same level and does not reproduce.
     /// </summary>
     [Theory]
-    [InlineData("\t")]      // control
-    [InlineData(" \t")]     // space then tab
-    [InlineData("\t ")]     // tab then space
-    [InlineData(" ")]       // a single space, no tabs at all
-    public void Whitespace_forms_the_compiler_accepts_are_the_same_depth(string indent)
+    [InlineData("\t", 1)]      // control
+    [InlineData(" ", 1)]       // one column, like one tab
+    [InlineData(" \t", 2)]     // two columns: nested under North()
+    [InlineData("\t ", 2)]
+    [InlineData("  ", 2)]
+    public void Depth_is_width_in_columns_with_a_tab_counting_one(string indent, int indents)
     {
         LexResult result = Lex($"client\n\tNorth()\n{indent}South()\n");
 
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(1, CountOf(result, TokenKind.Indent));
-        Assert.Equal(1, CountOf(result, TokenKind.Dedent));
+        Assert.Equal(indents, CountOf(result, TokenKind.Indent));
     }
 
-    [Fact]
-    public void Tabs_decide_depth_when_both_tabs_and_spaces_are_present()
+    /// <summary>
+    /// The first indented line under a top-level declaration sets its unit, and a nested line must
+    /// be exactly one unit deeper: a skipped level and a fraction of a unit are both dm.exe's
+    /// "inconsistent indentation" - reported, then adopted so the buffer still lexes. Fixtures
+    /// <c>errors/indent_spaces</c>, <c>indent_deeper</c>, <c>indent_skip</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("\t", "\t\t\t")]         // unit 1, level 3 with 2 skipped
+    [InlineData("\t", "    ")]           // unit 1, four columns
+    [InlineData("\t\t", "\t\t\t")]       // unit 2, one and a half
+    [InlineData("    ", "      ")]       // unit 4, six columns
+    [InlineData("  ", " ")]              // unit 2, a dedent to half a unit
+    public void A_line_off_the_unit_is_inconsistent_indentation(string first, string second)
     {
-        // Two tabs is deeper than one, whatever the spaces around them do.
-        LexResult result = Lex("a\n \tb\n \t\tc\n \td\n");
+        LexResult result = Lex($"/proc/f()\n{first}if(1)\n{second}x = 1\n");
+
+        Assert.Contains(result.Diagnostics, d => d.Id == "DM0106" && d.Message == "inconsistent indentation");
+    }
+
+    /// <summary>
+    /// Each top-level declaration sets its own unit, so a tab-indented proc beside a four-space one
+    /// is fine, and a nested block one unit deeper is fine at any unit.
+    /// </summary>
+    [Fact]
+    public void Each_declaration_sets_its_own_unit()
+    {
+        LexResult result = Lex("/proc/f()\n\tif(1)\n\t\tx = 1\n/proc/g()\n    if(1)\n        x = 2\n/proc/h()\n\t\tif(1)\n\t\t\t\tx = 3\n");
 
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(2, CountOf(result, TokenKind.Indent));
+        Assert.Equal(6, CountOf(result, TokenKind.Indent));
     }
 
     /// <summary>

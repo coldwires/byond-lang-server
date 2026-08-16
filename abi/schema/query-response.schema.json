@@ -6,9 +6,87 @@
   "oneOf": [
     { "$ref": "#/$defs/objectTreeResponse" },
     { "$ref": "#/$defs/subtypesOfResponse" },
-    { "$ref": "#/$defs/membersResponse" }
+    { "$ref": "#/$defs/membersResponse" },
+    { "$ref": "#/$defs/ancestorsOfResponse" },
+    { "$ref": "#/$defs/referencesResponse" },
+    { "$ref": "#/$defs/overriddenProcResponse" }
   ],
   "$defs": {
+    "ancestorsOfResponse": {
+      "description": "Added at ABI 0.14. The whole inheritance chain in one call instead of one objectTree round trip per level.",
+      "type": "object",
+      "required": ["query", "path", "ancestors"],
+      "properties": {
+        "query": { "const": "ancestorsOf" },
+        "path": { "type": "string" },
+        "ancestors": {
+          "description": "Nearest first, self excluded, each rendered as a depth-0 node (children empty, childCount still says how many exist). Empty for a type with no parent - /datum, /list, /client, /savefile - and for the root.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        }
+      }
+    },
+    "referencesResponse": {
+      "description": "Added at ABI 0.14. Every use of a symbol across the project, found by the binder's own resolution - the same one the diagnostics use - so the index and the squiggles cannot disagree. Locals and parameters are not index symbols. A path that names no symbol is DM_OK with an empty list, not DM_ERR_NOT_FOUND.",
+      "type": "object",
+      "required": ["query", "path", "truncated", "references"],
+      "properties": {
+        "query": { "const": "references" },
+        "path": { "type": "string" },
+        "truncated": {
+          "description": "True when the limit cut the list short. Reported rather than inferred, as for subtypesOf.",
+          "type": "boolean"
+        },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reference" }
+        }
+      }
+    },
+    "overriddenProcResponse": {
+      "description": "Added at ABI 0.31. What THIS type's definition of a proc overrides - the inverse of the references query's \"override\" kind. A fresh declaration overriding nothing is an answer (overrides: false, owner \"\"), not an error; it is what dm.exe's own no_parent warning reports on. DM_ERR_NOT_FOUND only when the path is not in the tree or name is empty.",
+      "type": "object",
+      "required": ["query", "path", "name", "overrides", "owner", "builtin"],
+      "properties": {
+        "query": { "const": "overriddenProc" },
+        "path": { "type": "string" },
+        "name": { "type": "string" },
+        "overrides": {
+          "description": "Draw a \"go to overridden\" affordance from this flag rather than from whether the call succeeded.",
+          "type": "boolean"
+        },
+        "owner": {
+          "description": "The type whose definition is overridden, or \"\" when overrides is false. The builtin case is the type's OWN: a project's /mob/Login() overrides /mob's builtin, so owner is /mob.",
+          "type": "string"
+        },
+        "builtin": {
+          "description": "True when the overridden definition is BYOND's. Nothing declares a builtin, so there is nothing to open - which is why this is separate from owner.",
+          "type": "boolean"
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "required": ["file", "kind", "inside"],
+      "properties": {
+        "file": {
+          "description": "The file holding the use, spelled as the workspace spells it.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "\"override\" hits are proc declarations overriding the target - the incoming half of a type hierarchy.",
+          "enum": ["read", "write", "call", "override"]
+        },
+        "inside": {
+          "description": "The enclosing symbol - \"/mob/hurt()\" for a proc body, a type path for a type-level initialiser. Group hits by it and you have a call hierarchy.",
+          "type": "string"
+        },
+        "startLine": { "type": "integer" },
+        "startChar": { "description": "In the request's \"encoding\", utf16 by default. The four position keys are omitted only when the file's text could not be read.", "type": "integer" },
+        "endLine": { "type": "integer" },
+        "endChar": { "type": "integer" }
+      }
+    },
     "objectTreeResponse": {
       "type": "object",
       "required": ["query", "node"],

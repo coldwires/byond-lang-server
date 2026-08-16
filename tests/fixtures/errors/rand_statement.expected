@@ -1,0 +1,11 @@
+# The two expression uses at the end - `x = rand(50)`, `if(rand(50))` - are silent, which the total pins.
+15 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+18 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+20 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+24 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+25 error : missing expression
+27 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+28 error : invalid expression
+31 warning rand: The rand statement is being faded out.  Use pick() instead if possible.
+32 error : invalid expression
+total 3 errors, 6 warnings

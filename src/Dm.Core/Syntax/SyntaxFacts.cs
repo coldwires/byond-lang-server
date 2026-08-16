@@ -4,6 +4,50 @@ namespace Dm.Core.Syntax;
 internal static class SyntaxFacts
 {
     /// <summary>
+    /// How deep an expression, a statement block or a declaration block may nest before the
+    /// parser stops descending and reports <c>DM0205</c> instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The parsers are recursive descent, and a recursive parser on an unbounded input is a stack
+    /// overflow — which the .NET runtime cannot catch and which, across the C ABI, kills the host.
+    /// Measured 2026-08-16: 5,000 nested parentheses overflowed the Debug build at ~900 levels and
+    /// the Release build between 1,200 and 2,000; nested calls, indexes, interpolations, ternaries,
+    /// indented and braced statement blocks and indented type blocks all overflowed at 5,000. The
+    /// host's thread stack is not ours to size, so the limit has to sit well under the smallest one
+    /// seen (1 MB, Windows' default main thread).
+    /// </para>
+    /// <para>
+    /// 256 is under every measured overflow by three times or more, and no compiling program is
+    /// deeper: <c>dm.exe</c> itself dies (exit 127, no summary) between 1,040 and 1,060 nested
+    /// groups, so a limit anywhere below that invents nothing on code the compiler accepts. The
+    /// three parsers count separately — a declaration 256 deep holding a statement 256 deep holding
+    /// an expression 256 deep is still under a megabyte at the measured frame sizes.
+    /// </para>
+    /// </remarks>
+    internal const int MaxNesting = 256;
+
+    /// <summary>The message <c>DM0205</c> carries; one wording for all three parsers.</summary>
+    internal const string NestingMessage = "nesting deeper than 256 levels; the parser stops here";
+
+    /// <summary>
+    /// The output methods that are RESERVED WORDS: legal only as the right side of <c>&lt;&lt;</c>,
+    /// an error anywhere else, and not declarable as a proc even on a type.
+    /// </summary>
+    /// <remarks>
+    /// Probed 2026-08-16 on 516.1687, one assignment per candidate: <c>var/x = message("a")</c>,
+    /// <c>link</c>, <c>run</c> and <c>ftp</c> are each <i>"output method has no effect here"</i>,
+    /// and <c>/proc/message()</c>, <c>/proc/link()</c>, <c>/proc/run()</c>, <c>/proc/ftp()</c> and
+    /// <c>/datum/proc/link()</c> are each <i>"invalid proc name: reserved word"</i>. The other
+    /// output procs — <c>browse</c>, <c>output</c>, <c>load_resource</c>, <c>browse_rsc</c> — are
+    /// documented procs and behave differently (the compiler reads a standalone
+    /// <c>browse("a")</c> as a label, of all things), so they are not in this set. <c>message</c>
+    /// is the one the reference never documents, which is why it was in no table until now.
+    /// </remarks>
+    internal static bool IsOutputMethod(string name)
+        => name is "message" or "link" or "run" or "ftp";
+
+    /// <summary>
     /// Statement keywords <c>dm.exe</c> accepts as a segment of a type path.
     /// </summary>
     /// <remarks>

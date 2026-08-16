@@ -293,6 +293,42 @@ internal sealed class GotoStatementSyntax : StatementSyntax
 }
 
 /// <summary><c>spawn</c>, with an optional delay in parentheses.</summary>
+/// <summary>
+/// The legacy <c>rand(…)</c> STATEMENT: <c>rand(50)</c> followed by exactly one expression, on the
+/// same line, the next line, or an indented line beneath.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Undocumented, and dm.exe still parses it — with the third of its <c>new_name</c> warnings,
+/// <i>"The rand statement is being faded out. Use pick() instead if possible."</i>, on every
+/// statement-position <c>rand(</c>. Probed 2026-08-16 on 516.1687: the body is the NEXT
+/// EXPRESSION wherever it sits — <c>rand(50) x = 1</c>, <c>rand(50)</c> then <c>x = 1</c> on the
+/// next line at the same indent, or indented — and it must be an expression: <c>return 1</c> as
+/// the body is <i>": missing expression"</i>, <c>if(x)</c> is <i>": invalid expression"</i>, a
+/// second indented line is <i>": invalid expression"</i>, and a <c>rand(50)</c> ending a proc
+/// swallows the next declaration's header and errors on it.
+/// </para>
+/// <para>
+/// Read as an expression statement it was a silent misparse: the indented body became a stray
+/// nested block. Modelled so the binder can warn and so the body's reads are bound.
+/// </para>
+/// </remarks>
+internal sealed class RandStatementSyntax : StatementSyntax
+{
+    public RandStatementSyntax(InvocationExpressionSyntax call, ExpressionSyntax? body, TextSpan span)
+        : base(span)
+    {
+        Call = call;
+        Body = body;
+    }
+
+    /// <summary>The <c>rand(…)</c> itself, arguments included.</summary>
+    public InvocationExpressionSyntax Call { get; }
+
+    /// <summary>The one expression it governs, or null when none could be read.</summary>
+    public ExpressionSyntax? Body { get; }
+}
+
 internal sealed class SpawnStatementSyntax : StatementSyntax
 {
     public SpawnStatementSyntax(ExpressionSyntax? delay, StatementSyntax? body, TextSpan span) : base(span)

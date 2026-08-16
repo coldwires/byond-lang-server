@@ -412,15 +412,21 @@ internal static class Program
     /// <c>client</c> is genuinely <c>/mob</c>-only and is what pins the mob-typed rows.
     /// </para>
     /// <para>
-    /// <b>Five object-typed vars are deliberately left untyped rather than guessed at:</b>
+    /// <b>Four object-typed vars are deliberately left untyped rather than guessed at:</b>
     /// <c>appearance</c> on <c>/atom</c> and <c>/image</c> (indistinguishable between those two),
     /// <c>pixloc</c> (carries <c>x</c> but neither <c>contents</c> nor <c>override</c>, so it is an
-    /// internal type with no name to record), <c>/callee proc</c>, and
-    /// <c>/database/query database</c> (only <c>vars</c> compiled, which every object type has, so
-    /// the probe did not discriminate). A missing type costs a completion list; a wrong one sends a
-    /// reader where the compiler disagrees.
+    /// internal type with no name to record), and <c>/callee proc</c> — re-probed 2026-08-16 on
+    /// 516.1687: <c>callee.proc</c> accepts exactly <c>name</c>, <c>desc</c>, <c>category</c>,
+    /// <c>invisibility</c> and <c>type</c> and rejects <c>hidden</c>, <c>loc</c>, <c>tag</c>,
+    /// <c>vars</c>, <c>parent_type</c> — a proc reference with the verb-setting vars, which is a
+    /// member set no type in the tree has, and a <c>/proc</c> node would collide with the path
+    /// segment that means "declare new". A missing type costs a completion list; a wrong one sends
+    /// a reader where the compiler disagrees. <c>/database/query database</c> was the fifth until
+    /// the same re-probe: <c>q.database.Open()</c> and <c>.Error()</c> compile while
+    /// <c>.Execute()</c> (a query proc) and <c>.nowhere_xyz()</c> do not, so it is a
+    /// <c>/database</c> and is typed below.
     /// </para>
-    /// <para>Verified on 516.1686. Re-run the sweep after a BYOND upgrade, as with the rest of this file.</para>
+    /// <para>Verified on 516.1686 and re-run on 516.1687. Re-run the sweep after a BYOND upgrade, as with the rest of this file.</para>
     /// </remarks>
     private static int AddVerifiedVarTypes(SortedDictionary<string, Entry> entries)
     {
@@ -460,6 +466,10 @@ internal static class Program
 
             ("/atom/movable", "/particles", new[] { "particles" }),
             ("/callee", "/callee", new[] { "caller" }),
+
+            // `Open()` and `Error()` compile through it, `Execute()` - a /database/query proc -
+            // does not, so it is the connection rather than the query. Probed 2026-08-16.
+            ("/database/query", "/database", new[] { "database" }),
         };
 
         int added = 0;
