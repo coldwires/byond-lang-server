@@ -154,7 +154,7 @@ public static class HoverService
         string name = detail[(cut + 1)..];
 
         return tree.Find(owner) is { } type && type.FindVar(name) is { } variable
-            ? variable.ConstantValue
+            ? tree.ConstantValueOf(type, variable)
             : string.Empty;
     }
 

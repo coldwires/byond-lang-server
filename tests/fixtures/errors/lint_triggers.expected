@@ -1,0 +1,11 @@
+# /datum, /atom, /turf exactly plus the /turf subtree; nothing else. The total pins the silences.
+13 warning on_datum: var will be initialized in a hidden init proc
+14 warning New: this proc will be called very frequently
+21 warning on_atom: var will be initialized in a hidden init proc
+25 warning on_turf: var will be initialized in a hidden init proc
+29 warning a_new: var will be initialized in a hidden init proc
+30 warning newlist_call: var will be initialized in a hidden init proc
+31 warning Del: this proc will be called very frequently
+34 warning on_turf_sub: var will be initialized in a hidden init proc
+36 warning deep_turf: var will be initialized in a hidden init proc
+total 0 errors, 9 warnings

@@ -1,0 +1,3 @@
+# The control warns; every const-derived initialiser is silent, which the total pins.
+20 warning c_list: var will be initialized in a hidden init proc
+total 0 errors, 1 warning

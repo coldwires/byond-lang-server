@@ -1,9 +1,13 @@
 ﻿# How many of the mined probes we currently say ANYTHING about, and which.
 #
-# A ratchet, not a gate. These are 252 messages dm.exe produces; we implement a
-# fraction of them, so "must agree on all" would fail 252 times and teach
-# nothing. What must not happen is going DOWN - a change that silences a check
-# we already had.
+# A ratchet, not a gate. These are messages dm.exe produces - the `total` line
+# below is how many - and we implement a fraction of them, so "must agree on
+# all" would fail most of them and teach nothing. What must not happen is going
+# DOWN - a change that silences a check we already had.
+#
+# The count lives on that line and nowhere else here. This header said 252 for
+# three days after the 2026-08-13 re-mine took the corpus to 255, because it
+# was carrying its own copy.
 #
 # Regenerate deliberately, and only after reading why the number moved:
 #   pwsh tests/fixtures/run.ps1 -Probes -UpdateBaseline
@@ -13,7 +17,7 @@
 # is malformed on every keystroke. So extra diagnostics on a must-fail file are
 # not spurious, and the zero-invented rule applies to code that COMPILES CLEAN.
 #
-agreed 74
+agreed 79
 total 255
 probe b1_addr_of_proc
 probe b1_backtick
@@ -35,6 +39,7 @@ probe b1_macro_missing_paren
 probe b1_macro_unterm_squote
 probe b1_missing_lhs
 probe b1_pick_old_prob
+probe b1_pragma_warn_junk
 probe b1_self_recursive_macro
 probe b1_still_skipping
 probe b1_stray_char
@@ -42,6 +47,7 @@ probe b1_switch_two_args
 probe b1_ternary_no_colon
 probe b1_unterm_embed
 probe b1_unterm_preproc_bracket
+probe b1_unterm_squote
 probe b1_while_empty
 probe b2_as_five
 probe b2_at_eof
@@ -53,6 +59,7 @@ probe b2_initial_proc
 probe b2_label_no_loop
 probe b2_macro_bracket_arg
 probe b2_malformed_for
+probe b2_message_output
 probe b2_name_mob
 probe b2_parent_type_bad
 probe b2_set_unknown
@@ -66,6 +73,7 @@ probe b2_var_reserved
 probe b3_break_nonloop_label
 probe b3_for_var_bare
 probe b3_include_foo_ext
+probe b3_rand_block
 probe b3_return_var
 probe b4_bracket_literal
 probe b4_c_for_commas
@@ -76,6 +84,7 @@ probe b4_if_path
 probe b4_op_index_three
 probe b4_set_bogus_in
 probe b4_vardecl_in_call
+probe e_bad_indentation
 probe e_catch_without_try
 probe e_dup_builtin_proc
 probe e_dup_builtin_var

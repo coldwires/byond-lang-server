@@ -873,6 +873,11 @@ internal sealed class LspServer
         List<Diagnostic> all = new(parse.Diagnostics);
         all.AddRange(Binder.Bind(TreeAnnouncingBuild(ws), parse.Root, document.Path));
 
+        // The walk's own — a #warn echo, an unterminated #if, a missing #include, an unknown pragma
+        // name. They belong to the include walk rather than to this file's syntax, so no parse
+        // carries them and this report was silent about them until 2026-08-16.
+        all.AddRange(ws.GetWalkDiagnostics(document.Path));
+
         Rpc.Notify(_output, "textDocument/publishDiagnostics", json =>
         {
             json.WriteStartObject();
@@ -919,7 +924,7 @@ internal sealed class LspServer
             document,
             line,
             character,
-            ws.GetMacroNames(cancel),
+            ws.GetMacroNamesFor(document.Path, cancel),
             _encoding,
             cancel,
             ws.CompletionLimit);
@@ -1181,7 +1186,7 @@ internal sealed class LspServer
                     line.GetInt32(),
                     character.GetInt32(),
                     name.GetString() ?? string.Empty,
-                    ws.GetMacroNames(cancel),
+                    ws.GetMacroNamesFor(document.Path, cancel),
                     ws.GetFileText,
                     _encoding,
                     cancel);

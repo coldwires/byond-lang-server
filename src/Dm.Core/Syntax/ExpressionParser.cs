@@ -147,7 +147,14 @@ internal sealed class ExpressionParser
     }
 
     private void Report(TextSpan span, string message)
-        => _diagnostics.Add(Diagnostic.Error("DM0201", span, message));
+    {
+        // Past the nesting limit the rest of the expression is unparsed by design, and every
+        // enclosing level would otherwise report a closer it never got - one DM0205 says it all.
+        if (_nestingReported)
+            return;
+
+        _diagnostics.Add(Diagnostic.Error("DM0201", span, message));
+    }
 
     /// <summary>
     /// <c>list(1 = "a")</c> — a numeric literal as an associative key, which 516.1686 rejects.
@@ -335,7 +342,66 @@ internal sealed class ExpressionParser
     }
 
     /// <summary>Assignment is the one right-associative level, so <c>a = b = c</c> is <c>a = (b = c)</c>.</summary>
+    /// <remarks>
+    /// This is where the depth is counted for every nested operand: a parenthesised group, an
+    /// argument, an index, an interpolation hole, a ternary branch and an assignment's right side
+    /// all re-enter the grammar here — a chain of 5,000 <c>1 ? 1 ? …</c> never passes
+    /// <see cref="ParseUnary"/> twice, which is why the count is not there. The one recursion that
+    /// bypasses this level, a unary operator's operand, is counted at its own site. See
+    /// <see cref="SyntaxFacts.MaxNesting"/> for the number.
+    /// </remarks>
     private ExpressionSyntax ParseAssignment()
+    {
+        if (!Descend(out ExpressionSyntax? stopped))
+            return stopped;
+
+        try
+        {
+            return ParseAssignmentCore();
+        }
+        finally
+        {
+            _nesting--;
+        }
+    }
+
+    private int _nesting;
+    private bool _nestingReported;
+
+    /// <summary>
+    /// Takes one level of depth, or refuses at the limit: reports <c>DM0205</c> once per expression,
+    /// skips the subtree to its own closer, and hands back the error node to return.
+    /// </summary>
+    /// <remarks>
+    /// Reported once because at the limit every enclosing level would otherwise report its own
+    /// "expected ')'" as the returns unwind; skipping the subtree is what keeps them quiet, since
+    /// the enclosing group then finds its closer where it expects it. On an unclosed buffer the
+    /// skip runs to the end of the group's line, which is what a bracket at line start does anyway.
+    /// The caller decrements on the way out.
+    /// </remarks>
+    private bool Descend([System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out ExpressionSyntax? stopped)
+    {
+        if (_nesting < SyntaxFacts.MaxNesting)
+        {
+            _nesting++;
+            stopped = null;
+            return true;
+        }
+
+        TextSpan span = CurrentSpan;
+
+        if (!_nestingReported)
+        {
+            _nestingReported = true;
+            _diagnostics.Add(Diagnostic.Error("DM0205", span, SyntaxFacts.NestingMessage));
+        }
+
+        SkipBalanced();
+        stopped = new ErrorExpressionSyntax(span);
+        return false;
+    }
+
+    private ExpressionSyntax ParseAssignmentCore()
     {
         int start = _position;
         ExpressionSyntax left = ParseConditional();
@@ -435,6 +501,40 @@ internal sealed class ExpressionParser
         return currentLine > previousLine;
     }
 
+    /// <summary>
+    /// Skips the tokens of one nested operand: everything up to, and not including, the closer that
+    /// balances the group the caller is inside. Stops at a group-level line end or the end of file.
+    /// </summary>
+    private void SkipBalanced()
+    {
+        int depth = 0;
+
+        while (!AtEnd)
+        {
+            switch (Current)
+            {
+                case TokenKind.OpenParen or TokenKind.OpenBracket or TokenKind.OpenBrace
+                    or TokenKind.QuestionOpenBracket or TokenKind.StringStart
+                    or TokenKind.InterpolationStart:
+                    depth++;
+                    break;
+
+                case TokenKind.CloseParen or TokenKind.CloseBracket or TokenKind.CloseBrace
+                    or TokenKind.StringEnd or TokenKind.InterpolationEnd:
+                    if (depth == 0)
+                        return;
+
+                    depth--;
+                    break;
+
+                case TokenKind.Newline or TokenKind.Semicolon when depth == 0 && _groupDepth == 0:
+                    return;
+            }
+
+            _position++;
+        }
+    }
+
     private ExpressionSyntax ParseUnary()
     {
         int start = _position;
@@ -461,8 +561,20 @@ internal sealed class ExpressionParser
         _position++;
         SkipLayoutInGroup();
 
-        ExpressionSyntax operand = ParseUnary();
-        return new UnaryExpressionSyntax(kind.Value, operand, SpanFrom(start));
+        // A unary operand is the one recursion that does not pass ParseAssignment, so it takes its
+        // level here: `- - - … 1` five thousand deep is a stack of ParseUnary frames and nothing else.
+        if (!Descend(out ExpressionSyntax? stopped))
+            return stopped;
+
+        try
+        {
+            ExpressionSyntax operand = ParseUnary();
+            return new UnaryExpressionSyntax(kind.Value, operand, SpanFrom(start));
+        }
+        finally
+        {
+            _nesting--;
+        }
     }
 
     private ExpressionSyntax ParsePostfix(ExpressionSyntax expression)

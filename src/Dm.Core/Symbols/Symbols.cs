@@ -84,6 +84,17 @@ internal sealed class VarSymbol
     public string ConstantValue { get; init; } = string.Empty;
 
     /// <summary>
+    /// The initialiser's expression, kept so a name in it can be resolved once the tree exists.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ConstantValue"/> is folded per file, where a name that lives in another file
+    /// cannot be answered; <see cref="ObjectTree.ConstantValueOf"/> finishes the job lazily against
+    /// the finished tree. Null for a builtin and for a var with no initialiser. The parses are
+    /// already retained by the workspace, so this holds nothing new alive.
+    /// </remarks>
+    internal Syntax.ExpressionSyntax? Initializer { get; init; }
+
+    /// <summary>
     /// Whether a <c>var/</c> introduced this, rather than a bare override.
     /// </summary>
     /// <remarks>

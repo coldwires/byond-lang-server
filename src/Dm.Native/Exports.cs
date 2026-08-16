@@ -853,6 +853,11 @@ internal static unsafe class Exports
             List<Diagnostic> all = new(parse.Diagnostics);
             all.AddRange(Binder.Bind(ws.GetTreeFor(path), parse.Root, document.Path));
 
+            // The walk's own — a #warn echo, an unterminated #if, a missing #include, an unknown
+            // pragma name. No parse holds them, so this is the only call that can carry them; the
+            // outline deliberately does not, because it needs no tree and these do.
+            all.AddRange(ws.GetWalkDiagnostics(document.Path));
+
             StringBuilder json = new();
             json.Append("{\"diagnostics\":");
             SymbolJson.WriteDiagnostics(json, all, document.Text, (PositionEncoding)encoding);
@@ -1204,7 +1209,7 @@ internal static unsafe class Exports
                 document,
                 line,
                 character,
-                ws.GetMacroNames(),
+                ws.GetMacroNamesFor(document.Path),
                 ws.GetFileText,
                 (PositionEncoding)encoding,
                 default,
@@ -1284,7 +1289,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             CompletionResult result = CompletionService.CompleteBriefAt(
-                ws.GetObjectTree(), document, line, character, ws.GetMacroNames(),
+                ws.GetTreeFor(path), document, line, character, ws.GetMacroNamesFor(document.Path),
                 (PositionEncoding)encoding, default, ws.CompletionLimit);
 
             *outJson = NativeStrings.Allocate(CompletionJson.Write(result));
@@ -1337,7 +1342,7 @@ internal static unsafe class Exports
             Document document = ws.GetDocument(path);
 
             string documentation = CompletionService.ResolveDocumentation(
-                ws.GetObjectTree(), document, line, character, name, ws.GetMacroNames(),
+                ws.GetTreeFor(path), document, line, character, name, ws.GetMacroNamesFor(document.Path),
                 ws.GetFileText, (PositionEncoding)encoding);
 
             *outJson = NativeStrings.Allocate(CompletionJson.WriteDocumentation(documentation));

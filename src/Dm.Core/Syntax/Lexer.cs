@@ -17,9 +17,10 @@ namespace Dm.Core.Syntax;
 /// </para>
 /// <para>
 /// Layout: <see cref="TokenKind.Newline"/>, <see cref="TokenKind.Indent"/> and
-/// <see cref="TokenKind.Dedent"/> are emitted for block structure. Depth is measured by
-/// <see cref="MeasureDepth"/>, which follows what dm.exe actually accepts rather than any tidier
-/// rule. Blank lines, comment-only lines and preprocessor directives never change the level.
+/// <see cref="TokenKind.Dedent"/> are emitted for block structure. Depth is the width in
+/// columns, a tab and a space each counting one, against a per-declaration unit — the compiler's
+/// own measure, probed as a matrix; see <see cref="_unit"/>. Blank lines, comment-only lines and
+/// preprocessor directives never change the level.
 /// </para>
 /// <para>
 /// Interpolated strings emit a flat run: <c>StringStart, StringText, InterpolationStart,
@@ -147,13 +148,24 @@ internal sealed class Lexer
         if (AtEnd || IsLineTerminator(Current) || IsCommentStart() || Current == '#')
             return;
 
-        int depth = MeasureDepth(_text.Content.AsSpan(lineStart, _position - lineStart));
+        // The width in columns, a tab and a space each counting one - see the remarks on the unit
+        // below for why that is the compiler's own measure and not an approximation of it.
+        int depth = _position - lineStart;
 
         if (depth == _indents[^1])
             return;
 
         if (depth > _indents[^1])
         {
+            // The first indented line under a top-level declaration sets that declaration's unit;
+            // every deeper line inside it must land exactly one unit further in. A skipped level
+            // and a fraction of a unit are both dm.exe's "inconsistent indentation". Reported and
+            // then adopted as nesting, so the buffer still lexes end to end.
+            if (_indents.Count == 1)
+                _unit = depth;
+            else if (depth != _indents[^1] + _unit)
+                ReportIndentation(lineStart);
+
             _indents.Add(depth);
             _tokens.Add(new Token(TokenKind.Indent, TextSpan.FromBounds(lineStart, _position)));
             return;
@@ -165,52 +177,48 @@ internal sealed class Lexer
             _tokens.Add(new Token(TokenKind.Dedent, TextSpan.FromBounds(_position, _position)));
         }
 
-        // Landing between two levels means the file has an indentation DM would itself reject.
-        // We adopt the level rather than report: under-reporting is far safer than flagging valid
-        // code, and DM's own rule is not yet fully modelled (see below).
+        // Landing between two open levels is the other shape of the same error. Adopted after
+        // reporting, as above.
         if (depth != _indents[^1])
+        {
+            ReportIndentation(lineStart);
             _indents[^1] = depth;
+        }
     }
 
     /// <summary>
-    /// Indentation depth of a line's leading whitespace.
+    /// The indent step of the top-level declaration being lexed: the width of its first indented
+    /// line. Each depth-0 line starts a new declaration and the next indent resets it.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Tabs decide the depth; spaces only count when there are no tabs at all. This is not a guess
-    /// — it is the only simple model consistent with what dm.exe 516.1666 actually accepts. Given a
-    /// sibling declared at one tab:
+    /// <b>How dm.exe measures indentation, probed 2026-08-16 on 516.1687 and 516.1686 as a
+    /// matrix, since nothing documents it.</b> A tab and a space each count as ONE column: against
+    /// a sibling at <c>"\t"</c>, <c>" "</c> is the same level, while <c>" \t"</c>, <c>"\t "</c>
+    /// and <c>"  "</c> are all one level DEEPER (the same "empty type name" a nested var block
+    /// draws), and <c>"   "</c> and <c>"    "</c> are "inconsistent indentation". Within one
+    /// top-level declaration the first indented line's width is the unit and every nested line
+    /// must be exactly one unit deeper: unit 1 then a body at 3 is inconsistent, unit 2 then 4 is
+    /// fine and 6 is not, unit 4 then 6 is not and 8 is. Two declarations may use different units
+    /// - a tab-indented proc beside a four-space one compiles - so the unit resets at every
+    /// depth-0 line, and it does not cross an <c>#include</c>. Comment-only lines and directives
+    /// do not take part.
     /// </para>
-    /// <list type="bullet">
-    /// <item><description><c>" \t"</c>, <c>"\t "</c> — accepted as the same level. Tab count 1 either way.</description></item>
-    /// <item><description><c>" "</c> — accepted as the same level. No tabs, so one space is depth 1.</description></item>
-    /// <item><description><c>"    "</c> — <b>rejected</b> by dm.exe as "inconsistent indentation". Depth 4 here, so we treat it as nesting.</description></item>
-    /// </list>
     /// <para>
-    /// Prefix comparison, which is what this used to do, fails the first two: neither <c>"\t"</c>
-    /// nor <c>" \t"</c> is a prefix of the other, so it reported an error on code DM compiles.
-    /// </para>
-    /// <para>
-    /// The last case is the one place we knowingly diverge: DM errors, we silently nest. Missing an
-    /// error is far cheaper than flagging valid code in an editor, and DM's exact rule is still
-    /// unmodelled — see PLAN.md open questions.
+    /// This replaces a model - tabs decide, spaces count only without tabs - built on the language
+    /// notes' original 516.1666 table, which had <c>" \t"</c> and <c>"\t "</c> as the SAME level.
+    /// Neither 1686 nor 1687 agrees, and that table is what writing the fixture for it exposed. The
+    /// old model never invented, since it silently adopted whatever it met; this one reports what
+    /// the compiler reports, and the four corpora hold at zero invented with it, which is what
+    /// says the rule is the compiler's rather than a guess that happens to fit the probes.
     /// </para>
     /// </remarks>
-    private static int MeasureDepth(ReadOnlySpan<char> indent)
-    {
-        int tabs = 0;
-        int spaces = 0;
+    private int _unit;
 
-        foreach (char c in indent)
-        {
-            if (c == '\t')
-                tabs++;
-            else if (c == ' ')
-                spaces++;
-        }
-
-        return tabs > 0 ? tabs : spaces;
-    }
+    private void ReportIndentation(int lineStart)
+        => _diagnostics.Add(Diagnostic.Error(
+            "DM0106", TextSpan.FromBounds(lineStart, Math.Max(_position, lineStart + 1)),
+            "inconsistent indentation"));
 
     private bool IsCommentStart() => Current == '/' && (Peek() == '/' || Peek() == '*');
 
@@ -714,8 +722,31 @@ internal sealed class Lexer
             _position++;
 
         int start = _position;
+
         while (!AtEnd && !IsLineTerminator(Current))
+        {
+            // A backslash before the line break continues the text onto the next line, as it
+            // does for any directive. Read as a line end, the continuation became a CODE line at
+            // column 0 - `#warn (... \` then `NPCs are Obsolete)` declared a type named NPCs and
+            // dedented the proc it sat in. dm.exe echoes the joined text with the break removed.
+            // Found 2026-08-16 in the W: archive by the indentation diagnostic, not by any test.
+            if (Current == '\\' && !AtEndAt(_position + 1) && IsLineTerminator(Peek()))
+            {
+                // Consumed here rather than through ConsumeLineTerminator, which would emit a
+                // Newline token and mark a line start in the middle of the directive's text.
+                _position++;
+
+                if (Current == '\r')
+                    _position++;
+
+                if (Current == '\n')
+                    _position++;
+
+                continue;
+            }
+
             _position++;
+        }
 
         if (_position > start)
             Add(TokenKind.DirectiveText, start);
@@ -818,10 +849,16 @@ internal sealed class Lexer
     {
         _position++;
 
-        if (Current == '\r')
+        // A backslash before a line break continues the string, and the compiler then discards
+        // EVERY whitespace character that follows - the next line's indentation, and blank lines
+        // too: `"a\` + newline + newline + `b"` is `ab`, runtime-verified 2026-08-16 on 516.1687.
+        // tgstation's fishing_equipment.dm writes a continued string with an empty line inside it,
+        // which read here as an unterminated string until the whole run was skipped; the newline
+        // check in LexStringBody never sees a break this consumed. Found by surfacing the lexer's
+        // diagnostics, which nothing had ever looked at.
+        if (IsLineTerminator(Current))
         {
-            _position++;
-            if (Current == '\n')
+            while (!AtEnd && (Current == ' ' || Current == '\t' || IsLineTerminator(Current)))
                 _position++;
 
             return;

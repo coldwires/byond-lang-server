@@ -94,7 +94,19 @@ internal sealed class DeclarationParser
     {
         ArgumentNullException.ThrowIfNull(lex);
 
-        return Parse(TokenSource.FromLex(lex));
+        ParseResult parsed = Parse(TokenSource.FromLex(lex));
+
+        // The lexer's own diagnostics - an unterminated string or block comment, inconsistent
+        // indentation - ride with the parse, so a per-file consumer (the outline, the LSP's
+        // publish, dm_diagnostics) sees them. Until 2026-08-16 only `dmc scan` did. The walk
+        // forwards them for the preprocessed path, which never comes through here.
+        if (lex.Diagnostics.Count == 0)
+            return parsed;
+
+        List<Diagnostic> all = new(lex.Diagnostics.Count + parsed.Diagnostics.Count);
+        all.AddRange(lex.Diagnostics);
+        all.AddRange(parsed.Diagnostics);
+        return new ParseResult(parsed.Text, parsed.Root, all);
     }
 
     /// <summary>
@@ -159,10 +171,90 @@ internal sealed class DeclarationParser
 
     // -- blocks ------------------------------------------------------------
 
+    private int _nesting;
+    private bool _nestingReported;
+
+    /// <summary>
+    /// The depth guard for both block shapes. True when the block may be entered; false when the
+    /// limit is reached, in which case the block has been reported once and skipped whole — the
+    /// caller then finds its own closer where it expects it. See <see cref="SyntaxFacts.MaxNesting"/>.
+    /// </summary>
+    /// <param name="braced">Whether the caller sits at a <c>{</c> (skipped to its <c>}</c>) or just
+    /// past an <c>Indent</c> (skipped to, not through, its <c>Dedent</c>).</param>
+    private bool EnterBlock(bool braced)
+    {
+        if (_nesting < SyntaxFacts.MaxNesting)
+        {
+            _nesting++;
+            return true;
+        }
+
+        if (!_nestingReported)
+        {
+            _nestingReported = true;
+            _diagnostics.Add(Diagnostic.Error("DM0205", CurrentSpan, SyntaxFacts.NestingMessage));
+        }
+
+        int braces = 0;
+        int indents = braced ? 0 : 1;
+
+        while (!AtEnd)
+        {
+            switch (Current)
+            {
+                case TokenKind.OpenBrace:
+                    braces++;
+                    break;
+
+                case TokenKind.CloseBrace:
+                    braces--;
+
+                    if (braced && braces == 0)
+                    {
+                        _position++;
+                        return false;
+                    }
+
+                    break;
+
+                case TokenKind.Indent:
+                    indents++;
+                    break;
+
+                case TokenKind.Dedent:
+                    indents--;
+
+                    if (!braced && indents == 0)
+                        return false;
+
+                    break;
+            }
+
+            _position++;
+        }
+
+        return false;
+    }
+
     private List<DeclarationSyntax> ParseBlock(BlockContext context)
     {
         List<DeclarationSyntax> declarations = new();
 
+        if (!EnterBlock(braced: false))
+            return declarations;
+
+        try
+        {
+            return ParseBlockCore(context, declarations);
+        }
+        finally
+        {
+            _nesting--;
+        }
+    }
+
+    private List<DeclarationSyntax> ParseBlockCore(BlockContext context, List<DeclarationSyntax> declarations)
+    {
         while (true)
         {
             SkipNewlines();
@@ -264,9 +356,24 @@ internal sealed class DeclarationParser
     /// </remarks>
     private List<DeclarationSyntax> ParseBraceBlock(BlockContext context)
     {
-        _position++;
-
         List<DeclarationSyntax> declarations = new();
+
+        if (!EnterBlock(braced: true))
+            return declarations;
+
+        try
+        {
+            return ParseBraceBlockCore(context, declarations);
+        }
+        finally
+        {
+            _nesting--;
+        }
+    }
+
+    private List<DeclarationSyntax> ParseBraceBlockCore(BlockContext context, List<DeclarationSyntax> declarations)
+    {
+        _position++;
 
         while (true)
         {

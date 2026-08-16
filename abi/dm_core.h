@@ -412,7 +412,10 @@ dm_status dm_document_symbols(dm_workspace workspace, const char *file,
  * COMES TO arrives beside it as "constant" (0.30) - "6" here, "300" for `5 * 60`,
  * and EMPTY when the initialiser is not a compile-time constant. The two are
  * different facts and a reader of `= 5 * 60` wants both, so neither replaces the
- * other.
+ * other. A `const` var named in the initialiser folds too - `MAX_HP - 5` shows
+ * what it comes to, MAX_HP found on the owner's inheritance chain, then among the
+ * globals, or through the `/path::NAME` static form - which is what dm.exe itself
+ * folds at compile time. A non-const name does not: the compiler rejects it there.
  *
  * A BARE LITERAL FOLDS TO NOTHING on purpose. `123456789` would come back as
  * "1.23457e+08" - which is what the compiler holds, since DM renders a number with

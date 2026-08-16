@@ -540,6 +540,17 @@ internal sealed class IncludeGraph
             IReadOnlyList<Directive> directives = DirectiveScanner.Scan(lex);
             ConditionalStack conditionals = new();
 
+            // The lexer's own diagnostics join the walk's, attributed to this file at its boundary
+            // like the rest and recorded into its effect so a replay carries them. This is the
+            // preprocessed path's half of what DeclarationParser.Parse(LexResult) does for the raw
+            // one; until 2026-08-16 an unterminated string reached `dmc scan` and nothing else.
+            if (lex.Diagnostics.Count > 0)
+            {
+                int lexDiagnostics = Diagnostics.Count;
+                Diagnostics.AddRange(lex.Diagnostics);
+                RecordDiagnosticsFrom(lexDiagnostics);
+            }
+
             // The level map this file is walked with, so a query inside it starts from what an
             // earlier file left rather than from the default.
             Warnings.EnterFile(path);
@@ -650,9 +661,23 @@ internal sealed class IncludeGraph
                     // right one. Reporting it at all needed per-file attribution first, which is
                     // why it sat in the missed column while three cheaper checks shipped past it.
                     case DirectiveKind.Warn when conditionals.IsActive:
+                    {
+                        // A `\`-continued body is echoed joined, the backslash and its line break
+                        // removed - `#warn (a \` + `b)` prints as `#warn (a b)` - and it is
+                        // reported at the directive's LAST line, so the span starts there.
+                        // Verified 2026-08-16.
+                        string raw = text.ToString(directive.Span);
+                        int lastBreak = Math.Max(raw.LastIndexOf('\n'), raw.LastIndexOf('\r'));
+                        TextSpan at = lastBreak < 0
+                            ? directive.Span
+                            : TextSpan.FromBounds(directive.Span.Start + lastBreak + 1, directive.Span.End);
+
                         Diagnostics.Add(Diagnostic.Warning(
-                            "DM0204", directive.Span, text.ToString(directive.Span).Trim()));
+                            "DM0204", at,
+                            raw.Replace("\\\r\n", string.Empty).Replace("\\\n", string.Empty)
+                                .Replace("\\\r", string.Empty).Trim()));
                         break;
+                    }
 
                     case DirectiveKind.Define when conditionals.IsActive:
                         if (MacroDefinition.Parse(lex, directive, Diagnostics) is { } macro)

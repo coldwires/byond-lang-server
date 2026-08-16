@@ -126,6 +126,14 @@ three separate `.dme` files.
 DM: no macros, no brace blocks, no contextual keywords. A harness written in the
 constructs it is checking cannot report their failure.
 
+**A `.expected` can pin the summary as well as the lines.** `line severity text`
+rows say "dm.exe reports this"; they cannot say "and nothing else". A row
+`total 0 errors, 1 warning` must appear verbatim in the compiler's own summary,
+which is how a fixture asserts *silence* — `errors/const_fold` turns `init_proc`
+on with a pragma, keeps one `list()` control that must warn, and the total is
+what proves every const-derived line beside it stayed quiet. Spell the count as
+dm.exe does: `1 warning`, `2 warnings`.
+
 ## The mined probe corpus
 
 `errors/probes/` is 255 single-message probes mined from the diagnostic lab
@@ -177,12 +185,19 @@ and a finding that does not land in it will be re-learned.
   ...
   ok    ok/ok compiles clean
 [2] ok/ runs, every check passing
-  ok    ok/ runtime, 109 checks
+  ok    ok/ runtime, N checks
 [3] diagdiff: zero invented
   ok    diagdiff errors/semantic.dme
   ...
-passed 19   failed 0   skipped 0
+passed N   failed 0   skipped 0
 ```
+
+The counts are written as `N` on purpose. Every one of them rises whenever a
+case is added — which is most commits here — so a real number in this block is
+wrong by the next one and says nothing when it is right. It read `109 checks`
+and `passed 19` against a run of 135 and 97 until 2026-08-16. **What matters is
+`failed 0   skipped 0`**: a skip is a compiler-backed tier that did not execute,
+and it is reported as a skip rather than folded into the pass count.
 
 The runtime step runs DreamDaemon with `-safe`, not `-trusted`: nothing in `ok/`
 needs trusted mode, and a `-trusted` world waits on a GUI approval prompt when

@@ -2,18 +2,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/byond-lang-server/abi/schema/query-request.schema.json",
   "title": "dm_query_json request",
-  "description": "A bulk question about the object tree. Frozen at ABI 0.11 and versioned separately from the binary: new queries and new optional members are additive, and anything removed or renamed is a major bump. Unknown members are ignored by the library, so a client written against a later schema still gets an answer from an older build.",
+  "description": "A bulk question about the object tree. Frozen at ABI 0.11 and versioned separately from the binary: new queries and new optional members are additive, and anything removed or renamed is a major bump. Unknown members are ignored by the library, so a client written against a later schema still gets an answer from an older build. ancestorsOf and references arrived at 0.14, overriddenProc at 0.31.",
   "type": "object",
   "required": ["query"],
   "properties": {
     "query": {
       "description": "Which question to answer.",
-      "enum": ["objectTree", "subtypesOf", "members"]
+      "enum": ["objectTree", "subtypesOf", "members", "ancestorsOf", "references", "overriddenProc"]
     },
     "path": {
-      "description": "The type path to answer about. \"/\" and \"\" both mean the root.",
+      "description": "The type path to answer about. \"/\" and \"\" both mean the root. For references it is the SYMBOL: dm_definition_at's detail spelling - \"/mob/hp\" for a var, \"/mob/heal()\" for a proc, \"/heal()\" for a global, a type's path for a type - canonicalised to the farthest declaring type, which is the LAST hit dm_definition_at returns.",
       "type": "string",
       "default": "/"
+    },
+    "name": {
+      "description": "overriddenProc only. The proc whose override chain is asked about, as a bare name - \"Login\", not \"/mob/Login()\". Required there; an empty name is DM_ERR_NOT_FOUND.",
+      "type": "string",
+      "default": ""
     },
     "depth": {
       "description": "objectTree only. Levels of children to include: 1 is one level, which is what a panel needs for a node the user just expanded; 0 is the node alone, for a single-row refresh.",
@@ -22,10 +27,15 @@
       "default": 1
     },
     "limit": {
-      "description": "subtypesOf only. Cap on how many types come back. A response that hit the cap sets \"truncated\".",
+      "description": "subtypesOf and references. Cap on how many types or hits come back. A response that hit the cap sets \"truncated\". Defaults to 500 for subtypesOf and 1000 for references.",
       "type": "integer",
       "minimum": 1,
       "default": 500
+    },
+    "encoding": {
+      "description": "references only. The unit for startChar/endChar in each hit, since dm_query_json has no encoding parameter of its own. Anything other than \"utf8\" is read as \"utf16\".",
+      "enum": ["utf16", "utf8"],
+      "default": "utf16"
     },
     "inherited": {
       "description": "members only. Include what the type inherits, walking parent_type rather than the path.",

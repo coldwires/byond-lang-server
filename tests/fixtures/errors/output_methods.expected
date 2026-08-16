@@ -1,0 +1,8 @@
+12 warning message: The message() output method is being replaced by browse().
+14 warning message: The message() output method is being replaced by browse().
+16 error message: output method has no effect here
+16 error =: missing expression
+19 error link: output method has no effect here
+25 error ftp: output method has no effect here
+25 error : missing expression
+total 5 errors, 2 warnings

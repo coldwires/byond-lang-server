@@ -256,4 +256,50 @@ public class WorkspaceTests
         using Workspace flagged = Workspace.Open(dme, new[] { "CBT" });
         Assert.NotNull(flagged.GetObjectTree().Find("/obj/with_cbt"));
     }
+
+    // -- the macros a file can see ------------------------------------------
+
+    /// <summary>
+    /// The macro table is sequential state, and the walk's END state is not what any one file
+    /// saw: a name defined in a later file must not be offered in an earlier one, <c>__MAIN__</c>
+    /// is defined only inside the <c>.dme</c> itself, and a seed or a <c>-D</c> inject is visible
+    /// everywhere. <see cref="Workspace.GetMacroNames"/> stays the end state; this is the
+    /// per-file view completion asks for.
+    /// </summary>
+    [Fact]
+    public void A_file_sees_the_macros_defined_at_or_before_it()
+    {
+        using TempDirectory temp = new();
+        string dme = temp.Write("game.dme", "#define IN_DME 1\n#include \"first.dm\"\n#include \"second.dm\"\n");
+        string first = temp.Write("first.dm", "#define EARLY 1\n/obj/a\n");
+        string second = temp.Write("second.dm", "#define LATE 2\n/obj/b\n");
+
+        using Workspace workspace = Workspace.Open(dme, new[] { "INJECTED" });
+
+        IReadOnlyCollection<string> inFirst = workspace.GetMacroNamesFor(first);
+        IReadOnlyCollection<string> inSecond = workspace.GetMacroNamesFor(second);
+        IReadOnlyCollection<string> inDme = workspace.GetMacroNamesFor(dme);
+
+        Assert.Contains("EARLY", inFirst);
+        Assert.DoesNotContain("LATE", inFirst);
+        Assert.Contains("EARLY", inSecond);
+        Assert.Contains("LATE", inSecond);
+
+        // The .dme's own defines, the -D inject and the seeds reach every file.
+        Assert.Contains("IN_DME", inFirst);
+        Assert.Contains("INJECTED", inFirst);
+        Assert.Contains("TRUE", inFirst);
+
+        // __MAIN__ is the .dme's alone.
+        Assert.DoesNotContain("__MAIN__", inFirst);
+        Assert.DoesNotContain("__MAIN__", inSecond);
+        Assert.Contains("__MAIN__", inDme);
+
+        // The end state still holds everything, as before.
+        Assert.Contains("LATE", workspace.GetMacroNames());
+        Assert.Contains("__MAIN__", workspace.GetMacroNames());
+
+        // A file the walk never reached cannot be placed and gets the whole table.
+        Assert.Contains("LATE", workspace.GetMacroNamesFor(temp.Write("loose.dm", "/obj/c\n")));
+    }
 }

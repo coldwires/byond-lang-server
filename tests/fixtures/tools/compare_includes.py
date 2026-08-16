@@ -61,7 +61,7 @@ def normalise(path):
 def dump_side(dme, defines):
     result = subprocess.run(
         [DM, "-l", *defines, str(dme.name)],
-        capture_output=True, text=True, cwd=str(dme.parent), timeout=1800)
+        capture_output=True, encoding="utf-8", errors="replace", cwd=str(dme.parent), timeout=1800)
 
     files, collecting, saw_block = [], False, False
 
@@ -89,7 +89,7 @@ def dump_side(dme, defines):
 def our_side(dme, defines):
     result = subprocess.run(
         [*DMC, "includes", str(dme), *defines],
-        capture_output=True, text=True, timeout=1800)
+        capture_output=True, encoding="utf-8", errors="replace", timeout=1800)
 
     files = []
 

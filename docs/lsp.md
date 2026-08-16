@@ -3,7 +3,7 @@
 `Dm.Lsp` over stdio. Hand-rolled JSON-RPC, spec 3.17 subset, no dependencies.
 
 > **Live document.** A method or a capability that changes belongs in this file in the same commit.
-> Last updated: 2026-08-13.
+> Last updated: 2026-08-16.
 
 **What this file is for.** `editors/vscode/README.md` is a recipe for one client and carries the
 settings in that client's spelling; everything an integrator needs was reachable only through it.
@@ -139,7 +139,7 @@ consulted for it again.
 |---|---|
 | Lifecycle | `initialize`, `initialized`, `shutdown`, `exit`, `$/setTrace`, `$/cancelRequest` |
 | Sync | `didOpen`, `didChange`, `didClose` (full); `workspace/didChangeWatchedFiles` — send it when the disk changes outside the editor (a git checkout, a build step) and the server invalidates its caches and re-publishes diagnostics for open documents. Cheap: per-file caches revalidate by write time, so only what actually changed is re-read |
-| Diagnostics | `publishDiagnostics` — syntax **and** the binder's semantic set |
+| Diagnostics | `publishDiagnostics` — syntax (the lexer's included since 2026-08-16: unterminated strings, `dm.exe`'s "inconsistent indentation"), the binder's semantic set, **and the include walk's own** since 2026-08-16: a `#warn` echo, an unterminated `#if`, a missing `#include`, an unknown pragma name. The last group belongs to the walk rather than to a file's syntax, so it is reported against the file that wrote it — one that cannot be attributed belongs to the `.dme`. These were the last set `dmc diagdiff` counted and no shell showed, which meant the zero-invented figure was measured over diagnostics no editor ever displayed |
 | Read | `completion` + `completionItem/resolve`, `hover`, `signatureHelp`, `definition`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `documentSymbol`, `workspace/symbol` |
 | Write | `rename` — **best-effort by design**: the `WorkspaceEdit` carries only sites *proven* to be the symbol, a refusal answers `null`, and both the refusal reason and the count of uncertain sites (`:` accesses, untyped receivers, string dispatch) arrive as a `window/showMessage` warning, since the standard response has no field for either. `dm/rename` below returns the full list |
 | Editor | `semanticTokens/full`, `inlayHint`, `foldingRange`, `documentLink`, `documentColor`, `colorPresentation` |
@@ -214,7 +214,7 @@ Spec-only clients ignore these. They are additive and will not break a strict pa
 | `completion` items | `inferred` | The receiver's type was worked out rather than written, which per `INTEGRATION.txt` §4 is exactly what `dm.exe` refuses. Badge, rank down, or drop |
 | | `typeFrom` | Which route produced the type: `initializer`, `assignment`, `as`, `none`. Sent only alongside `inferred`, so `written` never appears on this surface. `bareTypeName` left at ABI 0.26 with the fallback that produced it |
 | | `type`, `value` | The item's own declared type and its initialiser as written |
-| | `constant` | What the initialiser comes to, when it folds — `300` for `= 5 * 60`. Absent when it does not fold, and absent for a bare literal. Rendered as DM renders a number: six significant digits, 32-bit floats |
+| | `constant` | What the initialiser comes to, when it folds — `300` for `= 5 * 60`, and `35` for `= MAX_HP - 5` when `MAX_HP` is a `const` the owner can see (its inheritance chain, then the globals; the `/path::NAME` static form too). Absent when it does not fold, and absent for a bare literal. Rendered as DM renders a number: six significant digits, 32-bit floats |
 | `hover` | a `= \`300\`` line | The same folded value, as markdown rather than a field, so it needs no client code |
 | `documentSymbol` | `owner` | The resolved path of whatever contains the symbol |
 

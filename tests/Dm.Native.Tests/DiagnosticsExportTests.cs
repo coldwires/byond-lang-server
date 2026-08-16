@@ -95,6 +95,42 @@ public unsafe class DiagnosticsExportTests
         }
     }
 
+    /// <summary>
+    /// The walk's own diagnostics cross the boundary too. No <c>ParseResult</c> holds them, so an
+    /// export assembling parse plus binder misses them however complete both halves are — which is
+    /// what this one did until 2026-08-16, while <c>dmc diagdiff</c> counted them the whole time.
+    /// Tested here rather than only managed-side because the previous boundary defect of this shape
+    /// (the inlay <c>parameter</c> kind crossing as <c>"unknown"</c>) was invisible to every test
+    /// that stopped short of the ABI.
+    /// </summary>
+    [Fact]
+    public void The_walks_own_diagnostics_cross_the_boundary()
+    {
+        IntPtr ws = OpenWith("diag.dm", "/proc/f()\n\treturn 1\n#warn the walk says this\n", out string dir);
+
+        try
+        {
+            byte* filePath = Utf8("diag.dm");
+            byte* json;
+
+            Assert.Equal(Ok, Diagnostics(ws, filePath, Utf16, &json));
+            NativeMemory.Free(filePath);
+
+            string document = ReadAndFree(json);
+
+            Assert.Contains("the walk says this", document);
+
+            // On its own line rather than collapsed onto the .dme at line 0, which is what made
+            // every one of these a guaranteed miss against dm.exe before the attribution landed.
+            Assert.Contains("\"startLine\":2", document);
+        }
+        finally
+        {
+            Close(ws);
+            Directory.Delete(dir, true);
+        }
+    }
+
     [Fact]
     public void A_clean_file_answers_an_empty_array()
     {

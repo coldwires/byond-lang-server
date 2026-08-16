@@ -7,3 +7,4 @@
 #include "macros.dm"
 #include "colors.dm"
 #include "constants.dm"
+#include "notes.dm"

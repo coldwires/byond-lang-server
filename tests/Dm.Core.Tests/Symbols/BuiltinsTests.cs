@@ -177,6 +177,31 @@ public class BuiltinsTests
         Assert.Equal("NewLoc", move.Parameters[0]);
     }
 
+    /// <summary>
+    /// The object-typed builtin vars carry the type the compiler checks members through — each one
+    /// probed with a failing control. <c>/database/query database</c> joined 2026-08-16 (`Open()`
+    /// compiles through it, a query's `Execute()` does not); <c>/callee proc</c>, <c>pixloc</c> and
+    /// <c>appearance</c> stay untyped on purpose, since no type in the tree carries their member
+    /// sets, and a wrong type sends a reader where the compiler disagrees.
+    /// </summary>
+    [Theory]
+    [InlineData("/mob", "client", "/client")]
+    [InlineData("/atom", "loc", "/atom")]
+    [InlineData("/database/query", "database", "/database")]
+    public void Object_typed_builtin_vars_carry_their_type(string owner, string name, string type)
+    {
+        Assert.Equal(type, Builtins.CreateTree().Find(owner)!.FindVar(name)!.DeclaredType?.Text);
+    }
+
+    [Theory]
+    [InlineData("/callee", "proc")]
+    [InlineData("/atom", "appearance")]
+    [InlineData("/atom", "pixloc")]
+    public void The_unnameable_builtin_types_stay_untyped(string owner, string name)
+    {
+        Assert.Null(Builtins.CreateTree().Find(owner)!.FindVar(name)!.DeclaredType);
+    }
+
     /// <summary>Global procs land on the root, which is where an unqualified call resolves.</summary>
     [Theory]
     [InlineData("istype")]

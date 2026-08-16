@@ -168,6 +168,35 @@ public sealed class ServerTests : IDisposable
         Assert.Equal(0, cleared.GetProperty("params").GetProperty("diagnostics").GetArrayLength());
     }
 
+    /// <summary>
+    /// The include walk's own diagnostics reach the client. They belong to the walk rather than to
+    /// the file's syntax, so no parse carries them and this report was silent about them until
+    /// 2026-08-16 — while <c>dmc diagdiff</c> counted them the whole time, which is why the
+    /// zero-invented figure was measured over a set no editor ever showed.
+    /// </summary>
+    [Fact]
+    public void A_warn_echo_from_the_walk_is_published()
+    {
+        File.WriteAllText(
+            Path.Combine(_root, "code.dm"),
+            "/proc/f()\n\treturn 1\n#warn the walk says this\n");
+
+        Initialize();
+
+        string uri = FileUri("code.dm");
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/proc/f()\\n\\treturn 1\\n#warn the walk says this\\n\"}}}}}}");
+
+        JsonElement published = Frames()[^1].RootElement;
+        JsonElement diagnostics = published.GetProperty("params").GetProperty("diagnostics");
+
+        JsonElement echo = Assert.Single(
+            diagnostics.EnumerateArray(),
+            d => d.GetProperty("message").GetString()!.Contains("the walk says this"));
+
+        // On its own line, not collapsed onto the .dme at line 0 the way it used to be.
+        Assert.Equal(2, echo.GetProperty("range").GetProperty("start").GetProperty("line").GetInt32());
+    }
+
     [Fact]
     public void Completion_after_a_dot_offers_the_receivers_members()
     {

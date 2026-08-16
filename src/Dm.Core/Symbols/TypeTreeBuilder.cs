@@ -251,6 +251,9 @@ internal static class TypeTreeBuilder
                 // exactly once, at the declaration. Measured free — an A/B on mlaas with the
                 // fold disabled reads the same 13-14 ms per keystroke either way.
                 ConstantValue = Binding.ConstantEvaluator.Fold(variable.Initializer) ?? string.Empty,
+                // A name in the initialiser - a const var, in dm.exe's own folding - cannot be
+                // answered here, per file; ObjectTree.ConstantValueOf finishes it against the tree.
+                Initializer = variable.Initializer,
                 IsDeclaration = variable.InVarContext,
             },
             parentType,
