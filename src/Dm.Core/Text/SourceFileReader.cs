@@ -34,11 +34,100 @@ internal static class SourceFileReader
     };
 
     public static SourceText Read(string path)
+        => Read(path, out _);
+
+    /// <summary>Reads a file and reports the encoding it turned out to be in.</summary>
+    /// <remarks>
+    /// The overload exists for anything that intends to write the file back: decoding one encoding
+    /// and encoding another is how a tool silently rewrites bytes it was never asked to touch. See
+    /// <see cref="Write"/>.
+    /// </remarks>
+    public static SourceText Read(string path, out SourceEncoding encoding)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         byte[] bytes = File.ReadAllBytes(path);
-        return SourceText.From(Decode(bytes, out _), path);
+        return SourceText.From(Decode(bytes, out encoding), path);
+    }
+
+    /// <summary>
+    /// Writes text back in the encoding it was read in, byte-order mark included.
+    /// </summary>
+    /// <param name="path">The file to overwrite.</param>
+    /// <param name="text">The whole file's new content.</param>
+    /// <param name="encoding">What <see cref="Read(string, out SourceEncoding)"/> reported.</param>
+    /// <exception cref="InvalidOperationException">
+    /// A character cannot be written in <paramref name="encoding"/>. Refusing is the point: the
+    /// alternative is a replacement character in somebody's source file.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// <b>This exists because the obvious spelling is wrong.</b> `File.WriteAllText` writes UTF-8,
+    /// so reading a Windows-1252 file and writing it back converts it — one real game has exactly
+    /// one such file, an NPC named <c>Pärt</c>, and the compiler accepts the converted bytes
+    /// without a word while the name in the running game becomes two characters. That is the
+    /// round-trip `INTEGRATION.txt` §5 tells clients to get right, and a tool of ours got it wrong
+    /// first.
+    /// </para>
+    /// <para>
+    /// Line endings need no handling here and are not normalised anywhere: they are part of the
+    /// text, so whatever was read comes back.
+    /// </para>
+    /// </remarks>
+    public static void Write(string path, string text, SourceEncoding encoding)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(text);
+
+        byte[] bytes = encoding switch
+        {
+            SourceEncoding.Utf8 => new UTF8Encoding(false).GetBytes(text),
+            SourceEncoding.Utf8Bom => Prefixed(new byte[] { 0xEF, 0xBB, 0xBF }, new UTF8Encoding(false).GetBytes(text)),
+            SourceEncoding.Utf16Le => Prefixed(new byte[] { 0xFF, 0xFE }, Encoding.Unicode.GetBytes(text)),
+            SourceEncoding.Utf16Be => Prefixed(new byte[] { 0xFE, 0xFF }, Encoding.BigEndianUnicode.GetBytes(text)),
+            SourceEncoding.Windows1252 => EncodeWindows1252(text, path),
+            _ => throw new ArgumentOutOfRangeException(nameof(encoding)),
+        };
+
+        File.WriteAllBytes(path, bytes);
+    }
+
+    private static byte[] Prefixed(byte[] mark, byte[] body)
+    {
+        byte[] all = new byte[mark.Length + body.Length];
+        mark.CopyTo(all, 0);
+        body.CopyTo(all, mark.Length);
+        return all;
+    }
+
+    /// <summary>The inverse of <see cref="DecodeWindows1252"/>, refusing what it cannot represent.</summary>
+    private static byte[] EncodeWindows1252(string text, string path)
+    {
+        byte[] bytes = new byte[text.Length];
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+
+            if (c <= 0x7F || (c >= 0xA0 && c <= 0xFF))
+            {
+                bytes[i] = (byte)c;
+                continue;
+            }
+
+            int punctuation = Array.IndexOf(Windows1252Punctuation, c);
+
+            if (punctuation >= 0)
+            {
+                bytes[i] = (byte)(0x80 + punctuation);
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                $"{path} is Windows-1252 and cannot hold U+{(int)c:X4}; refusing to write rather than replace it.");
+        }
+
+        return bytes;
     }
 
     /// <summary>Decodes bytes and reports which encoding was used.</summary>
