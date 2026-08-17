@@ -1,0 +1,9 @@
+# Captured from 516.1687. The empty symbols on lines 28 and 34 are the compiler's
+# own: a list and a folded expression have no single token to name. We print the
+# author's text there instead, which diagdiff does not compare and a reader wants.
+22 error -5: out of bounds
+25 error "abc": out of bounds
+28 error : out of bounds
+31 error 1000: out of bounds
+34 error : out of bounds
+total 5 errors, 0 warnings

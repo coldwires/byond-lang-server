@@ -130,6 +130,71 @@ public sealed class ObjectTree
 
     private static readonly TypePath DatumPath = TypePath.Parse("/datum");
 
+    private int _parentTypeOrder;
+
+    /// <summary>
+    /// The next position in compile order for a <c>parent_type</c> link, stamped as the tree is
+    /// built so a cycle can later be blamed on the participant declared first — which is what
+    /// dm.exe does.
+    /// </summary>
+    internal int NextParentTypeOrdinal() => _parentTypeOrder++;
+
+    /// <summary>
+    /// Whether this type's <c>parent_type</c> closes an inheritance cycle <b>and</b> this is the
+    /// site dm.exe reports it at.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A cycle is one error to the compiler however many types it runs through, and it lands on
+    /// the one declared first in compile order — verified by writing the same two-type cycle in
+    /// both orders and again split across two files included both ways. Reporting at every
+    /// participant would invent diagnostics the compiler does not produce.
+    /// </para>
+    /// <para>
+    /// The walk that finds it is the one <see cref="InheritanceChain"/> already had to defend
+    /// against with a <c>seen</c> set: the guard has been silently correct since M5, and nothing
+    /// ever told the author their type tree has a loop in it.
+    /// </para>
+    /// </remarks>
+    internal bool ReportsParentTypeCycle(TypeSymbol type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+
+        if (type.ParentType is null && type.RelativeParentType is null)
+            return false;
+
+        List<TypeSymbol> cycle = new();
+        HashSet<TypePath> seen = new();
+        TypeSymbol? current = type;
+
+        while (current is not null && seen.Add(current.Path))
+        {
+            cycle.Add(current);
+            current = InheritanceParent(current);
+
+            if (!ReferenceEquals(current, type))
+                continue;
+
+            TypeSymbol? first = null;
+
+            foreach (TypeSymbol member in cycle)
+            {
+                // Only a member that WROTE a parent_type can carry the blame; the rest of a cycle
+                // may be there through ordinary path parentage, as when a type points at its own
+                // descendant.
+                if (member.ParentType is null && member.RelativeParentType is null)
+                    continue;
+
+                if (first is null || member.ParentTypeOrdinal < first.ParentTypeOrdinal)
+                    first = member;
+            }
+
+            return ReferenceEquals(first, type);
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Walks a type and everything it inherits from, nearest first.
     /// </summary>

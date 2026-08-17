@@ -495,6 +495,11 @@ internal sealed class TreeContribution
                     break;
 
                 case OpKind.Var:
+                    // Stamped here because this replay IS compile order, and a cycle is blamed on
+                    // whichever participant wrote its parent_type first.
+                    if (op.ParentType is not null || op.RelativeParentType is not null)
+                        owner.ParentTypeOrdinal = tree.NextParentTypeOrdinal();
+
                     if (op.ParentType is not null)
                         owner.ParentType = op.ParentType;
 

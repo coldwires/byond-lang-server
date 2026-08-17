@@ -150,6 +150,16 @@ public sealed class Binder
                     // report it here while proc bodies keep the whitelist.
                     _inside = enclosing.IsRoot ? "/" : enclosing.Text;
                     CheckDuplicateVar(variable, enclosing);
+
+                    // `parent_type` owns its whole slot: dm.exe answers "invalid parent type" for
+                    // anything that is not a resolvable path, so binding the initialiser as an
+                    // ordinary expression would report "undefined type path" or "undefined var"
+                    // where the compiler reports neither.
+                    if (CheckParentType(variable, enclosing))
+                        break;
+
+                    CheckWorldSetting(variable, enclosing);
+
                     _inTypeInitializer = true;
                     BindExpression(variable.Initializer, new Scope(enclosing), invoked: false);
                     _inTypeInitializer = false;
@@ -161,6 +171,200 @@ public sealed class Binder
             }
         }
     }
+
+    /// <summary>
+    /// <c>DM0406</c>: <c>parent_type = X</c> where X is not a type this program has.
+    /// </summary>
+    /// <returns>
+    /// Whether this declaration was a <c>parent_type</c> link, and so should not also be bound as
+    /// an ordinary initialiser.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Probed as a matrix on 516.1687, and every row of it shaped the check. A number, an empty
+    /// string, <c>null</c>, a list, a quoted path, a variable and an UNDEFINED path are each
+    /// <c>X: invalid parent type</c> — the undefined one notably is <b>not</b> "undefined type
+    /// path", which is what this binder would otherwise have said. A relative <c>.sibling</c> is
+    /// fine, a forward reference to a type declared later is fine, and a builtin is fine.
+    /// </para>
+    /// <para>
+    /// Two shapes deliberately fall through to other checks: <c>var/parent_type = 5</c> INSIDE a
+    /// type is "duplicate definition (conflicts with built-in variable)" rather than this, and a
+    /// root-level <c>var/parent_type</c> is an ordinary global that compiles clean.
+    /// </para>
+    /// </remarks>
+    private bool CheckParentType(VarDeclarationSyntax variable, TypePath enclosing)
+    {
+        if (variable.InVarContext
+            || !string.Equals(variable.Name, "parent_type", StringComparison.Ordinal)
+            || variable.Initializer is not { } value)
+        {
+            return false;
+        }
+
+        TypePath owner = TypeTreeBuilder.BareAssignmentOwner(enclosing, variable.Path);
+
+        if (owner.IsRoot || _tree.Find(owner) is not { } type)
+            return false;
+
+        // The value AS WRITTEN, which is what dm.exe names in the message. Taken from the tree,
+        // which already renders every initialiser from its source span, rather than by widening
+        // this binder's signature to carry a SourceText for one string.
+        string written = type.FindVar("parent_type")?.InitialValue is { Length: > 0 } text
+            ? text
+            : "parent_type";
+
+        if (value is not PathExpressionSyntax path)
+        {
+            Report();
+            return true;
+        }
+
+        TypePath? resolved = path.Path.Anchor == PathAnchor.UpwardSearch
+            ? RelativePath.Resolve(_tree, owner, path.Path.Segments)
+            : TypePath.FromSegments(path.Path.Segments);
+
+        if (resolved is null || _tree.Find(resolved.Value) is null)
+        {
+            Report();
+            return true;
+        }
+
+        // A cycle is reported ONCE, against the participant declared first in compile order —
+        // probed by writing the same two types in both orders, and again split across two files
+        // included both ways.
+        if (_tree.ReportsParentTypeCycle(type))
+            Report();
+
+        return true;
+
+        void Report() => _diagnostics.Add(Diagnostic.Error(
+            "DM0406", value.Span, $"{written}: invalid parent type"));
+    }
+
+    /// <summary>
+    /// The five <c>/world</c> vars whose compile-time value dm.exe range-checks, and the largest
+    /// each will take. Below zero is out of bounds for all of them.
+    /// </summary>
+    /// <remarks>
+    /// Read off the compiler rather than the reference, by assigning <c>-1</c> to all 42 of
+    /// <c>/world</c>'s vars and reading what came back: these five answer "out of bounds", and the
+    /// rest fall into five other families this does not implement (see PLAN §8). <c>fps</c> is the
+    /// only one with a ceiling — 100 compiles and 101 does not, bisected — while <c>maxx</c> takes
+    /// a billion and <c>tick_lag</c> a million.
+    /// </remarks>
+    private static readonly Dictionary<string, float> WorldRanges = new(StringComparer.Ordinal)
+    {
+        ["maxx"] = float.MaxValue,
+        ["maxy"] = float.MaxValue,
+        ["maxz"] = float.MaxValue,
+        ["tick_lag"] = float.MaxValue,
+        ["fps"] = 100,
+    };
+
+    /// <summary>
+    /// <c>DM0407</c>: a compile-time <c>/world</c> setting outside the range the compiler takes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// dm.exe folds before it checks — <c>maxx = (1 - 5)</c> is out of bounds, and it names the
+    /// value as an empty string because there is no single token to print — so this asks
+    /// <see cref="ConstantEvaluator"/> the same question. A fraction is fine on every one of them
+    /// (<c>tick_lag = 0.5</c> is ordinary DM), and zero is fine.
+    /// </para>
+    /// <para>
+    /// Deliberately silent on anything it cannot classify. A value that does not fold and is not
+    /// one of the shapes below is <c>expected a constant expression</c> to the compiler, which is
+    /// somebody else's check; guessing here would invent on code that builds.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// The <c>/world</c> vars that cannot be set at compile time at ALL, with the wording dm.exe
+    /// uses for each — two messages for one rule, which is the compiler's own split.
+    /// </summary>
+    /// <remarks>
+    /// Value-independent, probed with sensible values as well as with <c>-1</c>:
+    /// <c>world/port = 1234</c> fails exactly as <c>world/port = -1</c> does. Nine of them are
+    /// genuinely read-only and nine more are runtime state; setting either in source is a build
+    /// error today and silent in an editor until now.
+    /// </remarks>
+    private static readonly Dictionary<string, string> WorldNotSettable = new(StringComparer.Ordinal)
+    {
+        ["byond_build"] = "bad variable",
+        ["map_cpu"] = "bad variable",
+        ["params"] = "bad variable",
+        ["port"] = "bad variable",
+        ["process"] = "bad variable",
+        ["realtime"] = "bad variable",
+        ["timeofday"] = "bad variable",
+        ["timezone"] = "bad variable",
+        ["url"] = "bad variable",
+        ["address"] = "may not be set at compile-time",
+        ["byond_version"] = "may not be set at compile-time",
+        ["cpu"] = "may not be set at compile-time",
+        ["game_state"] = "may not be set at compile-time",
+        ["host"] = "may not be set at compile-time",
+        ["internet_address"] = "may not be set at compile-time",
+        ["log"] = "may not be set at compile-time",
+        ["reachable"] = "may not be set at compile-time",
+        ["system_type"] = "may not be set at compile-time",
+        ["tick_usage"] = "may not be set at compile-time",
+        ["time"] = "may not be set at compile-time",
+    };
+
+    private void CheckWorldSetting(VarDeclarationSyntax variable, TypePath enclosing)
+    {
+        if (variable.InVarContext || variable.Initializer is not { } value)
+            return;
+
+        bool ranged = WorldRanges.TryGetValue(variable.Name, out float most);
+
+        if (!ranged && !WorldNotSettable.ContainsKey(variable.Name))
+            return;
+
+        if (TypeTreeBuilder.BareAssignmentOwner(enclosing, variable.Path) != WorldPath)
+            return;
+
+        // DM0408: the var itself is the problem, whatever it was given.
+        if (!ranged)
+        {
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0408", value.Span, $"{variable.Name}: {WorldNotSettable[variable.Name]}"));
+
+            return;
+        }
+
+        bool outOfBounds;
+
+        if (ConstantEvaluator.Value(value, null) is { } folded)
+        {
+            // A string that folded is still a string: `fps = "abc"` is out of bounds rather than
+            // "bad text", which is what the same value gives on `world.name`.
+            outOfBounds = folded.Text is not null || folded.Number < 0 || folded.Number > most;
+        }
+        else
+        {
+            // The three non-constant shapes dm.exe still calls out of bounds rather than passing
+            // to its constant-expression check: a path, `null`, and a `list(...)`.
+            outOfBounds = value is PathExpressionSyntax
+                || value is LiteralExpressionSyntax { Kind: LiteralKind.Null }
+                || value is InvocationExpressionSyntax
+                {
+                    Target: IdentifierExpressionSyntax { Name: "list" },
+                };
+        }
+
+        if (!outOfBounds)
+            return;
+
+        string written = _tree.Find(WorldPath)?.FindVar(variable.Name)?.InitialValue is { Length: > 0 } text
+            ? text
+            : variable.Name;
+
+        _diagnostics.Add(Diagnostic.Error("DM0407", value.Span, $"{written}: out of bounds"));
+    }
+
+    private static readonly TypePath WorldPath = TypePath.Parse("/world");
 
     private void BindProc(ProcDeclarationSyntax proc, TypePath enclosing)
     {

@@ -1,0 +1,11 @@
+# Captured from 516.1687. Both wordings are the compiler's own; the split between
+# them is its, not ours. The total pins that nothing else in the file is reported.
+19 error port: bad variable
+20 error byond_build: bad variable
+21 error url: bad variable
+22 error timeofday: bad variable
+26 error time: may not be set at compile-time
+27 error cpu: may not be set at compile-time
+28 error log: may not be set at compile-time
+29 error host: may not be set at compile-time
+total 8 errors, 0 warnings
