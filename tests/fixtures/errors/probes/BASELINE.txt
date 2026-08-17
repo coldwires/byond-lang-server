@@ -17,7 +17,7 @@
 # is malformed on every keystroke. So extra diagnostics on a must-fail file are
 # not spurious, and the zero-invented rule applies to code that COMPILES CLEAN.
 #
-agreed 79
+agreed 91
 total 255
 probe b1_addr_of_proc
 probe b1_backtick
@@ -37,6 +37,7 @@ probe b1_index_unclosed
 probe b1_list_unclosed
 probe b1_macro_missing_paren
 probe b1_macro_unterm_squote
+probe b1_maxx_negative
 probe b1_missing_lhs
 probe b1_pick_old_prob
 probe b1_pragma_warn_junk
@@ -53,6 +54,7 @@ probe b2_as_five
 probe b2_at_eof
 probe b2_bare_var_stmt
 probe b2_def_in_proc
+probe b2_fps_text
 probe b2_if_bad_number
 probe b2_if_bare
 probe b2_initial_proc
@@ -62,19 +64,27 @@ probe b2_malformed_for
 probe b2_message_output
 probe b2_name_mob
 probe b2_parent_type_bad
+probe b2_parent_type_num
 probe b2_set_unknown
 probe b2_step_in_list
 probe b2_switch_needs_if
+probe b2_switch_no_body
 probe b2_switch_stmt_body
 probe b2_switch_unclosed
 probe b2_undefined_type_path
 probe b2_var_quoted
 probe b2_var_reserved
 probe b3_break_nonloop_label
+probe b3_byond_build_neg
+probe b3_byond_version_neg
 probe b3_for_var_bare
 probe b3_include_foo_ext
+probe b3_parent_empty
 probe b3_rand_block
 probe b3_return_var
+probe b3_tick_lag_list
+probe b3_tick_lag_neg
+probe b3_tick_lag_text
 probe b4_bracket_literal
 probe b4_c_for_commas
 probe b4_for_typed_bare
@@ -82,6 +92,7 @@ probe b4_if_defined_empty
 probe b4_if_empty_parens
 probe b4_if_path
 probe b4_op_index_three
+probe b4_parent_cycle
 probe b4_set_bogus_in
 probe b4_vardecl_in_call
 probe e_bad_indentation
@@ -95,6 +106,7 @@ probe e_missing_expression
 probe e_reserved_word
 probe w3005_unused_label
 probe w3009_call_by_ref
+probe w3010_empty_switch
 probe w3011_var_before_def
 probe w3012_loop_checks
 probe w3013_no_parent
