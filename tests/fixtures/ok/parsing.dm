@@ -468,6 +468,44 @@
 		var/obj/pouch/expanded = new /obj/pouch{capacity = POUCH_MAX}
 		return "[literal.capacity]:[expanded.capacity]"
 
+	// A MODIFIER KEEPS WORKING ANYWHERE IN THE SEGMENT RUN, probed 2026-08-16 on
+	// 516.1687 while building the "declare the type" code action, which has to decide
+	// where to splice the type in. Both `var/static/obj/pouch/x` and
+	// `var/obj/pouch/static/x` compile, and BOTH genuinely apply `static` — the compile
+	// alone says nothing, so this counts calls instead: a static's initializer runs once
+	// for the life of the program, a plain local's runs every call.
+	//
+	// The code action therefore has a free choice and takes the conservative one: insert
+	// immediately before the NAME, leaving the author's modifiers where they wrote them.
+	proc/modifier_before_type()
+		var/static/obj/pouch/a = null
+		if(!a) a = new /obj/pouch
+		a.capacity++
+		return a.capacity
+
+	proc/modifier_after_type()
+		var/obj/pouch/static/b = null
+		if(!b) b = new /obj/pouch
+		b.capacity++
+		return b.capacity
+
+	// The control. Without a modifier this MUST restart each call, or a run where every
+	// form returned the same number would be indistinguishable from a broken probe.
+	proc/no_modifier()
+		var/obj/pouch/c = null
+		if(!c) c = new /obj/pouch
+		c.capacity++
+		return c.capacity
+
+	// ONE NAME IN A COMMA LIST CARRIES ITS OWN TYPE. The code action inserts before the
+	// name it is fixing, which on a sibling produces `var/a = 1, obj/pouch/b = ...`; if
+	// that did not type `b` the action would have to refuse on siblings. Reading b.capacity
+	// is the control — an untyped `b` rejects every member (§8).
+	proc/sibling_carries_its_own_type()
+		var/n = 4, obj/pouch/b = new /obj/pouch
+		b.capacity = 9
+		return n + b.capacity
+
 /proc/run_parsing()
 	var/datum/parsing/P = new
 
@@ -534,3 +572,14 @@
 	CHECK("brackets and var/list headers type vars", P.typing_rules(), 4)
 	CHECK("modified-type values take a literal and a macro", P.modified_type_values(), "5:9")
 	CHECK("colon reaches a subtype, ?: is widest and null-safe", P.colon_accesses(), "7:NULL:3")
+
+	// Called twice each: a static climbs, a plain local restarts. The control is what makes
+	// the first two mean anything — all three returning the same number would otherwise
+	// read as agreement rather than as a broken probe.
+	CHECK("static before the type persists", "[P.modifier_before_type()][P.modifier_before_type()]", "23")
+	CHECK("static after the type persists too", "[P.modifier_after_type()][P.modifier_after_type()]", "23")
+	CHECK("no modifier restarts each call", "[P.no_modifier()][P.no_modifier()]", "22")
+	// 4 + 9 rather than 1 + 1: two distinctive halves, so a wrong reading of either is a
+	// wrong number rather than a coincidence. The first version wanted 3 from 1 + 1 and
+	// the runtime said 2 — the check was sound and the constant was mine.
+	CHECK("a comma sibling carries its own type", P.sibling_carries_its_own_type(), 13)

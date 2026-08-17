@@ -204,6 +204,10 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteColorPresentations(json, params_, cancel));
                     return;
 
+                case "textDocument/codeAction":
+                    RespondCancellable(id, (json, cancel) => WriteCodeActions(json, params_, cancel));
+                    break;
+
                 case "textDocument/foldingRange":
                     RespondCancellable(id, (json, cancel) => WriteFoldingRanges(json, params_, cancel));
                     break;
@@ -536,6 +540,12 @@ internal sealed class LspServer
         // What overrides this proc - the reference index's `override` kind, which is the safety
         // question before changing a proc's behaviour in an override-heavy tree.
         json.WriteBoolean("implementationProvider", true);
+
+        // Quick fixes. Declared as a plain boolean rather than with a `codeActionKinds` list:
+        // every action served is a quickfix, and advertising the kinds would promise a filter the
+        // handler does not implement.
+        json.WriteBoolean("codeActionProvider", true);
+
         json.WriteBoolean("typeDefinitionProvider", true);
         json.WriteBoolean("documentLinkProvider", true);
         json.WriteBoolean("foldingRangeProvider", true);
@@ -1560,6 +1570,64 @@ internal sealed class LspServer
             // LSP numbers these Type=1, Parameter=2; ours start at 0, so the two tables cannot be
             // shared and hardcoding one was fine only while there was a single kind.
             json.WriteNumber("kind", hint.Kind == InlayHintKind.Parameter ? 2 : 1);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>
+    /// Quick fixes for a range — today, "declare the type" on a member reached through an untyped
+    /// local.
+    /// </summary>
+    /// <remarks>
+    /// Answers <c>CodeAction</c> objects carrying their edit inline rather than <c>Command</c>s,
+    /// so a client applies the edit without a second round trip and without the server holding
+    /// state between the two. <c>context.only</c> is not honoured: every action here is a
+    /// <c>quickfix</c>, so a client filtering to that kind gets the same list either way and one
+    /// asking for something else gets nothing useful to filter.
+    /// </remarks>
+    private void WriteCodeActions(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+
+        JsonElement range = params_.GetProperty("range");
+        int startLine = range.GetProperty("start").GetProperty("line").GetInt32();
+        int endLine = range.GetProperty("end").GetProperty("line").GetInt32();
+
+        IReadOnlyList<CodeAction> actions = CodeActionService.ActionsIn(
+            TreeAnnouncingBuild(ws, cancel), document, startLine, endLine, _encoding, cancel);
+
+        json.WriteStartArray();
+
+        foreach (CodeAction action in actions)
+        {
+            json.WriteStartObject();
+            json.WriteString("title", action.Title);
+            json.WriteString("kind", "quickfix");
+
+            json.WriteStartObject("edit");
+            json.WriteStartObject("changes");
+            json.WriteStartArray(UriOf(path));
+
+            foreach (CodeActionEdit edit in action.Edits)
+            {
+                json.WriteStartObject();
+                WriteRange(json, document.Text, edit.Span);
+                json.WriteString("newText", edit.NewText);
+                json.WriteEndObject();
+            }
+
+            json.WriteEndArray();
+            json.WriteEndObject();
+            json.WriteEndObject();
             json.WriteEndObject();
         }
 

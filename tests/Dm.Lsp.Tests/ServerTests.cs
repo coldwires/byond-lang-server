@@ -169,6 +169,57 @@ public sealed class ServerTests : IDisposable
     }
 
     /// <summary>
+    /// The quick fix for the project's one deliberate divergence from dm.exe: a member reached
+    /// through an untyped local, fixed by writing the type down.
+    /// </summary>
+    /// <remarks>
+    /// The edit arrives inline on the action rather than behind a <c>Command</c>, so a client
+    /// applies it without a second round trip and the server keeps no state between the two.
+    /// </remarks>
+    [Fact]
+    public void A_code_action_offers_the_inferred_type_as_an_edit()
+    {
+        File.WriteAllText(
+            Path.Combine(_root, "code.dm"),
+            "/obj/item\n\tvar/hp = 1\n/proc/f()\n\tvar/x = new /obj/item\n\treturn x.hp\n");
+
+        Initialize();
+
+        string uri = FileUri("code.dm");
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/obj/item\\n\\tvar/hp = 1\\n/proc/f()\\n\\tvar/x = new /obj/item\\n\\treturn x.hp\\n\"}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/codeAction\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"range\":{{\"start\":{{\"line\":0,\"character\":0}},\"end\":{{\"line\":5,\"character\":0}}}},\"context\":{{\"diagnostics\":[]}}}}}}");
+
+        JsonElement result = Frames()[^1].RootElement.GetProperty("result");
+        JsonElement action = Assert.Single(result.EnumerateArray());
+
+        Assert.Equal("Declare x as /obj/item", action.GetProperty("title").GetString());
+        Assert.Equal("quickfix", action.GetProperty("kind").GetString());
+
+        JsonElement edit = Assert.Single(
+            action.GetProperty("edit").GetProperty("changes").GetProperty(uri).EnumerateArray());
+
+        Assert.Equal("obj/item/", edit.GetProperty("newText").GetString());
+
+        // A zero-length insert on the declaration line, immediately before the name.
+        JsonElement start = edit.GetProperty("range").GetProperty("start");
+        Assert.Equal(3, start.GetProperty("line").GetInt32());
+        Assert.Equal(
+            start.GetProperty("character").GetInt32(),
+            edit.GetProperty("range").GetProperty("end").GetProperty("character").GetInt32());
+    }
+
+    [Fact]
+    public void Initialize_declares_the_code_action_capability()
+    {
+        Initialize();
+
+        JsonElement capabilities = Assert.Single(Frames())
+            .RootElement.GetProperty("result").GetProperty("capabilities");
+
+        Assert.True(capabilities.GetProperty("codeActionProvider").GetBoolean());
+    }
+
+    /// <summary>
     /// The include walk's own diagnostics reach the client. They belong to the walk rather than to
     /// the file's syntax, so no parse carries them and this report was silent about them until
     /// 2026-08-16 — while <c>dmc diagdiff</c> counted them the whole time, which is why the

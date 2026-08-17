@@ -591,6 +591,36 @@ triple, and reading its arguments as one draws a red swatch beside a colour that
 Runtime-verified on 516.1686. These live in `tests/fixtures/ok/colors.dm` rather than in the
 appendix below, so a BYOND release that changes any of them fails a build.
 
+## 22. A var modifier works on either side of the type
+
+`var/static/obj/item/x` and `var/obj/item/static/x` both compile, and both genuinely apply
+`static`. The modifier is recognised anywhere in the segment run, not only immediately after `var`.
+
+```dm
+var/static/obj/item/a    // static applies
+var/obj/item/static/b    // static applies here too
+var/obj/item/c           // and not here
+```
+
+```
+modifier_first: 2 then 3    type_first: 2 then 3    no_modifier: 2 then 2
+```
+
+**A clean compile proves nothing here**, which is the whole difficulty: a form that silently
+dropped the modifier would compile just as quietly. What separates them is calling twice — a
+static's initialiser runs once for the life of the program, a plain local's runs every call — so
+the value climbs for a static and restarts otherwise. The third row is the control: without a form
+that must *not* persist, three identical results would read as agreement rather than as a probe
+that measures nothing.
+
+The reference documents the modifiers and never says whether their position is free. The practical
+consequence is for anything that *writes* a declaration rather than reading one: a tool inserting a
+type into `var/static/x` can put it before or after the modifier and be correct either way, so the
+choice should fall on leaving the author's text where they wrote it.
+
+Verified on 516.1687. These live in `tests/fixtures/ok/parsing.dm`, control included, rather than
+in the appendix below.
+
 ---
 
 ## Compile-only: braces and indentation nest freely

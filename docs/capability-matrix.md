@@ -46,10 +46,20 @@ work list.
 | `icon_state` completion | `CompletionService`, context `IconState` | `dm_complete_at` `context: "IconState"` (0.25) | `completion` — the items, but no context word: LSP has no field for it |
 | Read a `.dme`'s include block, entry by entry | `DmeIncludeBlock.Entries`, `Workspace.DmeEntries` | `dm_dme_entries` (0.31) | `dm/dmeEntries` |
 | Rename (best-effort + uncertain-site list) | `RenameService` / `Workspace.RenameAt` | `dm_rename_at` (0.27) | `rename` (provable edits only; uncertain count via `window/showMessage`) + `dm/rename` (the full list) |
+| Quick fixes (declare an inferred type) | `CodeActionService` | **— gap, recorded 2026-08-16** | `codeAction`, edits inline, kind `quickfix` |
 
-**No gaps remain on any surface, and the two that opened on 2026-08-15 are the only ones the §3
-rule has ever caught rather than predicted.** Both came from the in-process consumer needing
-something the other shells were never asked for: `DmeIncludeBlock` going public so an editor can
+**One gap is open, deliberately: quick fixes have no C ABI export.** Recorded 2026-08-16 when the
+feature shipped, on the precedent the 0.31 pair set below — an export nobody has asked for is a
+contract owed forever. `dm_code_actions_at` is a minor bump away the day the answer changes.
+
+**The asker is the author's own C# IDE**, which is the only active consumer. This line previously
+read "the Qt IDE has not asked", which parks a decision on someone who is years out; the C ABI is
+still public and still supported, it is simply not what gates work. The row exists so the
+difference is visible rather than silently absent, which is the whole job §3's rule has.
+
+**Before it, no gaps remained on any surface, and the two that opened on 2026-08-15 are the only
+others the rule has ever caught rather than predicted.** Both came from the in-process consumer
+needing something the other shells were never asked for: `DmeIncludeBlock` going public so an editor can
 read and edit the block out of a buffer the workspace has never been given, and
 `ObjectTree.FindOverriddenProc`, which answers the inverse of the `implementation` row — not
 *what overrides this* but *what does this override*. Both were **recorded as gaps for a day**
