@@ -196,19 +196,34 @@ public class StatementParserTests
     // -- switch -------------------------------------------------------------
 
     /// <summary>
-    /// A DM-style switch that ends with no arms is dm.exe's "empty switch statement" warning on
-    /// the switch's own line, beside whatever error the non-arm content already drew. Probed from
-    /// the mined corpus in three shapes: no body, a statement for a body, a body with no arms.
+    /// A DM-style switch that ends with no arms is dm.exe's "empty switch statement" warning,
+    /// beside whatever error the non-arm content already drew. Probed from the mined corpus in
+    /// three shapes: no body, a statement for a body, a body with no arms.
     /// </summary>
+    /// <remarks>
+    /// <b>The LINE is the assertion, and its absence is why the wrong one shipped.</b> This test
+    /// checked the message alone, so it passed while the warning sat on the switch's own line and
+    /// dm.exe put it on the line where an ARM was due — an invented diagnostic and a missed one on
+    /// the same construct, which the probe corpus reported as a disagreement nobody had read.
+    /// The third row is the shape whose file ENDS at the header: the compiler still names the line
+    /// after it, which does not exist.
+    /// </remarks>
     [Theory]
     [InlineData("\tswitch(x)\n\treturn\n")]
     [InlineData("\tswitch(x)\n\t\tvar/y = 1\n")]
-    public void An_empty_switch_is_a_warning(string source)
+    [InlineData("\tswitch(x)\n")]
+    public void An_empty_switch_warns_where_an_arm_was_due(string source)
     {
-        Body("/mob/proc/F(x)\n" + source, out IReadOnlyList<Diagnostic> diagnostics);
+        string whole = "/mob/proc/F(x)\n" + source;
 
-        Assert.Contains(diagnostics, d =>
-            d.Severity == DiagnosticSeverity.Warning && d.Message == "empty switch statement");
+        Body(whole, out IReadOnlyList<Diagnostic> diagnostics);
+
+        Diagnostic warning = Assert.Single(
+            diagnostics,
+            d => d.Severity == DiagnosticSeverity.Warning && d.Message == "empty switch statement");
+
+        // Zero-based: line 1 is the switch itself, so this must be the one after it.
+        Assert.Equal(2, whole.Take(warning.Span.Start).Count(c => c == '\n'));
     }
 
     [Fact]

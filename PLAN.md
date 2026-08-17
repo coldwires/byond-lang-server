@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,567 tests ·
-> Last updated: 2026-08-16
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,700 tests ·
+> Last updated: 2026-08-17
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -393,14 +393,16 @@ byond-lang-server/
       Binding/     Binder, TypeInference
       Services/    Classification, Completion, DocumentSymbol, Definition, Hover,
                    WorkspaceSymbol, TreeQuery, SignatureHelp, Reference, InlayHint,
-                   Folding, DocumentLink, Color, SemanticContext, DocComments
+                   Folding, DocumentLink, Color, CodeAction, Formatting + EditorConfig,
+                   SemanticContext, DocComments
       Resources/   builtins.txt   (BYOND stdlib type tree)
     Dm.Assets/     DmiReader (PNG zTXt -> icon states)
     Dm.Native/     Exports.cs, HandleTable.cs, marshal helpers -> dm_core.dll
     Dm.Lsp/        JSON-RPC server over Dm.Core
     Dm.Cli/        dev driver: scan / dump-tokens / classify / includes / preprocess /
                    outline / symbols / tree / complete / definition / hover / signature /
-                   hints / references / colors / icons / wsymbols / query / bench / diagdiff
+                   hints / references / rename / colors / format / icons / wsymbols /
+                   query / bench / diagdiff
   abi/
     dm_core.h      hand-written C header, source of truth for the ABI
     dm_core.hpp    optional C++ RAII wrapper for the Qt client
@@ -2286,6 +2288,8 @@ that the two candidate behaviours produce different compiler output.
 | **A var modifier keeps working ANYWHERE in the segment run, not only straight after `var`.** | Probed 2026-08-16 on 516.1687 while deciding where a code action should splice a type in. `var/static/obj/item/x` and `var/obj/item/static/x` both compile — and a compile says nothing here, since a dropped modifier compiles too — so the discriminator is calling twice and watching the value persist: **both forms return 2 then 3**, with a modifier-free control returning 2 then 2. So `static` is recognised on either side of the type segments. §8 already recorded that modifier words sit inside the path (`var/const/X`, `var/list/L`); what is new is that their ORDER relative to the type is free. The consequence is that the "declare the type" action has a CHOICE, and takes the conservative one — insert immediately before the name, leaving the author's modifiers where they were. Runtime checks in `ok/parsing.dm`, control included. |
 | **One name in a comma-separated var list carries its own type.** | `var/n = 1, obj/pouch/b = new /obj/pouch` types `b`, verified by reading `b.capacity` — an untyped receiver rejects every member (§8), so the read IS the control. Probed 2026-08-16 because the code action inserts before the name it is fixing, which on a sibling produces exactly this shape; had it not typed the sibling, the action would have had to refuse there rather than emit code that does not build. Runtime check in `ok/parsing.dm`. |
 | **A proc REFERENCED without parentheses is "undefined var" even through a WRITTEN type.** | `var/obj/item/x = new /obj/item` then `return x.use` — `use` a real proc on `/obj/item`, the type written down — is still *"x.use: undefined var"*, with `unused_var` beside it. §8 records the search as kind-sensitive for `:` (`x:only_a_proc` in value position); this pins the same for `.`, and pins that **no type declaration fixes it**. That is what stops the "declare the type" action offering there: the guard "the fix has to actually fix it" is load-bearing rather than belt-and-braces, and a test written expecting a fix is what found it. Fixture `errors/proc_reference`, golden captured from 516.1687. |
+| **`parent_type` takes a resolvable path and nothing else, and an UNDEFINED one is not "undefined type path".** | Probed as a matrix on 516.1687, one case per compilation unit and then all of them in one file, since these are semantic errors and dm.exe accumulates those. `X: invalid parent type` for a number, an empty string, `null`, a `list()`, a quoted `"/obj"`, a variable — and for a path no file declares, which is the row that would have been guessed wrong: everywhere else an unresolvable path literal is *"undefined type path"*, so a binder that treats the initialiser as an ordinary expression reports the wrong message on the right line. **A CYCLE is one error however many types it runs through**, reported against the participant declared FIRST in compile order: verified by writing the same two-type cycle in both orders, and again split across two files included both ways. A type parented to its own DESCENDANT closes the same loop by path and reports the same way. Clean, and each a control the check must not fire on: an absolute path, a relative `.sibling`, a FORWARD reference to a type declared later, a builtin parent, and a root-level global that happens to be named `parent_type`. `var/parent_type = 5` inside a type is a different check — *"duplicate definition (conflicts with built-in variable)"*. Shipped as **`DM0406`**; fixture `errors/parent_type` with the total pinning the controls' silence, four runtime checks in `ok/semantics.dm`. |
+| **Five `/world` vars are RANGE-CHECKED at compile time, and the other 37 fail five other ways.** | Found by assigning `-1` to all 42 of `/world`'s vars on 516.1687, one compilation unit each, rather than by guessing which ones look numeric. **`maxx`, `maxy`, `maxz`, `fps` and `tick_lag` answer `X: out of bounds`**; the value must be a number **at or above zero**, fractions included (`tick_lag = 0.5` is how a game runs fast), and **`fps` is the only one with a ceiling — 100 compiles, 101 does not**, bisected, while `maxx` takes a billion and `tick_lag` a million. A string, a `list()`, `null` and a path are all "out of bounds" here rather than the "bad text" the same string gives on `world.name`. **dm.exe folds before it checks**: `maxx = (1 - 5)` is out of bounds and the message names an EMPTY symbol, because no single token holds the value. A non-constant name is *"expected a constant expression"* instead — a different check. The other 37 vars group into: **"bad text"** (`name`, `status`, `executor`, `hub_password`), **"expected 1 or 0"** (`sleep_offline`, `visibility`, `loop_checks`), **"expected 0, 1, or 2"** (`movement_mode`), **"expected TOPDOWN_MAP, …"** (`map_format`), **"bad turf/area/mob"** (`turf`, `area`, `mob`), **"expected newlist"** (`contents`), **"may not be set at compile-time"** (11, including `time`, `cpu`, `log`, `host`) and **"bad variable"** (9 genuinely read-only ones, including `byond_build`, `port`, `url`). Five accept anything: `cache_lifespan`, `hub`, `icon_size`, `version`, `view`. Shipped as **`DM0407`** for the range family and **`DM0408`** for the twenty that cannot be set at compile time at all — those two wordings being one rule, and value-independent, re-probed with sensible values because `-1` on a port proves nothing. The remaining families are mapped and unimplemented. Fixture `errors/world_bounds`, with the legal side in `ok/_harness.dm` where it runs. |
 | **The legacy `rand(…)` STATEMENT governs the one expression that follows, wherever it sits.** | Undocumented; probed 2026-08-16 on 516.1687. Every statement-position `rand(` is `new_name`'s third message, *"The rand statement is being faded out.  Use pick() instead if possible."* — with an argument or none. Its body is the NEXT EXPRESSION: on the same line (`rand(50) x = 1`), on the next line at the same indent, or indented — and exactly one. A non-expression body is the compiler's error: `return 1` is *": missing expression"*, `if(x)` *": invalid expression"*, a second indented line *": invalid expression"* (on the FIRST body line for a two-line block and the second for three — dm.exe's own inconsistency), and a `rand(50)` closing a proc swallows the next declaration's header and errors on it. `x = rand(50)` and `if(rand(50))` are ordinary calls. Read as an expression statement the indented body was a silent stray block; `RandStatementSyntax` now. Fixture `errors/rand_statement`. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -4111,3 +4115,145 @@ it.
   (`INTEGRATION.txt` §5) and the final newline (half the corpus lacks one). v1 therefore cannot
   change what a file declares, which is what makes format-on-save safe to leave on — and indentation
   waits for a probe matrix plus the `bench --verify`-shaped tree-diff guard.
+- **2026-08-17** — **Formatting reaches an editor: F8, F9, `.editorconfig`, and
+  `textDocument/formatting`.** F8 spaces the comparison and logical operators and is the cheap twin
+  of F3 — none of them has a unary form, so there is no guard to get wrong; the set stops at
+  comparison and `&&`/`||` because `!` is unary, `&x` takes a reference, `|` separates the
+  `as num|text` filters, and `<<` is DM's output operator as often as a shift. F9 is the one rule
+  that reaches INSIDE a token, which is safe for a comment and for nothing else, and it stepped on
+  two things worth recording: the whole run of slashes has to be stepped over or a `///` doc
+  comment becomes `// /`, and the rule is **insert-only**, so an aligned trailing comment and a
+  bulleted list inside a comment both survive a format. Configuration is the file's own
+  `.editorconfig`, resolved the format's own way (upward to `root = true`, nearest wins, later
+  section wins) — and **one key of the spec's three example keys reaches a v1 rule**:
+  `trim_trailing_whitespace` is F5, while `indent_style` and `insert_final_newline` govern exactly
+  the two things v1 never touches, so honouring them would be claiming a rule that does not exist.
+  **The claim that v1 cannot change what a file declares is now checked rather than argued.** Three
+  projects copied, formatted whole and diffed against their own object trees: mlaas 3,002 edits
+  across 84 of 107 files, madridspy 3,671 across 97 of 105, warklan 6,434 across 29 of 31 — and
+  **zero declaration differences in either direction on all three**, with formatted mlaas building
+  0 errors 0 warnings on 516.1687 beside an unformatted copy of the same checkout as the control.
+  tgstation is a scale figure only: 7,443 files formatted without failing, 4,872 changed, 65,168
+  edits, no tree diff run. **Both new guards were proven by control run** rather than assumed — the
+  directive-line skip removed fails four tests including F8's `#include <lib>`, and F9's
+  insert-only check removed fails two. `dmc format` is the arbiter (`--stat` surveys, `--write`
+  rewrites a copy), which is what produced the table above and what INTEGRATION §12's promise
+  requires. **No ABI export, deliberately**: the matrix's second open gap, on the 0.31 precedent,
+  beside code actions. 1,567 → 1,615 tests.
+- **2026-08-17** — **`dmc format --write` re-encoded a Windows-1252 file, and the user's own repo
+  is what caught it.** Formatting mlaas in place for a look at the diff, `git diff -w` — the diff
+  ignoring whitespace, which should have shown only the author's three uncommitted edits — showed a
+  fourth file: `src/map/npcs.dm`, an NPC named `Pärt`, the one non-UTF-8 file in the project.
+  `SourceFileReader` decodes Windows-1252 correctly and `File.WriteAllText` writes UTF-8, so the
+  file's encoding changed with nothing asking for it. **`dm.exe` then compiled it 0 errors**, which
+  is the whole danger: read back as cp1252 the name becomes two characters in the running game, and
+  no instrument in this project reports a byte that decodes cleanly on both sides. It is precisely
+  the round-trip `INTEGRATION.txt` §5 and §4b tell clients to get right, committed by the tool that
+  documents it.
+  Fixed where the fact belongs rather than in the caller: `SourceFileReader` gained
+  `Read(path, out SourceEncoding)` and a `Write` that encodes in whatever was read — BOM included —
+  and **refuses** on a character the encoding cannot hold, because a replacement character written
+  into somebody's source is the failure being fixed. The CLI threads the encoding through; the LSP
+  path never mattered, since it returns spans and the client owns the bytes.
+  **The corpus evidence was re-taken, because the first run went through the broken writer**, and
+  it gained the check that would have caught this: per file, the detected encoding before and after
+  (107 compared, 1 Windows-1252, zero changed) and the text with all spaces and tabs stripped
+  before and after (zero differences). **A tree diff cannot see an encoding change** — a correct
+  decoder on both sides hides it — which is a tenth entry for the blind-instrument list. Ten tests,
+  six of which fail with the old one-line writer restored; 1,615 → 1,625.
+  One harness slip on the way, caught by reading an error rather than a summary: the verification
+  script used `[Encoding]::Latin1`, which does not exist in PowerShell 5.1's runtime, so the single
+  file the check existed for threw into a null and was silently **skipped** while the summary read
+  "0 changed". The same shape as the `<verb>` miscount, one session after writing it up.
+- **2026-08-17** — **F6 and F11 close the spec, and F11's recorded basis did not survive being
+  re-measured.** F6 collapses a run of three or more blank lines to one, with two guards: a run
+  inside a `{" ... "}` string or a block comment is content rather than layout, and a run ENDING
+  the file is left alone as the neighbour of the final-newline rule. It also had to be ordered
+  before F5, since a blank line made of spaces is both a trailing-whitespace site and part of a run
+  — two edits over the same characters is not a set a client can apply, and a test asserts the
+  edits never overlap.
+  **F11 was recorded as "measured, 84%".** Counting every proc and verb declaration in all five
+  reference projects — 2,421 of them, found through the OUTLINE because DM's commonest proc
+  declaration is an override with no `proc` segment for a pattern to match — gives 36% with exactly
+  one blank line and **54% with none**. No cut reproduces 84%; top-level-only is the closest at 74%
+  one-or-more. So F11 is a convention being established, like F2 and F3, and the user's call was
+  **insert-only with two exemptions**: a declaration directly under the header that opens its block
+  (501 of the 1,308 unspaced sites — splitting `proc` from its first child reads as damage), and a
+  declaration under a comment. **The second is not a style exemption**: a blank line ends a
+  doc-comment run, so inserting one under a `///` takes the documentation off the symbol and hover
+  stops showing it. Both exemptions were proven by control run — removing them fails 3 and 7 tests.
+  **The corpus evidence was re-taken with every rule live**, and it now runs three checks rather
+  than one, because a tree diff could not see the encoding defect: mlaas 3,322 edits over 88 of 107
+  files, madridspy 4,023 over 98 of 105, warklan 6,681 over 30 of 31 — **object trees identical,
+  encodings unchanged, non-whitespace characters identical**, and each project building exactly
+  what its unformatted control built (mlaas 0/0, madridspy 0 errors 2 warnings, warklan 1 error
+  14 warnings). With F6 deleting lines and F11 inserting them, "only whitespace changed" is the
+  invariant that says so at the byte level. 1,625 → 1,646 tests; the spec is shipped but for F7,
+  which is v2 by design.
+- **2026-08-17** — **`DM0406`, invalid parent type: the ratchet's first class off the new queue,
+  and the tree had been silently right about it since M5.** `ObjectTree.InheritanceChain` has
+  guarded against a `parent_type` cycle with a `seen` set since the tree existed, and never told
+  anybody — a loop in a game's type hierarchy is silent in the editor and fatal at build time.
+  The rule was probed as a matrix first, and three of its rows changed the implementation: an
+  UNDEFINED path here is *"invalid parent type"* rather than the *"undefined type path"* every
+  other expression position gets, so `parent_type` owns its whole slot in the binder rather than
+  being bound as an ordinary initialiser; a CYCLE is one diagnostic reported against the
+  participant declared FIRST in compile order, which cannot be worked out from a finished tree and
+  so is stamped as it is built (`TypeSymbol.ParentTypeOrdinal`); and `var/parent_type = 5` inside a
+  type is a *different* check — "duplicate definition (conflicts with built-in variable)" — which
+  is only visible by probing it, and would otherwise have been double-reported.
+  The controls carried as much weight as the failures, since `parent_type` is ordinary DM: a
+  relative `.sibling`, a forward reference, a builtin parent and a root global of that name are all
+  legal, and all four corpora hold at zero invented with the check live — tgstation included, which
+  is where a wrong reading of a relative path would have shown up in the thousands.
+  Ratchet **79 → 82 of 255** (`b2_parent_type_num`, `b3_parent_empty`, `b4_parent_cycle`), raised
+  after reading the diff to confirm those three and nothing else moved. Fixture
+  `errors/parent_type` — exact, 6 diagnostics, with `total 6 errors, 0 warnings` pinning the
+  controls' silence — four runtime checks in `ok/semantics.dm` asserting the legal forms by the
+  value they inherit rather than by compiling, and thirteen binder tests. 1,646 → 1,664 tests.
+- **2026-08-17** — **`DM0407`, out of bounds, and one probe run mapped three classes at once.**
+  Rather than reading the five "out of bounds" probes and generalising from them, all 42 of
+  `/world`'s vars were assigned `-1` in 42 compilation units. That answered the class in one pass —
+  `maxx`, `maxy`, `maxz`, `fps`, `tick_lag`, and no others — **and mapped two more of the ratchet's
+  remaining classes for free**: "bad variable" turns out to be nine read-only `/world` vars
+  (`byond_build`, `port`, `url`, …), and "may not be set at compile-time" is eleven more. Both are
+  recorded in §8 unimplemented, which is the cheap half of the next session.
+  The range itself was bisected rather than assumed: at or above zero, fractions fine, and **only
+  `fps` has a ceiling — 100 compiles and 101 does not** — while `maxx` takes a billion. dm.exe
+  **folds before it checks** (`maxx = (1 - 5)` is out of bounds, named with an empty symbol), so
+  the check asks `ConstantEvaluator` the same question, and a value that does not fold is left to
+  the constant-expression check rather than guessed at: a deliberate miss, one probe wide, against
+  the alternative of inventing.
+  Ratchet **82 → 87 of 255**, all five, baseline diffed to confirm nothing else moved. All four
+  corpora hold at zero invented — the one that matters, since every game in the corpus sets these
+  vars, and the boundary values now sit in `ok/_harness.dm` where they compile AND run on every
+  fixture run. Fixture `errors/world_bounds` exact on 5. 1,664 → 1,685 tests.
+- **2026-08-17** — **`DM0408`: the twenty `/world` vars that cannot be set at compile time**, which
+  is the same probe run's second and third families cashed in. Nine are `X: bad variable`
+  (`port`, `byond_build`, `url`, `timeofday`, …) and eleven are
+  `X: may not be set at compile-time` (`time`, `cpu`, `log`, `host`, …) — two wordings for one
+  rule, so they share an id and carry the compiler's own text.
+  **Value-independence had to be probed rather than assumed.** The `-1` sweep that found them
+  proves nothing on its own, since `-1` is nonsense for a port; re-probed with sensible values —
+  `port = 1234`, `time = 5` — each fails identically, so the var is the error and the value is no
+  part of it. That is what makes the check a name table rather than a value analysis.
+  Ratchet **87 → 89** (`b3_byond_build_neg`, `b3_byond_version_neg`), all four corpora at zero
+  invented, fixture `errors/world_readonly` exact on 8 with both wordings. 1,685 → 1,699 tests.
+  **The session's ratchet arc is 79 → 89**, and nine of those ten came from probe runs rather than
+  from reading probes: the `/world` sweep answered three classes at once and left two tables in §8
+  that need no further investigation.
+- **2026-08-17** — **`DM0203` was on the wrong line, which made it an INVENTED diagnostic.** Three
+  probes in the "empty switch" class disagreed with a check this project has shipped since
+  2026-08-05, and a disagreement on a check we already have is a defect rather than a gap — which
+  is why it was worth reading before the easier classes. dm.exe anchors both of a switch's own
+  complaints **where an ARM was due**, the line after the header; we put the warning on the header.
+  So on every empty switch we invented one diagnostic and missed the compiler's, on the same
+  construct. The shape that pins it is the file that ENDS at `switch(a)`: dm still names the line
+  after it, which does not exist, so the anchor is the position an arm should have occupied rather
+  than any token that is there.
+  **The existing test is the other half of the story**: it asserted the message and not the line,
+  so it passed throughout — a gate pointed at the case that already worked, the same shape as
+  0.29's inlay kind. It now asserts the line, and reverting the fix fails it.
+  Ratchet **89 → 91** (`b2_switch_no_body`, `w3010_empty_switch`), all four corpora unmoved. No new
+  fixture: the three mined probes already cover the shapes and now agree exactly, so a hand-written
+  copy would be a second home for one fact.

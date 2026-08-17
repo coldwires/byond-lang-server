@@ -1763,15 +1763,23 @@ internal sealed class StatementParser
 
         if (Current != TokenKind.Indent)
         {
-            // Nothing follows the header at all. dm.exe reports the pair here too.
-            if (!cStyle)
-                Report(headerSpan, "expected 'if' or 'else' in a switch");
+            // Nothing follows the header at all, and dm.exe still anchors both of its complaints
+            // where the ARM should have been rather than on the header — in this shape that is
+            // the end of the file.
+            TextSpan missing = ArmExpectedSpan();
 
-            WarnIfEmpty(cases, cStyle, headerSpan);
+            if (!cStyle)
+                Report(missing, "expected 'if' or 'else' in a switch");
+
+            WarnIfEmpty(cases, cStyle, missing);
             return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
         }
 
         _position++;
+
+        // Captured before the loop consumes the body: this is the first token where an arm was
+        // due, which is the line dm.exe reports an empty switch on.
+        TextSpan armExpected = ArmExpectedSpan();
 
         while (true)
         {
@@ -1799,20 +1807,41 @@ internal sealed class StatementParser
         if (Current == TokenKind.Dedent)
             _position++;
 
-        WarnIfEmpty(cases, cStyle, headerSpan);
+        WarnIfEmpty(cases, cStyle, armExpected);
         return new SwitchStatementSyntax(value, cases, cStyle, SpanFrom(start));
     }
 
     /// <summary>
-    /// A DM-style switch that ends with no arms is dm.exe's "empty switch statement", a WARNING on
-    /// the switch's own line beside whatever error the non-arm content already drew. Probed from
-    /// the mined corpus: it fires with no body, with a statement for a body, and with a body that
-    /// opens but holds no `if`/`else`.
+    /// Where an arm was due: the first token past the header's own line break, or the end of the
+    /// file when nothing follows.
     /// </summary>
-    private void WarnIfEmpty(List<SwitchCaseSyntax> cases, bool cStyle, TextSpan headerSpan)
+    /// <remarks>
+    /// dm.exe anchors both of a switch's own complaints there rather than on the header — all
+    /// three mined shapes report on the line AFTER <c>switch(a)</c>, including the one whose file
+    /// ends at the header, where the compiler still names the line that does not exist. This
+    /// parser reported on the header until 2026-08-17, which made the warning an INVENTED
+    /// diagnostic and the compiler's own a missed one, on the same construct.
+    /// </remarks>
+    private TextSpan ArmExpectedSpan()
+    {
+        int at = _position;
+
+        while (at < _tokens.Count && _tokens[at].Kind is TokenKind.Newline or TokenKind.Indent)
+            at++;
+
+        return at < _tokens.Count ? _tokens[at].Span : CurrentSpan;
+    }
+
+    /// <summary>
+    /// A DM-style switch that ends with no arms is dm.exe's "empty switch statement", a WARNING
+    /// beside whatever error the non-arm content already drew — both on the line where an arm was
+    /// due. Probed from the mined corpus: it fires with no body, with a statement for a body, and
+    /// with a body that opens but holds no `if`/`else`.
+    /// </summary>
+    private void WarnIfEmpty(List<SwitchCaseSyntax> cases, bool cStyle, TextSpan where)
     {
         if (!cStyle && cases.Count == 0)
-            _diagnostics.Add(Diagnostic.Warning("DM0203", headerSpan, "empty switch statement"));
+            _diagnostics.Add(Diagnostic.Warning("DM0203", where, "empty switch statement"));
     }
 
     /// <summary>DM's own arms: <c>if(1)</c>, <c>if(2,3)</c>, <c>if(a to b)</c> and <c>else</c>.</summary>

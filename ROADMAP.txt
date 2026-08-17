@@ -2,7 +2,7 @@
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-16
+ Last updated: 2026-08-17
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.35 MB, ABI 0.31, 40 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,567 green (1,492 core, 46 native, 29 lsp)
+    tests           1,700 green (1,622 core, 46 native, 32 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -51,7 +51,10 @@ WHERE WE ARE
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
     fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 255-probe ratchet
-                    at 79/255 agreed. It moved 76 -> 79 on 2026-08-16 with no
+                    at 89/255 agreed, up from 79 on 2026-08-17 - DM0406 took
+                    the three parent_type probes, DM0407 the five
+                    out-of-bounds ones and DM0408 two more. Before that it
+                    moved 76 -> 79 with no
                     check written for it: surfacing the LEXER's diagnostics
                     through the parse and the walk answered three probes at
                     once - an unterminated resource literal, a junk character
@@ -93,38 +96,61 @@ WHAT'S NEXT
   THE QUEUE, as of 2026-08-16, cheapest first. Detail for each is in PLAN's
   changelog and in the section it belongs to; this is the order.
 
-    1. Formatting. SPEC at docs/dm-format.md, which is the source of truth and
-       is the user's to edit; the defaults were MEASURED off mlaas, the
-       reference codebase by the user's call. F1-F11 all DECIDED 2026-08-16
-       (O1-O5 closed by measuring them the same way, one of them moot).
-       BUILT: F1 spaces around `=`, F2 space after a comma, F3 spaces around
-       BINARY arithmetic (unary left alone, and `/` excluded because it is a
-       path), F4+F10 no space before a control keyword's paren, F5 trim
-       trailing whitespace - on the TOKEN STREAM so the never-touch list is
-       enforceable rather than aspirational.
-       LEFT: F6 blank runs, F8 comparisons, F9 comment spacing, F11 blank
-       line before a proc - then textDocument/formatting to serve any of it.
-       F6 and F11 are a DIFFERENT SHAPE from the rest: they work on lines and
-       blank runs rather than on the gap between two tokens, and F11 inserts.
-       Two rules go deliberately AGAINST the measurement - spaced commas and
-       spaced arithmetic, where the corpus has no convention and the user
-       chose to establish one, so expect a large first diff. v1 does NOT
-       touch indentation: it is semantic in DM, and the tree-diff guard it
-       needs is written up in the spec.
-       (Code actions landed 2026-08-16 - see the DONE entry below.)
-    2. The ratchet's remaining classes: out of bounds (5), invalid parent
-       type (4), bad variable (4), then the tail. 79 of 255 agreed. Moved
-       DOWN the list 2026-08-15, the user's call - each remaining class is
-       its own probe matrix rather than the cheap sweep the count suggests.
-    3. M9's tree merge, diff-patching the previous tree - the last
+    1. The ratchet's remaining classes. 91 of 255 agreed, up from 79 at the
+       start of 2026-08-17: DM0406 invalid parent type, DM0407 out of bounds,
+       DM0408 the twenty /world vars that cannot be set at compile time, and
+       DM0203 moved to the line dm.exe reports it on (it had been INVENTING).
+       WHAT IS LEFT IS A LONG TAIL - no class above three probes remains, and
+       the /world families are closed. The next ones by size:
+       "statement has no effect" (3: `~x`, `while(x)` alone, `a == b` as a
+       statement), "re-initialization of global var" (3), "bad statement" (3),
+       "instruction not allowed here" (3), and the not-an-lvalue half of
+       "bad variable": initial(5), (a+b)++.
+       READ THE ONES WE ALREADY IMPLEMENT FIRST. The empty-switch class cost
+       one edit and bought two probes, because a disagreement on a shipped
+       check is a defect rather than missing work - and that one was inventing
+       a diagnostic on every empty switch.
+       THE METHOD IS THE FINDING: probe the whole family, not the probes.
+       Assigning -1 to all 42 of /world's vars answered three classes at once
+       and left two tables in PLAN 8 that needed no further investigation.
+    2. M9's tree merge, diff-patching the previous tree - the last
        whole-project phase, and where tgstation's 29% growth since
        2026-08-04 lands. Three traps in
        PLAN 6 M9; write the test for each before the code.
-    4. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
+    3. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
        probe matrix first, move directive-head detection to collection time,
        retire FlushPending's splitting in the same change.
-    5. Type rename; incremental LSP sync and incremental re-lex within a
+    4. Type rename; incremental LSP sync and incremental re-lex within a
        file, both waiting for a profile to ask.
+    5. Formatting v2: INDENTATION (F7). Needs its own probe matrix and the
+       tree-diff guard written up in the spec - format, re-parse, compare the
+       object tree, emit nothing if a declaration moved. Everything else in
+       the spec is shipped.
+
+    DONE 2026-08-17: FORMATTING, ALL OF IT EXCEPT INDENTATION, AND IT REACHES
+       AN EDITOR. Spec at docs/dm-format.md, the source of truth and the
+       user's to edit. F1 `=`, F2 commas, F3 BINARY arithmetic (unary left
+       alone, `/` excluded because it is a path), F4+F10 control-keyword
+       parens, F5 trailing whitespace, F6 blank runs of 3+, F8 comparison and
+       logical operators, F9 a space after a line comment's slashes, F11 a
+       blank line before an unspaced proc. Served as textDocument/formatting,
+       configured by the file's own .editorconfig, with `dmc format` as the
+       arbiter. F7 is v2 - indentation is semantic in DM.
+       THREE rules go against the measurement rather than with it: spaced
+       commas, spaced arithmetic, and F11 - whose recorded 84% did NOT
+       reproduce (36% exactly-one, 54% none, across 2,421 declarations), so
+       it ships insert-only with two exemptions. One of those is not style:
+       a blank line ENDS a doc-comment run, so inserting one under a `///`
+       would take the documentation off the symbol.
+       That v1 changes nothing a file DECLARES is checked rather than argued -
+       three projects formatted whole, object trees identical, encodings
+       unchanged, non-whitespace characters identical, and each building
+       exactly what its unformatted control built.
+       The defect worth remembering came from the user's own repo: `--write`
+       re-encoded their one Windows-1252 file to UTF-8 and dm.exe compiled it
+       0 errors, so nothing would have said an NPC's name had changed.
+       SourceFileReader now owns both halves of the round trip.
+       (Code actions landed 2026-08-16 - see the DONE entry below.)
 
     DONE 2026-08-16, item 1 (half): CODE ACTIONS, one action.
        "Declare x as /obj/item" on a member reached through an untyped local -
@@ -539,7 +565,12 @@ WHERE THE DETAIL LIVES
     the LSP: launch, initializationOptions, the
       dm/* methods, what is NOT served, Neovim and
       Helix config                                    docs/lsp.md
-    runnable proofs of 18 DM edge cases               docs/dm-language-notes.md
+    the in-process C# surface, for a host that
+      references Dm.Core directly                     docs/api.md
+    in-process vs C ABI vs LSP parity, and every
+      gap that is open on purpose                     docs/capability-matrix.md
+    21 DM behaviours with runnable proofs, and
+      9 compile-only sections beside them             docs/dm-language-notes.md
     the formatting rules, and what must never be
       touched because it changes the program        docs/dm-format.md
     the fixture suite: compile + RUN + diagdiff       tests/fixtures/README.md
