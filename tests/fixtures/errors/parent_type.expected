@@ -1,0 +1,10 @@
+# Captured from 516.1687. The total is what pins the controls: a relative path, a
+# forward reference, a builtin parent and a root global named parent_type are all
+# legal DM, and a check that fired on any of them would light up a real game.
+22 error 5: invalid parent type
+26 error "": invalid parent type
+30 error /no/such/type: invalid parent type
+34 error /obj/cycle_b: invalid parent type
+40 error /obj/self: invalid parent type
+44 error /obj/ancestor/below: invalid parent type
+total 6 errors, 0 warnings

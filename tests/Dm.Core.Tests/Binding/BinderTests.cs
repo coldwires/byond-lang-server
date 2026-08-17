@@ -272,6 +272,179 @@ public class BinderTests
             + "/proc/f()\n\tvar/mob/test/M = new\n\treturn M:only_there\n"));
     }
 
+    // -- parent_type (DM0406) ------------------------------------------------
+    // Probed as a matrix on 516.1687. Every rejected shape is `X: invalid parent type` with X as
+    // written, and the controls are half the check: parent_type is ordinary DM.
+
+    [Theory]
+    [InlineData("/obj/mine\n\tparent_type = 5\n", "5")]
+    [InlineData("/obj/mine\n\tparent_type = \"\"\n", "\"\"")]
+    [InlineData("/obj/mine\n\tparent_type = null\n", "null")]
+    [InlineData("/obj/mine\n\tparent_type = \"/obj\"\n", "\"/obj\"")]
+    public void A_parent_type_that_is_not_a_path_is_reported(string source, string written)
+    {
+        Diagnostic found = Assert.Single(Bind(source), d => d.Id == "DM0406");
+
+        Assert.Equal($"{written}: invalid parent type", found.Message);
+    }
+
+    /// <summary>
+    /// The row that would have been guessed wrong. Everywhere else an unresolvable path literal is
+    /// <c>DM0402</c> "undefined type path"; in this slot dm.exe says "invalid parent type", so the
+    /// generic path check must not also fire here.
+    /// </summary>
+    [Fact]
+    public void An_undefined_parent_type_is_invalid_rather_than_an_undefined_path()
+    {
+        IReadOnlyList<Diagnostic> found = Bind("/obj/mine\n\tparent_type = /no/such/type\n");
+
+        Assert.Equal("/no/such/type: invalid parent type", Assert.Single(found).Message);
+        Assert.DoesNotContain(found, d => d.Id == "DM0402");
+    }
+
+    /// <summary>
+    /// A cycle is ONE diagnostic however many types it runs through, against the participant
+    /// declared first — which the message names by its own value, so this asserts the position
+    /// without asserting a span.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "/obj/a\n\tparent_type = /obj/b\n/obj/b\n\tparent_type = /obj/a\n", "/obj/b")]
+    [InlineData(
+        "/obj/b\n\tparent_type = /obj/a\n/obj/a\n\tparent_type = /obj/b\n", "/obj/a")]
+    [InlineData(
+        "/obj/a\n\tparent_type = /obj/b\n/obj/b\n\tparent_type = /obj/c\n/obj/c\n\tparent_type = /obj/a\n",
+        "/obj/b")]
+    public void A_cycle_is_reported_once_against_the_first_participant(string source, string names)
+    {
+        Diagnostic found = Assert.Single(Bind(source), d => d.Id == "DM0406");
+
+        Assert.Equal($"{names}: invalid parent type", found.Message);
+    }
+
+    [Fact]
+    public void A_type_parented_to_its_own_descendant_is_a_cycle()
+    {
+        Diagnostic found = Assert.Single(
+            Bind("/obj/a\n\tparent_type = /obj/a/b\n/obj/a/b\n\tvar/hp = 1\n"),
+            d => d.Id == "DM0406");
+
+        Assert.Equal("/obj/a/b: invalid parent type", found.Message);
+    }
+
+    /// <summary>
+    /// The controls, and they matter more than the failures: every one of these is ordinary DM,
+    /// and a check that fired on them would light up a real game. All four corpora hold at zero
+    /// invented with this check live, tgstation included.
+    /// </summary>
+    [Theory]
+    [InlineData("/obj/base\n\tvar/hp = 1\n/obj/mine\n\tparent_type = /obj/base\n")]
+    [InlineData("/obj/base\n\tvar/hp = 1\n/obj/mine\n\tparent_type = .base\n")]
+    [InlineData("/obj/mine\n\tparent_type = /obj/later\n/obj/later\n\tvar/hp = 1\n")]
+    [InlineData("/obj/mine\n\tparent_type = /mob\n")]
+    [InlineData("var/parent_type = 5\n/obj/mine\n\tvar/hp = 1\n")]
+    public void A_legal_parent_type_is_silent(string source)
+        => Assert.DoesNotContain(Bind(source), d => d.Id == "DM0406");
+
+    /// <summary>
+    /// <c>var/parent_type = 5</c> inside a type is a different check entirely — dm.exe calls it
+    /// "duplicate definition (conflicts with built-in variable)" — so this one must fall through
+    /// rather than being caught here.
+    /// </summary>
+    [Fact]
+    public void A_var_declaration_named_parent_type_is_not_this_check()
+        => Assert.DoesNotContain(Bind("/obj/mine\n\tvar/parent_type = 5\n"), d => d.Id == "DM0406");
+
+    // -- /world's range-checked settings (DM0407) -----------------------------
+    // Found by assigning -1 to all 42 of /world's vars: five answer "out of bounds" and the rest
+    // fall into five other families this check leaves alone.
+
+    [Theory]
+    [InlineData("/world/maxx = -5\n")]
+    [InlineData("/world/maxy = \"abc\"\n")]
+    [InlineData("/world/maxz = list(1)\n")]
+    [InlineData("/world/tick_lag = -0.5\n")]
+    [InlineData("/world/tick_lag = null\n")]
+    [InlineData("/world/maxx = /mob\n")]
+    public void A_world_setting_outside_its_range_is_reported(string source)
+        => Assert.Contains(Bind(source), d => d.Id == "DM0407" && d.Message.EndsWith(": out of bounds"));
+
+    /// <summary>dm.exe folds before it checks, so this one has no negative token in it at all.</summary>
+    [Fact]
+    public void A_folded_expression_is_checked_after_folding()
+        => Assert.Contains(Bind("/world/maxx = (1 - 5)\n"), d => d.Id == "DM0407");
+
+    /// <summary>
+    /// The legal side, and it matters more than the failures: every game in the corpus sets these.
+    /// A fraction and zero are ordinary, 100 is the largest fps that compiles, and only fps has a
+    /// ceiling at all — maxx takes a billion.
+    /// </summary>
+    [Theory]
+    [InlineData("/world/maxx = 0\n")]
+    [InlineData("/world/maxx = 1000000000\n")]
+    [InlineData("/world/tick_lag = 0.5\n")]
+    [InlineData("/world/fps = 100\n")]
+    [InlineData("/world/fps = (2 * 3)\n")]
+    [InlineData("/world/tick_lag = 1000000\n")]
+    public void A_legal_world_setting_is_silent(string source)
+        => Assert.DoesNotContain(Bind(source), d => d.Id == "DM0407");
+
+    /// <summary>
+    /// A value this cannot fold is <c>expected a constant expression</c> to the compiler, which is
+    /// a different check. Silence here is a miss on purpose — guessing would invent.
+    /// </summary>
+    [Fact]
+    public void A_non_constant_world_setting_is_left_to_another_check()
+        => Assert.DoesNotContain(
+            Bind("var/global/g = 5\n/world/maxx = g\n"), d => d.Id == "DM0407");
+
+    /// <summary>The other 37 vars are other families entirely, and none of them is this one.</summary>
+    [Theory]
+    [InlineData("/world/name = -1\n")]        // "bad text"
+    [InlineData("/world/visibility = -1\n")]  // "expected 1 or 0"
+    [InlineData("/world/mob = -1\n")]         // "bad mob"
+    [InlineData("/world/view = -1\n")]        // legal
+    public void Another_world_var_is_not_this_check(string source)
+        => Assert.DoesNotContain(Bind(source), d => d.Id == "DM0407");
+
+    // -- /world vars that cannot be set at compile time (DM0408) --------------
+
+    /// <summary>
+    /// Value-independent, which is the part that had to be probed: <c>-1</c> found these, and a
+    /// sensible value fails identically, so the var is the error rather than what it was given.
+    /// Two wordings, one rule — the split is dm.exe's.
+    /// </summary>
+    [Theory]
+    [InlineData("/world/port = 1234\n", "port: bad variable")]
+    [InlineData("/world/byond_build = 500\n", "byond_build: bad variable")]
+    [InlineData("/world/url = \"x\"\n", "url: bad variable")]
+    [InlineData("/world/time = 5\n", "time: may not be set at compile-time")]
+    [InlineData("/world/log = \"x\"\n", "log: may not be set at compile-time")]
+    [InlineData("/world/cpu = 1\n", "cpu: may not be set at compile-time")]
+    public void A_world_var_that_cannot_be_set_at_compile_time_is_reported(string source, string message)
+    {
+        Diagnostic found = Assert.Single(Bind(source), d => d.Id == "DM0408");
+
+        Assert.Equal(message, found.Message);
+    }
+
+    /// <summary>An indented block is the same declaration, and reaches the same owner.</summary>
+    [Fact]
+    public void The_indented_world_block_form_is_the_same_check()
+        => Assert.Contains(Bind("world\n\tport = 1234\n"), d => d.Id == "DM0408");
+
+    /// <summary>
+    /// The vars a game actually configures are not in the table, and the fixture world sets four
+    /// of them on every run.
+    /// </summary>
+    [Theory]
+    [InlineData("/world/maxx = 3\n")]
+    [InlineData("/world/fps = 100\n")]
+    [InlineData("/world/name = \"a game\"\n")]
+    [InlineData("/world/view = 7\n")]
+    public void A_settable_world_var_is_silent(string source)
+        => Assert.DoesNotContain(Bind(source), d => d.Id == "DM0408");
+
     private static IReadOnlyList<Diagnostic> Bind(params string[] files)
     {
         List<(string, ParseResult)> parsed = new();

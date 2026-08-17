@@ -10,6 +10,12 @@ world
 	maxx = 3
 	maxy = 3
 	maxz = 1
+	// The legal side of DM0407, exercised on every run: 100 is the largest fps
+	// that compiles (101 does not, bisected), and a fractional tick_lag is how a
+	// game runs faster than ten ticks a second. A range check that fired on
+	// either would light up every game in the corpus.
+	fps = 100
+	tick_lag = 0.5
 
 var/global/checks_total = 0
 var/global/checks_failed = 0

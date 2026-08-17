@@ -228,6 +228,17 @@ public sealed class TypeSymbol
     public IReadOnlyList<string>? RelativeParentType { get; internal set; }
 
     /// <summary>
+    /// Where this type's <c>parent_type</c> was written in compile order, or
+    /// <see cref="int.MaxValue"/> when it wrote none.
+    /// </summary>
+    /// <remarks>
+    /// Kept because an inheritance CYCLE is one diagnostic to dm.exe, reported against the
+    /// participant declared first — which cannot be worked out from the finished tree, only
+    /// recorded as it is built.
+    /// </remarks>
+    internal int ParentTypeOrdinal { get; set; } = int.MaxValue;
+
+    /// <summary>
     /// True when BYOND declares this type. A project reopening <c>/mob</c> adds to it without
     /// clearing the flag, so the tree can still tell a builtin type from one the project invented.
     /// </summary>

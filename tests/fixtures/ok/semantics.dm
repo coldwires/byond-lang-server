@@ -92,8 +92,40 @@ two"
 	CHECK("sibling var survives", S.kept, "kept")
 	CHECK("discarded proc is absent", ("vanished" in S.vars) ? 1 : 0, 0)
 
+	// The three parent_type forms a check for DM0406 must NOT report. Each is asserted by
+	// inheriting a value rather than by compiling: a link the compiler accepted and did not
+	// actually make would compile exactly as quietly.
+	var/obj/pt_relative/rel = new
+	CHECK("a relative parent_type inherits", rel.pt_marker, 7)
+	CHECK("and its procs too", rel.pt_value(), 11)
+
+	var/obj/pt_forward/fwd = new
+	CHECK("a parent declared LATER in the file still links", fwd.pt_later_marker, 13)
+
+	var/obj/pt_builtin/bi = new
+	CHECK_TRUE("a builtin parent_type is a real link", istype(bi, /mob))
+
 /datum/swallowed
 	var
 		kept = "kept"
 		proc
 			vanished()
+
+// parent_type's legal forms, for the checks above. `.pt_base` is the upward search from this
+// type's own path (notes §8), and `/obj/pt_later` is declared after the type naming it.
+/obj/pt_base
+	var/pt_marker = 7
+	proc/pt_value()
+		return 11
+
+/obj/pt_relative
+	parent_type = .pt_base
+
+/obj/pt_forward
+	parent_type = /obj/pt_later
+
+/obj/pt_later
+	var/pt_later_marker = 13
+
+/obj/pt_builtin
+	parent_type = /mob
