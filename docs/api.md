@@ -4,7 +4,7 @@ The C# surface, for a host that references the assembly directly — the third s
 C ABI (`INTEGRATION.txt`) and the LSP (`docs/lsp.md`).
 
 > **Live document.** A public type appearing, disappearing or changing meaning belongs in this
-> file in the same commit. Last updated: 2026-08-16.
+> file in the same commit. Last updated: 2026-08-17.
 
 **What this file is for.** The XML documentation ships with the assembly and carries every
 member's contract — an undocumented public member fails the build, so IntelliSense is the
@@ -76,6 +76,7 @@ aborts at the next token check.
 | Every use of a symbol | `ReferenceService` → `ReferenceListing` / `Reference` |
 | Rename, best-effort | `RenameService` → `RenameResult` (or `Workspace.RenameAt`) |
 | Quick fixes for a line range | `CodeActionService` → `CodeAction` / `CodeActionEdit` |
+| Whitespace edits for a document | `FormattingService` → `FormatEdit`, taking `FormatOptions` |
 | Semantic diagnostics | `Binder.Bind` → `Diagnostic` list (syntax half: `ParseResult.Diagnostics`) |
 | The walk's own diagnostics | `Workspace.GetWalkDiagnostics` → `Diagnostic` list |
 | Outline | `DocumentSymbolService` → `DocumentSymbol` |
@@ -85,7 +86,15 @@ aborts at the next token check.
 | Folding, links, colours | `FoldingService`, `DocumentLinkService`, `ColorService` |
 
 The first call that needs the tree pays for building it; everything after answers from the cache
-until a buffer, define or `Invalidate` changes it.
+until a buffer, define or `Invalidate` changes it. Classification, folding, links, colours and
+**formatting** need no tree at all, so they answer before the project has been walked.
+
+`FormattingService` is the one service driven by a document rather than by a position, and the one
+whose behaviour a *document* configures: `FormatOptions.ForFile(path)` is the spec's defaults with
+the file's own `.editorconfig` applied over them, which is what `docs/dm-format.md` says wins.
+`FormatOptions` alone is the same defaults with nothing read from disk, and `FormatOptions.None`
+turns every rule off for a caller opting in one at a time. The edits are whitespace only, sorted,
+non-overlapping, and never touch a line's leading indentation — which is semantic in DM.
 
 ## Symbols, text, diagnostics
 

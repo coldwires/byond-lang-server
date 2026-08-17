@@ -3,7 +3,7 @@
 `Dm.Lsp` over stdio. Hand-rolled JSON-RPC, spec 3.17 subset, no dependencies.
 
 > **Live document.** A method or a capability that changes belongs in this file in the same commit.
-> Last updated: 2026-08-16.
+> Last updated: 2026-08-17.
 
 **What this file is for.** `editors/vscode/README.md` is a recipe for one client and carries the
 settings in that client's spelling; everything an integrator needs was reachable only through it.
@@ -143,6 +143,7 @@ consulted for it again.
 | Read | `completion` + `completionItem/resolve`, `hover`, `signatureHelp`, `definition`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `documentSymbol`, `workspace/symbol` |
 | Fix | `codeAction` — quick fixes, each carrying its `WorkspaceEdit` inline rather than behind a `Command`, so applying one needs no second round trip. One action today: **declare the type** on a member reached through an untyped local, which is the fix for the one place this analyzer knowingly disagrees with `dm.exe` (see `inferred` below). The edit is a zero-length insert immediately before the name, so `var/static/x` becomes `var/static/obj/item/x` with your modifiers left where they were. Offered only when it would actually make the access compile — a proc referenced without parentheses stays `undefined var` whatever type is written, so nothing is offered there. `context.only` is not honoured: everything served is a `quickfix` |
 | Write | `rename` — **best-effort by design**: the `WorkspaceEdit` carries only sites *proven* to be the symbol, a refusal answers `null`, and both the refusal reason and the count of uncertain sites (`:` accesses, untyped receivers, string dispatch) arrive as a `window/showMessage` warning, since the standard response has no field for either. `dm/rename` below returns the full list |
+| Format | `textDocument/formatting` — the whole document's whitespace edits, which is what format-on-save calls. **Safe to leave on permanently**, and structurally rather than carefully: the formatter reads the token stream and touches only whitespace between two tokens on one line, so leading indentation — which is semantic in DM — cannot move, and neither can a `##` paste, a string interior, or the text after a `\` continuation. Rules and their defaults are `docs/dm-format.md`; configuration is the file's own `.editorconfig` (only `trim_trailing_whitespace` reaches a v1 rule), with the request's `trimTrailingWhitespace` winning over it when a client sends one. Needs no object tree, so it answers before the project has been walked. `rangeFormatting` and `onTypeFormatting` are not served |
 | Editor | `semanticTokens/full`, `inlayHint`, `foldingRange`, `documentLink`, `documentColor`, `colorPresentation` |
 | Server → client | `window/workDoneProgress/create` + `$/progress`; `dm/environment` (below); `window/showMessage` for rename's uncertainty and the auto-discovery defines note |
 
@@ -230,7 +231,7 @@ unresolvable receiver here.
 
 | | |
 |---|---|
-| `textDocument/formatting` | Not started |
+| `rangeFormatting`, `onTypeFormatting` | Not v1. `textDocument/formatting` is served — see above |
 | Incremental sync | See above |
 
 ---

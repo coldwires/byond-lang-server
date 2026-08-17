@@ -47,15 +47,18 @@ work list.
 | Read a `.dme`'s include block, entry by entry | `DmeIncludeBlock.Entries`, `Workspace.DmeEntries` | `dm_dme_entries` (0.31) | `dm/dmeEntries` |
 | Rename (best-effort + uncertain-site list) | `RenameService` / `Workspace.RenameAt` | `dm_rename_at` (0.27) | `rename` (provable edits only; uncertain count via `window/showMessage`) + `dm/rename` (the full list) |
 | Quick fixes (declare an inferred type) | `CodeActionService` | **— gap, recorded 2026-08-16** | `codeAction`, edits inline, kind `quickfix` |
+| Formatting (whitespace edits for a document) | `FormattingService`, `FormatOptions.ForFile` | **— gap, recorded 2026-08-17** | `textDocument/formatting`; `rangeFormatting` and `onTypeFormatting` are not v1 |
 
-**One gap is open, deliberately: quick fixes have no C ABI export.** Recorded 2026-08-16 when the
-feature shipped, on the precedent the 0.31 pair set below — an export nobody has asked for is a
-contract owed forever. `dm_code_actions_at` is a minor bump away the day the answer changes.
+**Two gaps are open, both deliberately, and both the same shape: a feature the in-process consumer
+and the LSP have and the C ABI does not.** Quick fixes since 2026-08-16, formatting since
+2026-08-17, on the precedent the 0.31 pair set below — an export nobody has asked for is a
+contract owed forever. `dm_code_actions_at` and `dm_format` are each a minor bump away the day
+someone asks; the row exists so the difference is visible rather than silently absent, which is
+the whole job §3's rule has.
 
 **The asker is the author's own C# IDE**, which is the only active consumer. This line previously
 read "the Qt IDE has not asked", which parks a decision on someone who is years out; the C ABI is
-still public and still supported, it is simply not what gates work. The row exists so the
-difference is visible rather than silently absent, which is the whole job §3's rule has.
+still public and still supported, it is simply not what gates work.
 
 **Before it, no gaps remained on any surface, and the two that opened on 2026-08-15 are the only
 others the rule has ever caught rather than predicted.** Both came from the in-process consumer

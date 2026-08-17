@@ -208,6 +208,10 @@ internal sealed class LspServer
                     RespondCancellable(id, (json, cancel) => WriteCodeActions(json, params_, cancel));
                     break;
 
+                case "textDocument/formatting":
+                    RespondCancellable(id, (json, cancel) => WriteFormatting(json, params_, cancel));
+                    break;
+
                 case "textDocument/foldingRange":
                     RespondCancellable(id, (json, cancel) => WriteFoldingRanges(json, params_, cancel));
                     break;
@@ -545,6 +549,12 @@ internal sealed class LspServer
         // every action served is a quickfix, and advertising the kinds would promise a filter the
         // handler does not implement.
         json.WriteBoolean("codeActionProvider", true);
+
+        // Whole-document formatting, which is what a client's format-on-save calls. Safe to leave
+        // on permanently: v1 touches no whitespace that can change what a file declares — leading
+        // indentation is semantic in DM and F7 holds it — so the guarantee is structural rather
+        // than a matter of care. `rangeFormatting` and `onTypeFormatting` are not v1.
+        json.WriteBoolean("documentFormattingProvider", true);
 
         json.WriteBoolean("typeDefinitionProvider", true);
         json.WriteBoolean("documentLinkProvider", true);
@@ -1628,6 +1638,56 @@ internal sealed class LspServer
             json.WriteEndArray();
             json.WriteEndObject();
             json.WriteEndObject();
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
+    }
+
+    /// <summary>
+    /// The whole document's whitespace edits, which is what format-on-save asks for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Needs no object tree — the formatter reads the token stream — so this answers before the
+    /// project has been walked, like folding, links and colours.
+    /// </para>
+    /// <para>
+    /// Configuration comes from the file's own <c>.editorconfig</c> per the spec, with one
+    /// override: a client that states <c>trimTrailingWhitespace</c> in the request has told us
+    /// what its own save already does, and disagreeing with it would either undo the user's
+    /// setting or duplicate it.
+    /// </para>
+    /// </remarks>
+    private void WriteFormatting(Utf8JsonWriter json, JsonElement params_, CancellationToken cancel)
+    {
+        if (_workspace is not Workspace ws)
+        {
+            json.WriteNullValue();
+            return;
+        }
+
+        string path = PathOf(params_.GetProperty("textDocument"));
+        Document document = ws.GetDocument(path);
+        FormatOptions options = FormatOptions.ForFile(path);
+
+        if (params_.TryGetProperty("options", out JsonElement given)
+            && given.ValueKind == JsonValueKind.Object
+            && given.TryGetProperty("trimTrailingWhitespace", out JsonElement trim)
+            && trim.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            options.TrimTrailingWhitespace = trim.GetBoolean();
+        }
+
+        IReadOnlyList<FormatEdit> edits = FormattingService.Format(document, options, cancel);
+
+        json.WriteStartArray();
+
+        foreach (FormatEdit edit in edits)
+        {
+            json.WriteStartObject();
+            WriteRange(json, document.Text, edit.Span);
+            json.WriteString("newText", edit.NewText);
             json.WriteEndObject();
         }
 

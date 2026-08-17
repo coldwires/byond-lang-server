@@ -55,9 +55,9 @@ public class FormattingTests
     [Theory]
     [InlineData("/proc/f()\n\tx+=1\n")]
     [InlineData("/proc/f()\n\tx-=1\n")]
-    [InlineData("/proc/f()\n\tx==1\n")]
-    [InlineData("/proc/f()\n\tx!=1\n")]
-    public void F1_does_not_touch_a_compound_or_comparison(string source)
+    [InlineData("/proc/f()\n\tx*=1\n")]
+    [InlineData("/proc/f()\n\tx||=1\n")]
+    public void F1_does_not_touch_a_compound_assignment(string source)
         => Assert.Equal(source, Formatted(source));
 
     // -- F2: space after a comma -------------------------------------------
@@ -180,6 +180,222 @@ public class FormattingTests
     [Fact]
     public void F5_trims_trailing_whitespace()
         => Assert.Equal("/proc/f()\n\treturn 1\n", Formatted("/proc/f()   \n\treturn 1\t\n"));
+
+    // -- F8: spaces around comparison and logical operators ----------------
+
+    [Theory]
+    [InlineData("/proc/f(a, b)\n\treturn a==b\n", "/proc/f(a, b)\n\treturn a == b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a!=b\n", "/proc/f(a, b)\n\treturn a != b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a<>b\n", "/proc/f(a, b)\n\treturn a <> b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a<b\n", "/proc/f(a, b)\n\treturn a < b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a>=b\n", "/proc/f(a, b)\n\treturn a >= b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a<=>b\n", "/proc/f(a, b)\n\treturn a <=> b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a&&b\n", "/proc/f(a, b)\n\treturn a && b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a||b\n", "/proc/f(a, b)\n\treturn a || b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a  ==  b\n", "/proc/f(a, b)\n\treturn a == b\n")]
+    public void F8_spaces_a_comparison_or_logical_operator(string source, string expected)
+        => Assert.Equal(expected, Formatted(source));
+
+    /// <summary>
+    /// `!` is unary, so F8 leaves it alone — and the bitwise family with it: `&amp;x` takes a
+    /// reference, `|` separates the `as num|text` input filters, and `&lt;&lt;` is DM's output
+    /// operator as often as a shift.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/f(a)\n\treturn !a\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a&b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a|b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a^b\n")]
+    [InlineData("/proc/f(a, b)\n\treturn a<<b\n")]
+    [InlineData("/mob/verb/say(msg as text|null)\n\tusr<<msg\n")]
+    public void F8_leaves_the_unary_and_bitwise_operators_alone(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>
+    /// An `#include &lt;lib&gt;` carries a `&lt;` and a `&gt;` that are not comparisons at all.
+    /// The directive guard covers it, which is worth pinning: F8 is the first rule whose operators
+    /// appear on a directive line in ordinary code.
+    /// </summary>
+    [Fact]
+    public void F8_does_not_reach_inside_an_include()
+        => Assert.Equal("#include <deadron/characterhandling>\n", Formatted("#include <deadron/characterhandling>\n"));
+
+    // -- F9: one space after a line comment's slashes -----------------------
+
+    [Theory]
+    [InlineData("/proc/f()\n\t//comment\n\treturn 1\n", "/proc/f()\n\t// comment\n\treturn 1\n")]
+    [InlineData("//header\n/proc/f()\n\treturn 1\n", "// header\n/proc/f()\n\treturn 1\n")]
+    [InlineData("/proc/f()\n\treturn 1 //trailing\n", "/proc/f()\n\treturn 1 // trailing\n")]
+    public void F9_spaces_a_line_comment(string source, string expected)
+        => Assert.Equal(expected, Formatted(source));
+
+    /// <summary>
+    /// A `///` doc comment is the same rule one slash further along: hover and completion read
+    /// these, and splitting the marker into `// /` would stop them being doc comments at all.
+    /// </summary>
+    [Fact]
+    public void F9_steps_over_the_whole_run_of_slashes()
+        => Assert.Equal("/// The hit points.\n/mob\n\tvar/hp = 1\n", Formatted("///The hit points.\n/mob\n\tvar/hp = 1\n"));
+
+    /// <summary>
+    /// Insert-only. An existing space or tab is left exactly as written, so a comment's own
+    /// alignment survives a format — collapsing it would reflow bullet lists and ASCII tables
+    /// that carry meaning to the only reader a comment has.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/f()\n\t//   indented note\n\treturn 1\n")]
+    [InlineData("/proc/f()\n\t//\tafter a tab\n\treturn 1\n")]
+    public void F9_never_collapses_whitespace_the_author_wrote(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>A banner is nothing but slashes, and a bare `//` has no text to separate.</summary>
+    [Theory]
+    [InlineData("////////////////////////\n/proc/f()\n\treturn 1\n")]
+    [InlineData("/proc/f()\n\t//\n\treturn 1\n")]
+    public void F9_leaves_a_banner_and_an_empty_comment_alone(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>A block comment is a different rule, and the spec does not have one.</summary>
+    [Fact]
+    public void F9_does_not_touch_a_block_comment()
+        => Assert.Equal("/*note*/\n/proc/f()\n\treturn 1\n", Formatted("/*note*/\n/proc/f()\n\treturn 1\n"));
+
+    // -- F6: collapse runs of three or more blank lines ---------------------
+
+    [Theory]
+    [InlineData("/proc/a()\n\treturn 1\n\n\n\n/proc/b()\n\treturn 2\n", "/proc/a()\n\treturn 1\n\n/proc/b()\n\treturn 2\n")]
+    [InlineData("/proc/a()\n\treturn 1\n\n\n\n\n\n/proc/b()\n\treturn 2\n", "/proc/a()\n\treturn 1\n\n/proc/b()\n\treturn 2\n")]
+    public void F6_collapses_a_run_of_three_or_more(string source, string expected)
+        => Assert.Equal(expected, Formatted(source));
+
+    /// <summary>
+    /// One and two are left as written: the corpus is 2,501 single against 278 double, so a double
+    /// is a real spacing choice rather than an accident.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/a()\n\treturn 1\n\n/proc/b()\n\treturn 2\n")]
+    [InlineData("/proc/a()\n\treturn 1\n\n\n/proc/b()\n\treturn 2\n")]
+    public void F6_leaves_one_and_two_blank_lines_alone(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>
+    /// A blank line inside a `{" ... "}` string is program DATA — the string carries its newlines
+    /// as content — so the run is not a run at all.
+    /// </summary>
+    [Fact]
+    public void F6_never_collapses_inside_a_multiline_string()
+    {
+        const string source = "/proc/a()\n\treturn {\"one\n\n\n\ntwo\"}\n";
+
+        Assert.Equal(source, Formatted(source));
+    }
+
+    [Fact]
+    public void F6_never_collapses_inside_a_block_comment()
+    {
+        const string source = "/*\n\n\n\n*/\n/proc/a()\n\treturn 1\n";
+
+        Assert.Equal(source, Formatted(source));
+    }
+
+    /// <summary>
+    /// A run at the end of the file is the file's trailing newlines, which sit next to the
+    /// never-touch rule about a final newline rather than under this one.
+    /// </summary>
+    [Fact]
+    public void F6_leaves_a_trailing_run_alone()
+    {
+        const string source = "/proc/a()\n\treturn 1\n\n\n\n";
+
+        Assert.Equal(source, Formatted(source));
+    }
+
+    /// <summary>
+    /// Blank lines made of spaces are both F5's business and F6's. The edits must not overlap, and
+    /// the result must be the same as if the whitespace had never been there.
+    /// </summary>
+    [Fact]
+    public void F5_and_F6_do_not_edit_the_same_characters()
+    {
+        Document document = new(
+            "mem.dm",
+            SourceText.From("/proc/a()\n\treturn 1\n   \n\t\n  \n/proc/b()\n\treturn 2\n"),
+            fromBuffer: true);
+
+        IReadOnlyList<FormatEdit> edits = FormattingService.Format(document);
+
+        for (int i = 1; i < edits.Count; i++)
+            Assert.True(edits[i - 1].Span.End <= edits[i].Span.Start, "edits overlap");
+
+        Assert.Equal(
+            "/proc/a()\n\treturn 1\n\n/proc/b()\n\treturn 2\n",
+            Formatted("/proc/a()\n\treturn 1\n   \n\t\n  \n/proc/b()\n\treturn 2\n"));
+    }
+
+    // -- F11: a blank line before a proc or verb ---------------------------
+
+    [Theory]
+    [InlineData(
+        "/proc/a()\n\treturn 1\n/proc/b()\n\treturn 2\n",
+        "/proc/a()\n\treturn 1\n\n/proc/b()\n\treturn 2\n")]
+    [InlineData(
+        "/mob\n\tvar/hp = 1\n\tproc/heal()\n\t\treturn 1\n",
+        "/mob\n\tvar/hp = 1\n\n\tproc/heal()\n\t\treturn 1\n")]
+    [InlineData(
+        "/mob\n\tverb/say()\n\t\treturn 1\n\tverb/shout()\n\t\treturn 2\n",
+        "/mob\n\tverb/say()\n\t\treturn 1\n\n\tverb/shout()\n\t\treturn 2\n")]
+    public void F11_inserts_a_blank_line_before_a_declaration_that_has_none(string source, string expected)
+        => Assert.Equal(expected, Formatted(source));
+
+    /// <summary>
+    /// An OVERRIDE is the commonest proc declaration in DM and carries no `proc` segment, which is
+    /// why this rule reads the outline rather than matching a token pattern.
+    /// </summary>
+    [Fact]
+    public void F11_sees_an_override()
+        => Assert.Equal(
+            "/mob/Login()\n\treturn 1\n\n/mob/Logout()\n\treturn 2\n",
+            Formatted("/mob/Login()\n\treturn 1\n/mob/Logout()\n\treturn 2\n"));
+
+    [Theory]
+    [InlineData("/proc/a()\n\treturn 1\n\n/proc/b()\n\treturn 2\n")]
+    [InlineData("/proc/a()\n\treturn 1\n\n\n/proc/b()\n\treturn 2\n")]
+    public void F11_never_removes_spacing_the_author_wrote(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>
+    /// The first member under the header that opens its block stays tight. 501 of the 1,308
+    /// unspaced declarations in the reference projects are this shape, and splitting `proc` from
+    /// its first child reads as damage rather than as spacing.
+    /// </summary>
+    [Theory]
+    [InlineData("/mob\n\tproc\n\t\theal()\n\t\t\treturn 1\n")]
+    [InlineData("/mob\n\tproc/heal()\n\t\treturn 1\n")]
+    public void F11_leaves_a_first_member_under_its_own_header_alone(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>
+    /// <b>Not a style exemption.</b> A blank line ends a doc-comment run, so inserting one between
+    /// a `///` and its declaration takes the documentation off the symbol — hover and completion
+    /// would stop showing it.
+    /// </summary>
+    [Theory]
+    [InlineData("/proc/a()\n\treturn 1\n/// The hit points.\n/mob/proc/heal()\n\treturn 2\n")]
+    [InlineData("/proc/a()\n\treturn 1\n// an ordinary note\n/mob/proc/heal()\n\treturn 2\n")]
+    [InlineData("/proc/a()\n\treturn 1\n/** a block form */\n/mob/proc/heal()\n\treturn 2\n")]
+    public void F11_never_separates_a_comment_from_what_it_documents(string source)
+        => Assert.Equal(source, Formatted(source));
+
+    /// <summary>The inserted terminator is the file's own, so a CRLF file stays a CRLF file.</summary>
+    [Fact]
+    public void F11_inserts_the_files_own_line_ending()
+        => Assert.Equal(
+            "/proc/a()\r\n\treturn 1\r\n\r\n/proc/b()\r\n\treturn 2\r\n",
+            Formatted("/proc/a()\r\n\treturn 1\r\n/proc/b()\r\n\treturn 2\r\n"));
+
+    [Fact]
+    public void F11_does_not_touch_a_declaration_that_opens_the_file()
+        => Assert.Equal("/proc/a()\n\treturn 1\n", Formatted("/proc/a()\n\treturn 1\n"));
 
     // -- the guards --------------------------------------------------------
 
