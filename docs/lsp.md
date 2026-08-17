@@ -141,6 +141,7 @@ consulted for it again.
 | Sync | `didOpen`, `didChange`, `didClose` (full); `workspace/didChangeWatchedFiles` — send it when the disk changes outside the editor (a git checkout, a build step) and the server invalidates its caches and re-publishes diagnostics for open documents. Cheap: per-file caches revalidate by write time, so only what actually changed is re-read |
 | Diagnostics | `publishDiagnostics` — syntax (the lexer's included since 2026-08-16: unterminated strings, `dm.exe`'s "inconsistent indentation"), the binder's semantic set, **and the include walk's own** since 2026-08-16: a `#warn` echo, an unterminated `#if`, a missing `#include`, an unknown pragma name. The last group belongs to the walk rather than to a file's syntax, so it is reported against the file that wrote it — one that cannot be attributed belongs to the `.dme`. These were the last set `dmc diagdiff` counted and no shell showed, which meant the zero-invented figure was measured over diagnostics no editor ever displayed |
 | Read | `completion` + `completionItem/resolve`, `hover`, `signatureHelp`, `definition`, `typeDefinition`, `implementation`, `references`, `documentHighlight`, `documentSymbol`, `workspace/symbol` |
+| Fix | `codeAction` — quick fixes, each carrying its `WorkspaceEdit` inline rather than behind a `Command`, so applying one needs no second round trip. One action today: **declare the type** on a member reached through an untyped local, which is the fix for the one place this analyzer knowingly disagrees with `dm.exe` (see `inferred` below). The edit is a zero-length insert immediately before the name, so `var/static/x` becomes `var/static/obj/item/x` with your modifiers left where they were. Offered only when it would actually make the access compile — a proc referenced without parentheses stays `undefined var` whatever type is written, so nothing is offered there. `context.only` is not honoured: everything served is a `quickfix` |
 | Write | `rename` — **best-effort by design**: the `WorkspaceEdit` carries only sites *proven* to be the symbol, a refusal answers `null`, and both the refusal reason and the count of uncertain sites (`:` accesses, untyped receivers, string dispatch) arrive as a `window/showMessage` warning, since the standard response has no field for either. `dm/rename` below returns the full list |
 | Editor | `semanticTokens/full`, `inlayHint`, `foldingRange`, `documentLink`, `documentColor`, `colorPresentation` |
 | Server → client | `window/workDoneProgress/create` + `$/progress`; `dm/environment` (below); `window/showMessage` for rename's uncertainty and the auto-discovery defines note |
@@ -229,7 +230,6 @@ unresolvable receiver here.
 
 | | |
 |---|---|
-| `textDocument/codeAction` | Near the front of the queue, unblocked by the diagnostics work |
 | `textDocument/formatting` | Not started |
 | Incremental sync | See above |
 

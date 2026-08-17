@@ -3,7 +3,7 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,506 tests ·
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,567 tests ·
 > Last updated: 2026-08-16
 >
 > No commit count here: it is wrong again the moment anything is committed, which
@@ -417,6 +417,7 @@ byond-lang-server/
     abi-smoke/        CMake C++ program that links dm_core
   docs/
     dm-language-notes.md   compiler-verified DM edge cases
+    dm-format.md           the formatting rules, and what must never be touched
     lsp.md                 the LSP server, for clients that are not VS Code
     api.md                 the in-process C# surface, for hosts referencing Dm.Core
     capability-matrix.md   in-process vs ABI vs LSP parity
@@ -481,8 +482,8 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,506 today (1,433
-  core, 46 native, 27 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,567 today (1,492
+  core, 46 native, 29 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -1281,7 +1282,7 @@ because nothing else in a DM toolchain reports them. The parser has to model the
 | A var name colliding with a builtin (`x`/`y` on an atom) | duplicate-definition **error** | already fatal; surface it early |
 | `proc/` declared twice on one type | duplicate-definition error | **shipped as `DM0403`** — on one type, on an ancestor at any depth, and against a builtin (probes dup1–dup9). dm.exe reports a pair, "duplicate definition" on the later line and "previous definition" on the first; each file reports its own half, so a same-file pair matches line for line. **The cross-file "previous definition" half closed 2026-08-13**: the tree carries a once-per-build redeclaration index instead of the per-bind descendant scan the miss was deferred over, dm reports the ancestor's line once however many descendants duplicate (probed), and the var-over-ancestor case pairs the same way (probed — never recorded before). Fixtures `errors/dup_cross_proc` and `dup_cross_var`, exact against dm.exe. Overrides and var/proc name sharing stay clean. The var half SHIPPED 2026-08-12: the same-type pair is inverted (first line called the duplicate), a BARE OVERRIDE is not a declaration, and the sites live on `TypeSymbol` because a `VarSymbol` is cached in a `TreeContribution` and replayed. Fixture `errors/dup_var`. |
 | A var whose declared type does not exist (§8) | accepts the declaration; every *use* is an error, reported on the use line | *"`slot` is declared as `/clothing`, which no file declares — every read or write of it will fail"*. High value: the build is clean until someone touches the var, and the error then points at the reader rather than at the declaration. We know at declaration time. |
-| `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | **shipped 2026-08-14 as DM0400/DM0401 in dm.exe's own dotted form** (`x.hp: undefined var`, `x.f: undefined proc`) — the message matches the compiler so diagdiff agrees; the quick-edit wording ("write `var/obj/item/x`") waits for code actions, where it belongs. The certainty guard that kept this deferred is builtins with no recorded type, which stay silent as our own gap. Shipping it flushed out the bracket/`var/list`-header typing rules (§8) across three corpora. |
+| `.` on an untyped var (§8) | *"undefined var"*, for every member including the right one | **shipped 2026-08-14 as DM0400/DM0401 in dm.exe's own dotted form** (`x.hp: undefined var`, `x.f: undefined proc`) — the message matches the compiler so diagdiff agrees; the quick-edit wording ("write `var/obj/item/x`") **shipped 2026-08-16 as a code action rather than as message text**, which is where it belongs — `CodeActionService` offers "Declare x as /obj/item" and the edit writes it. The certainty guard that kept this deferred is builtins with no recorded type, which stay silent as our own gap. Shipping it flushed out the bracket/`var/list`-header typing rules (§8) across three corpora. |
 | `:` and `?:` (§8) | a WIDER check, not an absent one — and the two differ from each other | **shipped 2026-08-15 as DM0400/DM0401**, the last deferred binder check. `:` searches the declared type, its ancestors and its subtypes; `?:` and any untyped receiver ask whether the name is a member of anything at all; the search is kind-sensitive; and subtype means inheritance rather than path. Zero invented on all four corpora on the first run, tgstation included — which is the project that duck-types through `:` constantly, and therefore the one that would have said so. |
 
 The first one is **done**, and it is the shape the rest should follow. It was found in a shipped game
@@ -2282,6 +2283,9 @@ that the two candidate behaviours produce different compiler output.
 | **A type-level initialiser may name a `const` — folded at COMPILE time — and nothing else.** | Probed 2026-08-16 on 516.1687, one case per unit. `var/x = plain + 1` with `plain` a non-const global is *"=: expected a constant expression"*; a `const` compiles from every scope — the type's own, an ancestor's through inheritance, a global, a const of a const, a string const, and the `/path::NAME` static form from a sibling. That the compiler FOLDS rather than defers them is not visible from a clean compile: `-warn init_proc` is the discriminator (it fires on a `/turf` var whose initialiser needs the runtime), and under a live pragma the `= list()` control warns while every const-derived line stays silent. One trap: the static form written from an **ancestor** of the path is *"compile failed (possible infinite cross-reference loop)"* — the descendant inherits the const being asked for. This is what `ConstantEvaluator` follows for a name: resolve only to a `const`, nearest-first up the owner's chain then root, never a non-const. Fixtures `errors/const_fold` (silence pinned by the new `total` line), `errors/const_nonconst`, `errors/const_static_loop`; values in `ok/constants.dm`. |
 | **`dm.exe` dies, rather than reports, past ~1,050 nested groups.** | Bisected 2026-08-16 on 516.1687: `return (((…1…)))` compiles at 1,040 levels and at 1,060 the compiler exits 127 with no summary line, closed or unclosed alike. So there is no valid program deeper than that, and a tool's own nesting limit anywhere below it invents nothing on code the compiler accepts. Ours is 256 (`SyntaxFacts.MaxNesting`), one `DM0205` per expression, statement block or declaration block that reaches it, the subtree skipped to its own closer — chosen against measured stack overflows: our Debug build died at ~900 nested parens and Release between 1,200 and 2,000, and a host's thread stack is not ours to size. Not a fixture, since a crash has no golden. |
 | **`message`, `link`, `run` and `ftp` are RESERVED output methods — legal only right of `<<`.** | Probed 2026-08-16 on 516.1687. `var/x = message("a")`, `link(...)` alone, `x = ftp(...)`: each is *"X: output method has no effect here"*, and `/proc/message()`, `/proc/link()`, `/proc/run()`, `/proc/ftp()` and `/datum/proc/link()` are each *"invalid proc name: reserved word"* — so no project can shadow them and a bare invocation is unambiguous. `usr << message(...)`, `world << message(...)`, `L << message()`, `message("a", "b")` — any receiver, any argument count — is `new_name`'s second message, *"The message() output method is being replaced by browse()."*; `link`/`run`/`ftp` there are current and silent. Parenthesised is still the position (`usr << (link("x"))` compiles); combined with an operator (`link("a") + "b"`) is not. **`message` is in no reference and was in no table**, so it had been an invented "undefined proc" on code that compiles. The documented output procs behave differently and are not in the set: a standalone `browse("a")` — even `var/x = browse("a")` — is read as a LABEL named `browse` with `unused_label`, of all things; `output`, `load_resource`, `browse_rsc` likewise. `SyntaxFacts.IsOutputMethod`; `DM0405` for the misuse and the reserved name; fixtures `errors/output_methods`, `errors/output_method_name`. |
+| **A var modifier keeps working ANYWHERE in the segment run, not only straight after `var`.** | Probed 2026-08-16 on 516.1687 while deciding where a code action should splice a type in. `var/static/obj/item/x` and `var/obj/item/static/x` both compile — and a compile says nothing here, since a dropped modifier compiles too — so the discriminator is calling twice and watching the value persist: **both forms return 2 then 3**, with a modifier-free control returning 2 then 2. So `static` is recognised on either side of the type segments. §8 already recorded that modifier words sit inside the path (`var/const/X`, `var/list/L`); what is new is that their ORDER relative to the type is free. The consequence is that the "declare the type" action has a CHOICE, and takes the conservative one — insert immediately before the name, leaving the author's modifiers where they were. Runtime checks in `ok/parsing.dm`, control included. |
+| **One name in a comma-separated var list carries its own type.** | `var/n = 1, obj/pouch/b = new /obj/pouch` types `b`, verified by reading `b.capacity` — an untyped receiver rejects every member (§8), so the read IS the control. Probed 2026-08-16 because the code action inserts before the name it is fixing, which on a sibling produces exactly this shape; had it not typed the sibling, the action would have had to refuse there rather than emit code that does not build. Runtime check in `ok/parsing.dm`. |
+| **A proc REFERENCED without parentheses is "undefined var" even through a WRITTEN type.** | `var/obj/item/x = new /obj/item` then `return x.use` — `use` a real proc on `/obj/item`, the type written down — is still *"x.use: undefined var"*, with `unused_var` beside it. §8 records the search as kind-sensitive for `:` (`x:only_a_proc` in value position); this pins the same for `.`, and pins that **no type declaration fixes it**. That is what stops the "declare the type" action offering there: the guard "the fix has to actually fix it" is load-bearing rather than belt-and-braces, and a test written expecting a fix is what found it. Fixture `errors/proc_reference`, golden captured from 516.1687. |
 | **The legacy `rand(…)` STATEMENT governs the one expression that follows, wherever it sits.** | Undocumented; probed 2026-08-16 on 516.1687. Every statement-position `rand(` is `new_name`'s third message, *"The rand statement is being faded out.  Use pick() instead if possible."* — with an argument or none. Its body is the NEXT EXPRESSION: on the same line (`rand(50) x = 1`), on the next line at the same indent, or indented — and exactly one. A non-expression body is the compiler's error: `return 1` is *": missing expression"*, `if(x)` *": invalid expression"*, a second indented line *": invalid expression"* (on the FIRST body line for a two-line block and the second for three — dm.exe's own inconsistency), and a `rand(50)` closing a proc swallows the next declaration's header and errors on it. `x = rand(50)` and `if(rand(50))` are ordinary calls. Read as an expression statement the indented body was a silent stray block; `RandStatementSyntax` now. Fixture `errors/rand_statement`. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -4053,3 +4057,57 @@ it.
   four corpora at baseline.
   `DropDerived()` replaces the four identical invalidation blocks it would otherwise have been a
   fifth copy in. They had already drifted: `_suppressedWarnings` was in none of them.
+- **2026-08-16** — **Code actions, with one action: declare the inferred type.** `CodeActionService`
+  offers *"Declare x as /obj/item"* on a member reached through an untyped local, and the LSP serves
+  `textDocument/codeAction` with the `WorkspaceEdit` inline rather than behind a `Command`. The
+  action was chosen first because it is the only place this analyzer **knowingly disagrees with
+  `dm.exe`** (§6): completion infers through `new` and assignment where the compiler infers nothing,
+  so it offers members the build refuses. Until now that divergence was only ever *flagged* — the
+  `inferred` badge at 0.14, a type inlay hint at 0.16, then `DM0400` when the author accepted one.
+  This is the first surface that **resolves** it, and the type it writes is the one those three
+  already agreed on.
+  **The edit is a zero-length insert immediately before the name**, so `var/static/x` becomes
+  `var/static/obj/item/x`. That placement is a choice rather than a constraint, and the probing is
+  what showed it: **a modifier keeps working anywhere in the segment run** — `var/obj/item/static/x`
+  applies `static` exactly as `var/static/obj/item/x` does, runtime-verified by calling twice and
+  watching the value persist, with a modifier-free control that must not. Both being legal is why
+  the conservative choice — leave the author's words where they wrote them — is available at all.
+  **Two more findings fell out, and one of them corrected the feature.** A comma sibling carries its
+  own type (`var/n = 1, obj/pouch/b = …`), so the action need not refuse there. And a proc
+  **referenced without parentheses** is *"undefined var"* even through a written type — §8's
+  kind-sensitivity rule, recorded for `:` and now pinned for `.` — so declaring the type would not
+  fix it and nothing is offered. **A test written expecting that fix is what found it**: the service
+  was right and the test encoded my assumption, which makes the "the fix has to actually fix it"
+  guard load-bearing rather than defensive. Fixture `errors/proc_reference`, golden captured from
+  1687.
+  **No ABI export, deliberately** — recorded as the matrix's one open gap on the user's call, on the
+  0.31 precedent that an export nobody has asked for is a contract owed forever. Ten service tests,
+  two protocol tests (the code-action one run with the dispatch removed to confirm it fails), four
+  runtime checks in `ok/parsing.dm` with their control, and the new must-fail: **1,506 → 1,521
+  tests, `ok/` 135 → 139 checks, 99 fixture rows, ratchet unmoved at 79/255, all four corpora at
+  baseline.** The first version of the sibling check wanted 3 from `1 + 1` and the runtime said 2 —
+  the check was sound and the constant was mine, so it is 4 + 9 now with a WRITE through the
+  sibling, which an untyped receiver also rejects. Formatting is the other half of the queue item
+  and is not started.
+- **2026-08-16** — **`docs/dm-format.md`: the formatting spec, written before the formatter.** A
+  live doc of a different kind from the rest — the others describe what the code does, this one
+  **decides** it, and it is the user's to edit. The defaults were measured across ~48,000 lines of
+  the author's own DM rather than taken from a style guide, with `mlaas` as the reference codebase
+  on the user's call.
+  **The measurement said less than expected, which is the finding.** Indentation is unanimous —
+  274 of 282 files use tabs and **not one** uses spaces — and `=` spacing (93–98%) and tight
+  keyword parens (79–94%) are real conventions. **Commas and arithmetic are not**: 64% and roughly
+  50/50, both spellings throughout the same files. So the spec marks F2 and F3 as the user
+  *establishing* a convention rather than the formatter conforming to one, and says plainly to
+  expect a large first diff.
+  **One measured figure was wrong and is kept in the spec as the trap.** Arithmetic first came back
+  95% tight; it was counting `/`, and `/mob/pc` matches "word, slash, word", so the number was 3,836
+  path separators. Same class as the `<verb>` miscount in the `-o` extractor — plausible answer,
+  wrong instrument — and it would have argued for exactly the wrong default.
+  **The never-touch list is the load-bearing half**, and every entry is a finding already paid for:
+  leading indentation (semantic — notes §18 / `DM0300`), whitespace before a ternary `:` (notes §15,
+  where `1 ? b:c` is a compile error), anything on a preprocessor line (the `##` whitespace fact,
+  worth 32 invented diagnostics once), string interiors, text after a `\` continuation, line endings
+  (`INTEGRATION.txt` §5) and the final newline (half the corpus lacks one). v1 therefore cannot
+  change what a file declares, which is what makes format-on-save safe to leave on — and indentation
+  waits for a probe matrix plus the `bench --verify`-shaped tree-diff guard.

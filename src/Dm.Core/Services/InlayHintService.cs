@@ -155,8 +155,13 @@ public static class InlayHintService
     /// <remarks>
     /// The type half only needs statements, so the walk above stops there. Parameter names live at
     /// call sites, and a call is an expression that nests — <c>f(g(1), 2)</c> wants hints on both.
+    ///
+    /// Internal rather than private since 2026-08-16: <see cref="CodeActionService"/> needs the
+    /// same walk to find member accesses, and a second copy of an expression walker is the drift
+    /// shape this project has paid for repeatedly — a node kind added to one and not the other is
+    /// silent in exactly the feature nobody is looking at.
     /// </remarks>
-    private static IEnumerable<ExpressionSyntax> ExpressionsIn(StatementSyntax statement)
+    internal static IEnumerable<ExpressionSyntax> ExpressionsIn(StatementSyntax statement)
     {
         Stack<ExpressionSyntax?> pending = new();
 

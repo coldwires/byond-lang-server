@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.35 MB, ABI 0.31, 40 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,506 green (1,433 core, 46 native, 27 lsp)
+    tests           1,567 green (1,492 core, 46 native, 29 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -78,8 +78,10 @@ WHAT WE ARE BUILDING
 --------------------------------------------------------------------------------
   Dm.Core     C# library that parses and understands DM. ~85% of the work,
               shared by every shell.
-  Dm.Native   NativeAOT wrapper -> dm_core.dll, the C ABI for the Qt IDE and
-              anything else with a C FFI.
+  Dm.Native   NativeAOT wrapper -> dm_core.dll, the C ABI for anything with a
+              C FFI. Public and supported; NOT the surface that gates work,
+              since the only active consumer is the author's own C# IDE, which
+              references Dm.Core directly.
   Dm.Cli      dmc, the dev driver. Fastest debug loop and the arbiter when an
               IDE reports a bug: if the CLI reproduces it, it is ours.
   Dm.Lsp      LSP server for VS Code / Neovim / everyone else.        [M10]
@@ -91,8 +93,25 @@ WHAT'S NEXT
   THE QUEUE, as of 2026-08-16, cheapest first. Detail for each is in PLAN's
   changelog and in the section it belongs to; this is the order.
 
-    1. Code actions, then formatting. DM0400's quick-edit wording waits on
-       the first.
+    1. Formatting. SPEC at docs/dm-format.md, which is the source of truth and
+       is the user's to edit; the defaults were MEASURED off mlaas, the
+       reference codebase by the user's call. F1-F11 all DECIDED 2026-08-16
+       (O1-O5 closed by measuring them the same way, one of them moot).
+       BUILT: F1 spaces around `=`, F2 space after a comma, F3 spaces around
+       BINARY arithmetic (unary left alone, and `/` excluded because it is a
+       path), F4+F10 no space before a control keyword's paren, F5 trim
+       trailing whitespace - on the TOKEN STREAM so the never-touch list is
+       enforceable rather than aspirational.
+       LEFT: F6 blank runs, F8 comparisons, F9 comment spacing, F11 blank
+       line before a proc - then textDocument/formatting to serve any of it.
+       F6 and F11 are a DIFFERENT SHAPE from the rest: they work on lines and
+       blank runs rather than on the gap between two tokens, and F11 inserts.
+       Two rules go deliberately AGAINST the measurement - spaced commas and
+       spaced arithmetic, where the corpus has no convention and the user
+       chose to establish one, so expect a large first diff. v1 does NOT
+       touch indentation: it is semantic in DM, and the tree-diff guard it
+       needs is written up in the spec.
+       (Code actions landed 2026-08-16 - see the DONE entry below.)
     2. The ratchet's remaining classes: out of bounds (5), invalid parent
        type (4), bad variable (4), then the tail. 79 of 255 agreed. Moved
        DOWN the list 2026-08-15, the user's call - each remaining class is
@@ -106,6 +125,21 @@ WHAT'S NEXT
        retire FlushPending's splitting in the same change.
     5. Type rename; incremental LSP sync and incremental re-lex within a
        file, both waiting for a profile to ask.
+
+    DONE 2026-08-16, item 1 (half): CODE ACTIONS, one action.
+       "Declare x as /obj/item" on a member reached through an untyped local -
+       the fix for the ONE place we knowingly disagree with dm.exe, which
+       until now was only ever flagged (the `inferred` badge, a type hint,
+       then DM0400 when the author accepted one). LSP codeAction with the
+       edit inline; NO ABI export - recorded as a matrix gap on the user's
+       call, per the 0.31 precedent. Formatting is the other half and is not
+       started.
+       Three language findings came out of the probing, all fixtured: a var
+       modifier works on EITHER side of the type segments (runtime-verified,
+       with a control), a comma sibling carries its own type, and a proc
+       referenced without parens stays "undefined var" even through a written
+       type - which is what stops the action offering a fix that would not fix
+       anything. The test that expected one is what found it.
 
     DONE 2026-08-16, item 0: WALK-TIME DIAGNOSTICS REACH BOTH SHELLS.
        Workspace.GetWalkDiagnostics keeps the walk's list and filters it per
@@ -123,6 +157,12 @@ WHAT'S NEXT
   DROPPED 2026-08-15, the user's call: sending the integration package to the
   Qt dev. He is a year or more from finishing his IDE, so the package waits
   for him to ask rather than sitting on a queue as owed.
+
+  AND THE WIDER VERSION OF THAT, restated 2026-08-16 because it kept coming
+  back: THE ONLY ACTIVE CONSUMER IS THE AUTHOR'S OWN C# IDE. Nothing should be
+  scoped, deferred or gated on the Qt dev - "when the Qt dev asks" was written
+  into the capability matrix as recently as 2026-08-16 and is the wrong test.
+  The C ABI stays public and supported; it just is not the thing to wait on.
 
   NEEDS A HUMAN, and CI cannot cover either: run the VS Code client against a
   real game, and run the Neovim and Helix snippets in docs/lsp.md.
@@ -500,6 +540,8 @@ WHERE THE DETAIL LIVES
       dm/* methods, what is NOT served, Neovim and
       Helix config                                    docs/lsp.md
     runnable proofs of 18 DM edge cases               docs/dm-language-notes.md
+    the formatting rules, and what must never be
+      touched because it changes the program        docs/dm-format.md
     the fixture suite: compile + RUN + diagdiff       tests/fixtures/README.md
       - and what to do when BYOND updates             tests/fixtures/README.md
     the compiler's own diagnostic catalogue,

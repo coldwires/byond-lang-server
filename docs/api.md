@@ -75,6 +75,7 @@ aborts at the next token check.
 | Which call am I in | `SignatureHelpService` → `SignatureHelpResult` |
 | Every use of a symbol | `ReferenceService` → `ReferenceListing` / `Reference` |
 | Rename, best-effort | `RenameService` → `RenameResult` (or `Workspace.RenameAt`) |
+| Quick fixes for a line range | `CodeActionService` → `CodeAction` / `CodeActionEdit` |
 | Semantic diagnostics | `Binder.Bind` → `Diagnostic` list (syntax half: `ParseResult.Diagnostics`) |
 | The walk's own diagnostics | `Workspace.GetWalkDiagnostics` → `Diagnostic` list |
 | Outline | `DocumentSymbolService` → `DocumentSymbol` |

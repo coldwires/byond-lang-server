@@ -1,0 +1,11 @@
+# Captured from dm.exe 516.1687, not hand-written.
+#
+# The receiver's type is WRITTEN, and the access still fails: a proc name does not
+# satisfy a var access, so no type declaration is a fix for this line. That is what
+# keeps the "declare the type" code action from offering here.
+#
+# "returnx.use" is line 18's "return x.use" — dm.exe strips whitespace when it echoes
+# the offending text, which is why the rows below match on substrings.
+18 error x.use: undefined var
+17 warning x: variable defined but not used
+total 1 error, 1 warning

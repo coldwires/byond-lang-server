@@ -232,7 +232,13 @@ public static class CompletionService
     /// A dot after anything else opens no member access: it is the return-value variable, or the
     /// start of a leading-dot relative path.
     /// </summary>
-    private static bool HasValueBefore(IReadOnlyList<Token> tokens, int operatorIndex)
+    /// <remarks>
+    /// Internal since 2026-08-16: <see cref="FormattingService"/> asks the same question to tell a
+    /// BINARY <c>-</c> from a unary one. The two are the same test — an operator follows a value or
+    /// it does not — and a second copy would eventually disagree, which here would mean spacing
+    /// <c>-1</c> into <c>- 1</c> or a pointer <c>*p</c> into <c>* p</c>.
+    /// </remarks>
+    internal static bool HasValueBefore(IReadOnlyList<Token> tokens, int operatorIndex)
     {
         for (int i = operatorIndex - 1; i >= 0; i--)
         {
