@@ -6,7 +6,7 @@
  bug in the doc - say so.
 
  ABI version at last update: 0.31  (40 exports, cdecl, six RIDs)
- Last updated: 2026-08-16
+ Last updated: 2026-08-17
 ================================================================================
 
 
@@ -1583,6 +1583,14 @@ WHAT YOU GET TODAY
     dotnet run --project src/Dm.Cli -- colors <file>
         the colours we find in it and what a picker may write back. No .dme
         needed - colours come off the token stream
+    dotnet run --project src/Dm.Cli -- format <file-or-dir>
+        the formatted text, as the LSP's textDocument/formatting returns it.
+        No .dme needed and no ABI export - formatting is one of the two
+        capabilities the C ABI deliberately does not carry (the other is
+        quick fixes); docs/capability-matrix.md records both, and
+        docs/dm-format.md is the rule set
+        --stat   one line per file with its edit count, writing nothing
+        --write  rewrite in place, which is for a COPY of a project
     dotnet run --project src/Dm.Cli -- hints <dme> <file>
     dotnet run --project src/Dm.Cli -- references <dme> <file> <line> <col>
         --path /mob/hp   ask by symbol instead of by position

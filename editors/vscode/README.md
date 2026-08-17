@@ -105,6 +105,30 @@ included — over a small TextMate base that covers the instant before the
 first response arrives. If colours look flat, check your theme has semantic
 highlighting on (`"editor.semanticHighlighting.enabled": true`).
 
+## Formatting
+
+**Shift+Alt+F**, or turn on `editor.formatOnSave` and forget about it. The rules and the
+measurements behind them are `docs/dm-format.md`; the short version is spaces around `=`,
+comparisons and binary arithmetic, a space after a comma and after a line comment's slashes, no
+space before `if(`, trailing whitespace gone, runs of three or more blank lines down to one, and a
+blank line before a proc that has none.
+
+Indentation is never touched — it is semantic in DM, and that is v2's problem.
+
+**Leaving format-on-save on is safe, and structurally rather than carefully.** The formatter works
+on the token stream and only ever rewrites whitespace between two tokens on one line, so a DM file
+cannot come back declaring something different: indentation is semantic in DM and is never
+touched, and neither is a `##` paste, a string's interior, or the text after a `\` continuation.
+Three real games were formatted whole to check that rather than assert it — every declaration
+identical afterwards, and the formatted game still compiles 0 errors.
+
+Expect the first run on an existing codebase to be a large diff. Two of the rules — spaced commas
+and spaced arithmetic — are a convention being established rather than one read off DM code, which
+has no convention there.
+
+A `.editorconfig` wins where it disagrees: today that means `trim_trailing_whitespace`, the one
+key of its usual three that maps to a rule this version has.
+
 ## Compile from VS Code
 
 **Ctrl+Shift+B** runs `dm: compile <your>.dme`. The compiler's output lands in

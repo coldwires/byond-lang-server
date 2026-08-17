@@ -49,6 +49,7 @@ internal static class Program
                 "signature" => Signature(args),
                 "hints" => Hints(args),
                 "colors" => Colors(args),
+                "format" => Format(args),
                 "icons" => Icons(args),
                 "references" => References(args),
                 "rename" => Rename(args),
@@ -106,6 +107,9 @@ internal static class Program
         Console.Error.WriteLine("      --resolve <name>     one item's documentation, as dm_complete_resolve");
         Console.Error.WriteLine("  hints <dme> <file> [start end]       inferred-type inlay hints, 1-based lines");
         Console.Error.WriteLine("  colors <file>            the colours written in it, and what a picker may write back");
+        Console.Error.WriteLine("  format <file-or-dir>     the formatted text, as textDocument/formatting returns it");
+        Console.Error.WriteLine("      --stat               one line per file with its edit count; writes nothing");
+        Console.Error.WriteLine("      --write              rewrite the file(s) in place");
         Console.Error.WriteLine("  icons <file-or-dir>      icon states in a .dmi, or across a tree");
         Console.Error.WriteLine("      --states             one line per state, for diffing");
         Console.Error.WriteLine("  references <dme> <file> <line> <col> every use of the symbol there");
@@ -1024,6 +1028,102 @@ internal static class Program
         Console.Out.WriteLine();
         Console.Out.WriteLine($"{colors.Count} colour(s)");
         return 0;
+    }
+
+    /// <summary>
+    /// The formatter's answer for a file, or the scale of it across a tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The arbiter for <c>textDocument/formatting</c>: same service, same options, same
+    /// <c>.editorconfig</c> resolution, so a client's odd-looking edit can be reproduced here.
+    /// </para>
+    /// <para>
+    /// A directory argument only ever reports. Rewriting a game's source is the editor's job and
+    /// the author's decision, and <c>--write</c> exists for a formatted COPY of a project — which
+    /// is how the spec's claim that v1 cannot change what a file declares gets checked against the
+    /// compiler.
+    /// </para>
+    /// </remarks>
+    private static int Format(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("error: format needs a file or directory");
+            return 1;
+        }
+
+        bool stat = args.Contains("--stat");
+        bool write = args.Contains("--write");
+
+        string target = args[1];
+        string[] files = Directory.Exists(target)
+            ? Directory.GetFiles(target, "*.dm", SearchOption.AllDirectories)
+            : new[] { target };
+
+        // A directory is a survey; printing thousands of formatted files to a terminal is not an
+        // answer to anything.
+        if (files.Length > 1 && !write)
+            stat = true;
+
+        int changed = 0;
+        int totalEdits = 0;
+
+        foreach (string file in files)
+        {
+            // Read the encoding out, not just the text: writing UTF-8 back over a Windows-1252
+            // file converts it, and the compiler takes the converted bytes without a word.
+            SourceText text = SourceFileReader.Read(file, out SourceEncoding encoding);
+            Document document = Document.FromText(file, text);
+
+            IReadOnlyList<FormatEdit> edits =
+                FormattingService.Format(document, FormatOptions.ForFile(file));
+
+            totalEdits += edits.Count;
+
+            if (edits.Count > 0)
+                changed++;
+
+            if (stat)
+            {
+                if (edits.Count > 0)
+                    Console.Out.WriteLine($"{edits.Count,6}  {file}");
+
+                continue;
+            }
+
+            string formatted = Apply(text.ToString(), edits);
+
+            if (write)
+            {
+                if (edits.Count > 0)
+                    SourceFileReader.Write(file, formatted, encoding);
+            }
+            else
+            {
+                Console.Out.Write(formatted);
+            }
+        }
+
+        if (stat || write || files.Length > 1)
+        {
+            Console.Out.WriteLine();
+            Console.Out.WriteLine($"{files.Length} file(s), {changed} would change, {totalEdits} edit(s)");
+        }
+
+        return 0;
+    }
+
+    /// <summary>Applies edits back to front, so an earlier edit cannot move a later span.</summary>
+    private static string Apply(string text, IReadOnlyList<FormatEdit> edits)
+    {
+        for (int i = edits.Count - 1; i >= 0; i--)
+        {
+            FormatEdit edit = edits[i];
+            text = text[..edit.Span.Start] + edit.NewText + text[edit.Span.End..];
+        }
+
+        return text;
     }
 
     /// <summary>

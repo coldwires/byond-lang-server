@@ -220,6 +220,96 @@ public sealed class ServerTests : IDisposable
     }
 
     /// <summary>
+    /// Whole-document formatting, which is what a client's format-on-save calls. Without the
+    /// capability the method is never sent, so declaring it is half the feature.
+    /// </summary>
+    [Fact]
+    public void Initialize_declares_the_formatting_capability()
+    {
+        Initialize();
+
+        JsonElement capabilities = Assert.Single(Frames())
+            .RootElement.GetProperty("result").GetProperty("capabilities");
+
+        Assert.True(capabilities.GetProperty("documentFormattingProvider").GetBoolean());
+    }
+
+    /// <summary>
+    /// The edits reach a client as ordinary TextEdits, from the buffer rather than from disk.
+    /// </summary>
+    /// <remarks>
+    /// The source here is one line carrying three rules — F1 spaces the <c>=</c>, F8 spaces the
+    /// <c>==</c>, F9 spaces the comment — and the assertion is on the TEXT the edits produce,
+    /// because a range that is off by one still looks plausible as JSON.
+    /// </remarks>
+    [Fact]
+    public void Formatting_answers_with_the_edits_for_the_open_buffer()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+        const string buffer = "/proc/f(a)\n\tvar/x=1\n\treturn a==x //done\n";
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/proc/f(a)\\n\\tvar/x=1\\n\\treturn a==x //done\\n\"}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"textDocument/formatting\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"options\":{{\"tabSize\":4,\"insertSpaces\":false}}}}}}");
+
+        JsonElement result = Frames()[^1].RootElement.GetProperty("result");
+
+        Assert.Equal(
+            "/proc/f(a)\n\tvar/x = 1\n\treturn a == x // done\n",
+            Applied(buffer, result));
+    }
+
+    /// <summary>
+    /// A client that says its own save does not trim trailing whitespace is obeyed, since it is
+    /// the same setting seen from the other side.
+    /// </summary>
+    [Fact]
+    public void Formatting_honours_the_clients_trimTrailingWhitespace()
+    {
+        Initialize();
+
+        string uri = FileUri("code.dm");
+        const string buffer = "/proc/f()\n\treturn 1   \n";
+
+        Send($"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"dm\",\"version\":1,\"text\":\"/proc/f()\\n\\treturn 1   \\n\"}}}}}}");
+        Send($"{{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"textDocument/formatting\",\"params\":{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"options\":{{\"tabSize\":4,\"insertSpaces\":false,\"trimTrailingWhitespace\":false}}}}}}");
+
+        Assert.Empty(Frames()[^1].RootElement.GetProperty("result").EnumerateArray());
+        Assert.Equal(buffer, Applied(buffer, Frames()[^1].RootElement.GetProperty("result")));
+    }
+
+    /// <summary>Applies a TextEdit array to text, last edit first, so offsets stay valid.</summary>
+    private static string Applied(string text, JsonElement edits)
+    {
+        List<JsonElement> ordered = new(edits.EnumerateArray());
+
+        for (int i = ordered.Count - 1; i >= 0; i--)
+        {
+            JsonElement range = ordered[i].GetProperty("range");
+            int start = Offset(text, range.GetProperty("start"));
+            int end = Offset(text, range.GetProperty("end"));
+
+            text = text[..start] + ordered[i].GetProperty("newText").GetString() + text[end..];
+        }
+
+        return text;
+    }
+
+    /// <summary>A zero-based LSP position as an offset into the same text.</summary>
+    private static int Offset(string text, JsonElement position)
+    {
+        int line = position.GetProperty("line").GetInt32();
+        int character = position.GetProperty("character").GetInt32();
+        int offset = 0;
+
+        for (int i = 0; i < line; i++)
+            offset = text.IndexOf('\n', offset) + 1;
+
+        return offset + character;
+    }
+
+    /// <summary>
     /// The include walk's own diagnostics reach the client. They belong to the walk rather than to
     /// the file's syntax, so no parse carries them and this report was silent about them until
     /// 2026-08-16 — while <c>dmc diagdiff</c> counted them the whole time, which is why the
