@@ -1646,7 +1646,7 @@ compiler's own warning name. Pragma level is sequential state that flows through
 So the check was backed out for the third time, with the remainder as two named pieces of work
 rather than a mystery: find the missed read shapes on /tg/station, and honour `#pragma ignore`. The
 second shipped on 2026-08-11 and the first is the table above. The standing note to re-apply the
-backed-out diff was wrong on a load-bearing detail — `42451a6` carries `PLAN.md`, `ROADMAP.txt` and
+backed-out diff was wrong on a load-bearing detail — the commit it named carries `PLAN.md`, `ROADMAP.txt` and
 three fixture files and **no `.cs` at all**, so attempt four was written fresh from the pinned rule.
 
 **The earlier record, for the shape of the first two attempts:**
@@ -3061,7 +3061,7 @@ it.
   once: query + LSP standard `references`/`documentHighlight` + `dm/references`/`dm/ancestorsOf`
   + `dmc references` + two tier-2 marks + smoke (140 checks reporting 0.14). Their doc's §8 was
   corrected in passing: the first-character bug was no post-pin regression — the faulty lookup
-  is byte-identical at `c22438e`; their probes simply never hovered an operator-glued first
+  is byte-identical at the commit they pinned; their probes simply never hovered an operator-glued first
   character.
 - **2026-08-06** — The tree merge measured, and the obvious levers are dead ends: per-file
   contribution replay and a ctor-cached `TypePath` hash both left the phase at ~430 ms, because
@@ -3486,8 +3486,8 @@ it.
   `dmc diagdiff` reported zero on the same file, because `FixtureTests.Analyse` builds its own tree
   and never carried `SuppressedWarnings` across — it was measuring the project with every
   `#pragma ignore` stripped.
-  A correction for the next session: `state.md` said to re-apply the backed-out check from
-  `42451a6`. That commit holds docs and fixtures and **no `.cs`**; the implementation never
+  A correction for the next session: `state.md` said to re-apply the backed-out check from the commit it named,
+  which holds docs and fixtures and **no `.cs`**; the implementation never
   existed in git, and attempt four was written from the pinned rule instead.
 - **2026-08-13** — **ABI 0.26: the bare-type-name completion fallback is removed, on the user's
   call, and typed globals resolve as receivers.** `mob.` offering `/mob`'s members was §1's old
@@ -4257,3 +4257,8 @@ it.
   Ratchet **89 → 91** (`b2_switch_no_body`, `w3010_empty_switch`), all four corpora unmoved. No new
   fixture: the three mined probes already cover the shapes and now agree exactly, so a hand-written
   copy would be a second home for one fact.
+- **2026-08-17** — **This changelog no longer cites commit hashes.** `main` was consolidated
+  from 277 commits to 44 and force-pushed, so every hash written here before today resolves
+  to nothing. Three entries named one to make a point and now describe it instead; the
+  points were about what a commit CONTAINED, which survives losing its name. Anything that
+  needs to identify a change should name the change.
