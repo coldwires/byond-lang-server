@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.35 MB, ABI 0.31, 40 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,709 green (1,631 core, 46 native, 32 lsp)
+    tests           1,713 green (1,635 core, 46 native, 32 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -110,13 +110,13 @@ WHAT'S NEXT
        statement), "re-initialization of global var" (3), "bad statement" (3),
        "instruction not allowed here" (3), and the not-an-lvalue half of
        "bad variable": initial(5), (a+b)++.
-       KNOWN MISSES LEFT IN THE PATH FAMILY, all recorded in PLAN 8 rather
+       KNOWN MISSES LEFT IN THE PATH FAMILY, both recorded in PLAN 8 rather
        than assumed: the marker spelling resolves through inheritance because
-       PROC_REF expands into nameof(), where dm.exe does too; the marker's
-       KIND is unchecked while a verb block is recorded as a proc (below);
-       and the BARE relative form `.p` is unchecked, since it reads the
-       enclosing type's own members rather than searching and wants its own
-       matrix.
+       PROC_REF expands into nameof(), where dm.exe does too; and the BARE
+       relative form `.p` is unchecked, since it reads the enclosing type's
+       own members rather than searching and wants its own matrix. The
+       marker's KIND is checked as of 2026-08-18, once the parser stopped
+       recording a block-declared verb as a proc.
        READ THE ONES WE ALREADY IMPLEMENT FIRST. It has now paid twice: the
        empty-switch class cost one edit and bought two probes, and the
        path-member rule bought three more - a disagreement on a shipped check
@@ -125,28 +125,16 @@ WHAT'S NEXT
        THE METHOD IS THE FINDING: probe the whole family, not the probes.
        Assigning -1 to all 42 of /world's vars answered three classes at once
        and left two tables in PLAN 8 that needed no further investigation.
-    2. A VERB DECLARED IN A BARE `verb` BLOCK IS RECORDED AS A PROC.
-       BlockContext.Proc covers `proc` and `verb` block headers alike and
-       cannot tell them apart, so DeclarationParser computes isVerb as
-       `ContainsSegment(path, "verb") || context == BlockContext.Proc && false`
-       - a literal `&& false`, i.e. the block case is unreachable by
-       construction. Found 2026-08-18 while checking a path marker's kind.
-       CLIENT-VISIBLE, which is why it is its own item: dm_document_symbols
-       reports kind 2 rather than 3, the `verb/` workspace-symbol filter
-       misses them, and the outline is wrong wherever a game declares verbs
-       that way - which mlaas does throughout. Split the context, then fix
-       the fixtures and the two ABI-visible surfaces in the same pass; the
-       path marker's kind check falls out for free.
-    3. M9's tree merge, diff-patching the previous tree - the last
+    2. M9's tree merge, diff-patching the previous tree - the last
        whole-project phase, and where tgstation's 29% growth since
        2026-08-04 lands. Three traps in
        PLAN 6 M9; write the test for each before the code.
-    4. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
+    3. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
        probe matrix first, move directive-head detection to collection time,
        retire FlushPending's splitting in the same change.
-    5. Type rename; incremental LSP sync and incremental re-lex within a
+    4. Type rename; incremental LSP sync and incremental re-lex within a
        file, both waiting for a profile to ask.
-    6. Formatting v2: INDENTATION (F7). Needs its own probe matrix and the
+    5. Formatting v2: INDENTATION (F7). Needs its own probe matrix and the
        tree-diff guard written up in the spec - format, re-parse, compare the
        object tree, emit nothing if a declaration moved. Everything else in
        the spec is shipped.

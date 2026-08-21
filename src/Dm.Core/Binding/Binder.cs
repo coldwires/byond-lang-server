@@ -915,10 +915,13 @@ public sealed class Binder
         // expression position does not (probed 2026-08-18, PLAN §8). tgstation writes that against a
         // subtype constantly, so checking the strict rule here invented 89 diagnostics on it.
         // Resolving through the chain costs the handful of rows where dm.exe is stricter outside
-        // `nameof` — a miss rather than an invention, which is the side to be on. The KIND is not
-        // checked either: a verb declared under a bare `verb` BLOCK is recorded as a proc, since
-        // `BlockContext.Proc` cannot tell a `proc` block from a `verb` one.
-        return _tree.ResolveProc(owner, segments[^1]) is not null;
+        // `nameof` — a miss rather than an invention, which is the side to be on.
+        //
+        // The KIND is checked, which it could not be until the parser stopped recording a
+        // block-declared verb as a proc: `/obj/small/verb/grab` is "undefined type path" where
+        // `grab` was declared `proc/grab()`.
+        return _tree.ResolveProc(owner, segments[^1]) is { } found
+               && found.IsVerb == (segments[^2] == "verb");
     }
 
     /// <summary>

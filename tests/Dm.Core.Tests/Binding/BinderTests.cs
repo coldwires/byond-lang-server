@@ -894,6 +894,34 @@ public class BinderTests
     }
 
     /// <summary>
+    /// The marker has to name the right kind: `/obj/small/verb/grab` is "undefined type path"
+    /// where `grab` was declared `proc/grab()`. Uncheckable until the parser stopped recording a
+    /// block-declared verb as a proc.
+    /// </summary>
+    [Fact]
+    public void A_marker_naming_the_wrong_kind_is_reported()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/small\n\tproc\n\t\tgrab()\n\t\t\treturn\n\n/proc/f()\n\treturn /obj/small/verb/grab\n");
+
+        Assert.Equal(new[] { "DM0402" }, Ids(found));
+    }
+
+    /// <summary>
+    /// And the control that pins the two halves together: a verb declared in a bare `verb` BLOCK
+    /// is reachable through the `verb` marker. Before the block context carried the kind this
+    /// bound against a proc and would have been reported.
+    /// </summary>
+    [Fact]
+    public void A_marker_matching_a_block_declared_verb_is_silent()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/small\n\tverb\n\t\tget()\n\t\t\treturn\n\n/proc/f()\n\treturn /obj/small/verb/get\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
     /// A leading `.` searches the enclosing type's PATH ancestors (§4a). `PROC_REF(X)` expands to
     /// `nameof(.proc/##X)`, so this is the commonest shape in SS13 code. Would fail by inventing.
     /// </summary>

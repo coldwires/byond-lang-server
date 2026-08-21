@@ -193,6 +193,43 @@ public class DeclarationParserTests
         Assert.True(Assert.IsType<ProcDeclarationSyntax>(Single("/mob/verb/Say()\n\treturn\n")).IsVerb);
     }
 
+    /// <summary>
+    /// A bare <c>verb</c> BLOCK header makes every child a verb, exactly as the segment form does.
+    /// `dm.exe -o` prints a <c>&lt;verb&gt;</c> element for both. Until 2026-08-18 the block form
+    /// was recorded as a proc: `BlockContext.Proc` covered `proc` and `verb` blocks alike, so the
+    /// kind was computed with a literal <c>&amp;&amp; false</c>. mlaas declares verbs this way
+    /// throughout, and the kind reaches the outline, completion, tree queries and the `verb/`
+    /// workspace-symbol filter.
+    /// </summary>
+    [Fact]
+    public void A_verb_block_header_makes_its_children_verbs()
+    {
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(
+            Single("/obj/thing\n\tverb\n\t\tblock_verb()\n\t\t\treturn\n"));
+
+        TypeDeclarationSyntax group = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(type.Members));
+        ProcDeclarationSyntax verb = Assert.IsType<ProcDeclarationSyntax>(Assert.Single(group.Members));
+
+        Assert.Equal("block_verb", verb.Name);
+        Assert.True(verb.IsVerb);
+        Assert.True(verb.IsNewDeclaration);
+    }
+
+    /// <summary>The control: a <c>proc</c> block is still a proc block.</summary>
+    [Fact]
+    public void A_proc_block_header_leaves_its_children_procs()
+    {
+        TypeDeclarationSyntax type = Assert.IsType<TypeDeclarationSyntax>(
+            Single("/obj/thing\n\tproc\n\t\tblock_proc()\n\t\t\treturn\n"));
+
+        TypeDeclarationSyntax group = Assert.IsType<TypeDeclarationSyntax>(Assert.Single(type.Members));
+        ProcDeclarationSyntax proc = Assert.IsType<ProcDeclarationSyntax>(Assert.Single(group.Members));
+
+        Assert.Equal("block_proc", proc.Name);
+        Assert.False(proc.IsVerb);
+        Assert.True(proc.IsNewDeclaration);
+    }
+
     [Fact]
     public void Reads_an_as_clause_on_a_parameter()
     {
