@@ -40,19 +40,24 @@ WHERE WE ARE
     madridspy       exact both ways
     tgstation       99.99% vars, 99.92% procs
     include graph   102/102 against dm.exe -l, order identical after M9
-    one keystroke   10 ms on mlaas (target was 30), 720-930 ms on tgstation
-                    - re-measured 2026-08-18 after FIXING THE BENCH, which had
-                    been measuring a path the product does not run: its tree
-                    phase called TypeTreeBuilder.AddFile, which contributes
-                    AND applies, so every round re-walked all 7,160 ASTs, while
-                    a Workspace caches contributions per ParseResult and
-                    re-walks only what was re-parsed. Corrected, the tree phase
-                    is 215-240 ms rather than ~1,160, and mlaas is back at the
-                    10 ms M9 recorded. So the "29% growth, 15% machine state"
-                    reading of 2026-08-15 was largely the instrument: the same
-                    bench across three commits was internally consistent and
-                    its absolute numbers were not. PREPROCESS is now the
-                    largest phase on tgstation (320-530 ms), not the merge
+    one keystroke   8 ms on mlaas (target was 30), 565 ms on tgstation, split
+                    preprocess 180 / split+parse 169 / build tree 215 - three
+                    readings within 3 ms of each other. Re-measured 2026-08-18
+                    after fixing TWO bench defects, neither of which was in the
+                    library:
+                      1. its tree phase called TypeTreeBuilder.AddFile, which
+                         contributes AND applies, so every round re-walked all
+                         7,160 ASTs. A Workspace caches contributions per
+                         ParseResult and re-walks only what was re-parsed. The
+                         phase read ~1,160 ms that way against a real 215.
+                      2. it picked the .dme itself as the file to edit, because
+                         FirstSourceFile compared an un-normalised path. Editing
+                         the .dme re-walks ~7,000 include directives: 330 ms of
+                         full walk against 0 for an ordinary file, which read as
+                         the preprocessor dominating a keystroke.
+                    So the "29% growth, 15% machine state" reading of 2026-08-15
+                    was the instrument. The three phases are now within 50 ms of
+                    each other and NO phase dominates
     diagnostics     ZERO INVENTED EVERYWHERE - mlaas 0, madridspy 0, and
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
@@ -131,19 +136,31 @@ WHAT'S NEXT
        THE METHOD IS THE FINDING: probe the whole family, not the probes.
        Assigning -1 to all 42 of /world's vars answered three classes at once
        and left two tables in PLAN 8 that needed no further investigation.
-    2. tgstation's PREPROCESS, which the corrected bench says is the
-       largest phase of a keystroke there: 320-530 ms of 720-930, against
-       the merge's 215-240. Unmeasured inside, so measure before choosing a
-       lever - this item exists because the last three guesses at the merge
-       all came back at zero, and the fourth turned out to be the bench.
-       mlaas is at 10 ms and needs none of this; the target is met and
-       tgstation is the stress case.
-       M9's TREE MERGE stays on the list behind it, diff-patching the
-       previous tree, with the three traps in PLAN 6 M9 - removal
-       semantics, include-order-stable site lists, override chains
-       surviving a splice. Write the test for each before the code. It is
-       no longer the largest phase, so it is worth what it measures rather
-       than what the old number said.
+    2. tgstation's 565 ms, and NO PHASE DOMINATES IT: preprocess 180,
+       split+parse 169, build tree 215. That is the finding of 2026-08-18 and
+       it changes the shape of the work - there is no single lever left worth
+       an order of magnitude, so anything here is three separate pieces or
+       none. mlaas is at 8 ms against a 30 ms target, so this is stress-case
+       work and nothing is blocked on it.
+       WHAT IS KNOWN ABOUT EACH, from instrumenting the walk (temporary, not
+       committed):
+         preprocess  ~150-200 ms of it is the per-file staleness probe, one
+                     FileInfo per file per rebuild across 7,160 files. That is
+                     the "probe over trust" contract the user chose, working
+                     as designed. Replaying 7,159 cached file effects costs
+                     11-40 ms, and fully walking the 1-3 files that changed
+                     costs ~0. So the preprocess is not the walk; it is the
+                     cost of noticing that nothing changed.
+         build tree  215 ms replaying ~335k recorded ops into a fresh tree.
+                     THREE levers have measured zero here - contribution
+                     replay, TypePath hash caching, and lazy collections on
+                     TypeSymbol (2026-08-18, reverted). Diff-patching the
+                     previous tree is the one that has never been tried; its
+                     three traps are in PLAN 6 M9 - removal semantics,
+                     include-order-stable site lists, override chains
+                     surviving a splice. Write the test for each first.
+         split+parse 169 ms with 1 of 7,160 files re-parsed. Unexplained and
+                     unmeasured inside; the cheapest of the three to look at.
     3. Macro-made CONDITIONALS. First by intent, hardest by trap surface:
        probe matrix first, move directive-head detection to collection time,
        retire FlushPending's splitting in the same change.
@@ -407,9 +424,9 @@ WHAT'S NEXT
          the declaration before it can be safe.
        - ":" against the subtype tree.
   2. M9's tree merge - the last phase still rebuilding the whole project from
-     scratch. 215-240 ms of tgstation's 720-930 as measured 2026-08-18; the
+     scratch. 215 ms of tgstation's 565 as measured 2026-08-18; the
      411-of-909 figure this line used to carry came from a bench that
-     re-walked every AST.
+     re-walked every AST and edited the .dme.
   3. SEND tests/abi-smoke TO THE IDE DEVS. The CMakeLists include and link
      lines are meant to be copied verbatim.
   4. Nothing about the language is a guess now. Every open question left is
@@ -449,8 +466,8 @@ MILESTONES                                    (restructured 2026-08-02)
   [x] M9   Incremental reparse + performance    <- TARGET MET, 13x/15x
              five levers, each measured before and after. 1 of 7,161 files is
              re-read, re-walked and re-parsed after a keystroke.
-             REMAINING: the tree merge, 215-240 ms of a 720-930 ms keystroke
-             on tgstation (2026-08-18, after the bench was corrected).
+             REMAINING: the tree merge, 215 ms of a 565 ms keystroke on
+             tgstation (2026-08-18, after two bench defects were fixed).
   [x] M10  LSP server + VS Code extension       <- community v1, DONE
              (incremental document sync deliberately waits for a profile
              to ask - full sync costs one string against a ~10 ms rebuild)

@@ -1114,14 +1114,27 @@ the instrument stopped matching the product on the same day the contribution cac
 `dmc bench` built its tree with `TypeTreeBuilder.AddFile`, which contributes AND applies, so every
 round re-walked all 7,160 ASTs; a `Workspace` keys a `ConditionalWeakTable` by `ParseResult` and
 re-walks only what was re-parsed. The bench shared its source, run and effect caches across rounds
-"exactly as a Workspace shares it across rebuilds" and simply did not share that one. Corrected,
-one keystroke on /tg/station is **720–930 ms**: preprocess 320–530, split + parse 170–190, and the
-**merge 215–240** — so the merge is about 30% of a keystroke and **preprocess is the largest
-phase**. mlaas reads **10 ms** with the merge at 1, which is exactly what M9 recorded, so the
-"about 15% is machine state and the rest is product growth" reading of 2026-08-15 was mostly the
-instrument: that comparison ran the same bench at three commits and was internally consistent, and
-its absolute numbers were not. Three readings, because one bench on a 7,161-file project has
-misled here before.
+"exactly as a Workspace shares it across rebuilds" and simply did not share that one.
+
+**A second bench defect sat behind the first**: `FirstSourceFile` compared the walk's full Windows
+paths against the `.dme` argument as given, so an argument spelled any other way failed to match,
+the exclusion missed, and **the `.dme` itself became the file edited between rounds**. That is the
+least representative keystroke in the project — /tg/station's `.dme` carries ~7,000 include
+directives, and re-walking it costs 330 ms against **0** for an ordinary file. Same class as the
+buffer keyed `C:/…` against a walk handing out `C:\…`, which measured a rebuild of nothing.
+
+Corrected on both counts, one keystroke on /tg/station is **565 ms** — preprocess 180, split +
+parse 169, merge 215, three readings within 3 ms — and mlaas is **8 ms**. So **no phase dominates**:
+the merge is 38% and the largest, but there is no order of magnitude anywhere. The 2026-08-15
+"about 15% is machine state and the rest is product growth" reading was the instrument; that
+comparison ran the same bench at three commits, so it was internally consistent and its absolute
+numbers were not.
+
+**Instrumenting the walk (temporarily, not committed) attributed the preprocess**, and it is not
+the walk: replaying 7,159 cached file effects costs 11–40 ms, fully walking the 1–3 changed files
+costs ~0, and **150–200 ms is the per-file staleness probe** — one `FileInfo` per file per rebuild,
+which is the "probe over trust" contract working as designed. The preprocess is the cost of
+noticing that nothing changed.
 
 One thing the zero-copy work exposed, worth knowing before the next change here: adopting an
 **empty** run created a file entry that a build without the cache never produced, so `Runs` gained a
@@ -4363,12 +4376,16 @@ it.
   what was re-parsed — the cache landed 2026-08-06 and the bench never got it, while its own
   comment claimed to mirror the workspace and its other three caches were shared "exactly as a
   Workspace shares it across rebuilds".
-  **Corrected, one keystroke is 720–930 ms on /tg/station and 10 ms on mlaas** — the merge 215–240
-  and preprocess 320–530, so the preprocessor is the largest phase and the merge is about 30%.
-  mlaas matching M9's original 10 ms exactly is what retires the 2026-08-15 "29% growth, 15%
-  machine state" reading: that comparison ran the same bench at three commits, so it was internally
-  consistent and its absolute numbers were not. Twelfth entry for the blind-instrument list, and
-  the first where the instrument was measuring *more* work than the product rather than less.
-  The roadmap's item was re-pointed at what the measurement says. `--verify` still holds (3,817
-  declarations identical on mlaas), and no library code changed, so the corrected figures are a doc
-  fix rather than a speedup: `INTEGRATION.txt` §10 says so where a client reads it.
+  **And a second defect sat behind it**: `FirstSourceFile` compared un-normalised paths, so the
+  `.dme` itself was the file edited between rounds — 7,000 include directives, 330 ms of full walk
+  against 0 for an ordinary file, which is what made the preprocessor look dominant. Both fixed.
+  **Corrected, one keystroke is 565 ms on /tg/station and 8 ms on mlaas**: preprocess 180,
+  split + parse 169, merge 215, three readings within 3 ms. **No phase dominates**, which is the
+  finding that changes the shape of the work — there is no single lever worth an order of magnitude
+  left, so this is three separate pieces or none. Instrumenting the walk showed the preprocess is
+  not the walk at all: replay of 7,159 cached effects is 11–40 ms and the staleness probe is
+  150–200, so it is the cost of noticing that nothing changed. Twelfth entry for the
+  blind-instrument list, and the first where the instrument measured *more* work than the product
+  rather than less. `--verify` still holds (3,817 declarations identical on mlaas), and no library
+  code changed, so the corrected figures are a doc fix rather than a speedup: `INTEGRATION.txt` §10
+  says so where a client reads it.

@@ -1459,31 +1459,34 @@ WHAT YOU GET TODAY
   the macro state reaching it actually changed, which after one keystroke is
   one file:
 
-    100 files    (a real game)        131 ms  ->      10 ms
-    7,161 files  (/tg/station)         13.7 s  -> 720-930 ms
+    100 files    (a real game)        131 ms  ->    8 ms
+    7,161 files  (/tg/station)         13.7 s  -> 565 ms
 
   ** THOSE NUMBERS MOVED ON 2026-08-18 BECAUSE THE BENCHMARK WAS WRONG, NOT
      BECAUSE THE LIBRARY CHANGED **
   This guide quoted 13 ms and 1340 ms from 2026-08-15, with a paragraph
-  attributing the difference to machine state and product growth. Both figures
-  came from a bench whose tree phase re-walked every file's syntax tree on
-  every round, which is not what the library does: it caches each file's
-  contribution and re-walks only what was re-parsed. Corrected, the small
-  project is back at the 10 ms originally recorded and the large one is
-  720-930 ms. Nothing about your integration changes; the earlier figures were
-  simply pessimistic, and saying so is better than quietly restating them.
+  attributing the difference to machine state and product growth. Both came
+  from a bench with two defects, neither in the library: its tree phase
+  re-walked every file's syntax tree on every round, where the library caches
+  each file's contribution and re-walks only what was re-parsed; and it edited
+  the .dme itself between rounds rather than a source file, which on a project
+  that size means re-reading ~7,000 include directives per edit. Corrected, the
+  small project is 8 ms and the large one 565 ms. Nothing about your
+  integration changes; the earlier figures were simply pessimistic, and saying
+  so is better than quietly restating them.
 
-  Both figures are one keystroke, warm, Release, three runs. They were verified
-  against a build of the same text with every cache off - 335,519 declarations
-  identical on the large one. Editing a #define is the expensive case by
-  design: everything downstream of it genuinely changed, so that one edit costs
-  a full rebuild and the next is fast again.
+  Both figures are one keystroke, warm, Release, three runs agreeing within
+  3 ms. They were verified against a build of the same text with every cache
+  off - 335,519 declarations identical on the large one. Editing a #define is
+  the expensive case by design: everything downstream of it genuinely changed,
+  so that one edit costs a full rebuild and the next is fast again. Editing the
+  .dme is expensive for the same reason.
 
-  On the large project the phases split roughly 320-530 ms preprocess,
-  170-190 ms split and parse, 215-240 ms merging the object tree - so the
-  preprocessor dominates, and the merge is the part still done whole-project.
-  So: still debounce, but the budget you are debouncing against is ten
-  milliseconds on a normal project rather than a rebuild you can see.
+  On the large project the phases split 180 ms preprocess, 169 ms split and
+  parse, 215 ms merging the object tree - no phase dominates, and the merge is
+  the part still done whole-project. So: still debounce, but the budget you are
+  debouncing against is single-digit milliseconds on a normal project rather
+  than a rebuild you can see.
 
   You need do nothing to get this. We revalidate each file against its
   last-write time and length rather than trusting the cache, chosen so that a
