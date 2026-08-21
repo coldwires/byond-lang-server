@@ -75,6 +75,15 @@ obj/crate
 /proc/container_on_a_type_with_no_procs()
 	return /obj/crate/proc
 
+obj/winch
+	proc
+		haul()
+			return 1
+
+// The marker has to name the right KIND. `haul` is a proc, so the verb marker misses it.
+/proc/marker_naming_the_wrong_kind()
+	return /obj/winch/verb/haul
+
 // ---- the relative spelling ----------------------------------------------------
 //
 // A leading `.` is a SEARCH up the enclosing type's PATH ancestors, ignoring parent_type

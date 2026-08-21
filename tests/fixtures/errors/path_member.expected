@@ -5,6 +5,7 @@
 #   /obj/crate/hp    a var, which never satisfies a path's final segment
 #   /obj/crate/proc  the container, on a type that declares no proc of its own
 #
+#   /obj/winch/verb/haul   the right name through the WRONG marker: haul is a proc
 #   .proc/nope_xyz   the RELATIVE spelling, with no anchor up the enclosing type's path
 #                    ancestors declaring it
 #
@@ -18,5 +19,6 @@
 65 error /obj/lever/pull: undefined type path
 72 error /obj/crate/hp: undefined type path
 76 error /obj/crate/proc: undefined type path
-98 error .proc/nope_xyz: undefined type path
-total 4 errors, 0 warnings
+85 error /obj/winch/verb/haul: undefined type path
+107 error .proc/nope_xyz: undefined type path
+total 5 errors, 0 warnings

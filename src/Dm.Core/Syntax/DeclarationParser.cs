@@ -34,8 +34,17 @@ internal enum BlockContext
     /// <summary>Beneath a bare <c>var</c>, so every child is a variable.</summary>
     Var,
 
-    /// <summary>Beneath a bare <c>proc</c> or <c>verb</c>, so every child is a proc.</summary>
+    /// <summary>Beneath a bare <c>proc</c>, so every child is a proc.</summary>
     Proc,
+
+    /// <summary>
+    /// Beneath a bare <c>verb</c>, so every child is a VERB. Separate from <see cref="Proc"/>
+    /// because the two blocks are indistinguishable once merged, and `dm.exe -o` prints a
+    /// <c>&lt;verb&gt;</c> element for a block-declared verb exactly as it does for
+    /// <c>verb/name()</c>. Folding them lost the kind on every verb a game declares in a block,
+    /// which mlaas does throughout.
+    /// </summary>
+    Verb,
 }
 
 /// <summary>
@@ -535,7 +544,11 @@ internal sealed class DeclarationParser
             if (endsWithVar || endsWithProc || modifierBlock)
             {
                 ConsumeLineEnd();
-                BlockContext childContext = endsWithProc ? BlockContext.Proc : BlockContext.Var;
+
+                BlockContext childContext = endsWithProc
+                    ? path.Segments[^1] == "verb" ? BlockContext.Verb : BlockContext.Proc
+                    : BlockContext.Var;
+
                 List<DeclarationSyntax> members = ParseIndentedBlock(childContext);
 
                 return new TypeDeclarationSyntax(path, members, SpanFrom(start), isGroupHeader: true);
@@ -614,9 +627,9 @@ internal sealed class DeclarationParser
     {
         List<ParameterSyntax> parameters = ParseParameters();
 
-        bool isVerb = ContainsSegment(path, "verb") || context == BlockContext.Proc && false;
+        bool isVerb = ContainsSegment(path, "verb") || context == BlockContext.Verb;
         bool declaresNew = ContainsSegment(path, "proc") || ContainsSegment(path, "verb")
-                           || context == BlockContext.Proc;
+                           || context is BlockContext.Proc or BlockContext.Verb;
 
         // A proc may declare a return type: `parent() as /hud_obj`. It belongs to the signature, so
         // it is consumed before the body — without it the clause reads as an inline body.

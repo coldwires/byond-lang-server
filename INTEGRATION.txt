@@ -6,7 +6,7 @@
  bug in the doc - say so.
 
  ABI version at last update: 0.31  (40 exports, cdecl, six RIDs)
- Last updated: 2026-08-17
+ Last updated: 2026-08-18
 ================================================================================
 
 
@@ -414,6 +414,19 @@ WHAT YOU GET TODAY
 
       kind is 0 type, 1 variable, 2 proc, 3 verb, 4 parameter. Treat an
       unknown kind as a neutral icon so a library update cannot break you.
+
+      ** A VERB DECLARED IN A BARE `verb` BLOCK REPORTED AS 2 UNTIL 2026-08-18 **
+      DM declares verbs two ways - `verb/name()` on the declaration line, and a
+      bare `verb` block header with the names indented under it - and only the
+      first was reported as kind 3. The block form is the commoner one in older
+      codebases. `dm.exe -o` prints a <verb> element for both, and at runtime
+      both land in the atom's `verbs` list, so 3 was always the right answer.
+      No ABI bump: no export, field or enum value changed, and the contract
+      here already said 3 means verb. If you special-cased the old behaviour,
+      or keyed an icon off kind 2 for verbs, that is the thing to undo. The
+      same correction reaches dm_complete_at's item kinds, dm_query_json's
+      members query, and dm_workspace_symbols' `verb/` filter, which had been
+      missing block-declared verbs entirely.
 
       "owner" is the resolved path of whatever CONTAINS the symbol: a
       member's owning type ("/mob"), a type's parent by path, a

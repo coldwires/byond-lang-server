@@ -105,6 +105,22 @@ two"
 	var/obj/pt_builtin/bi = new
 	CHECK_TRUE("a builtin parent_type is a real link", istype(bi, /mob))
 
+	// A bare `verb` BLOCK header declares VERBS, exactly as `verb/name()` does, and a `proc`
+	// block declares procs. `dm.exe -o` prints a <verb> element for both verb forms, and at
+	// runtime the difference is observable: a verb lands in `verbs` and a proc does not.
+	// Checked by VALUE because our own tree recorded block-declared verbs as procs until
+	// 2026-08-18, and nothing said so — the kind reaches the outline, completion, tree queries
+	// and the `verb/` symbol filter.
+	var/obj/kindcheck/kc = new
+	CHECK("a verb block declares verbs, a proc block does not", kc.verbs.len, 2)
+
+	var/block_verb_listed = 0
+	for(var/V in kc.verbs)
+		if(findtext("[V]", "block_verb"))
+			block_verb_listed = 1
+
+	CHECK("the block-declared one is among them", block_verb_listed, 1)
+
 /datum/swallowed
 	var
 		kept = "kept"
@@ -129,3 +145,17 @@ two"
 
 /obj/pt_builtin
 	parent_type = /mob
+
+// Both bare-block forms, for the kind check above. The segment form is there so the count
+// distinguishes "verbs are collected" from "the block form is collected".
+/obj/kindcheck
+	verb
+		block_verb()
+			return 1
+
+	proc
+		block_proc()
+			return 1
+
+	verb/segment_verb()
+		return 1
