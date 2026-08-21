@@ -12,7 +12,8 @@ file at the end re-runs everything in about ten seconds.
 The compile-only sections are not in the appendix and so are not covered by that run. **Since
 2026-08-16 every one of them is pinned against 1687 by `tests/fixtures` instead**, and the CI job
 compiles them with it: the keyword type names, the local-var `in` rule, `.`/`:`/`?:`, duplicate
-definitions, the modified-type scope, the const fold, the leading-`.` search (`ok/notes.dm` by
+definitions, the modified-type scope, the const fold, the path-member spellings and their
+`nameof()` exception (`errors/path_member`), the leading-`.` search (`ok/notes.dm` by
 value, `errors/leading_dot` for the rejections), the brace/indentation nesting shapes, the
 indentation rule (`ok/notes.dm`, `errors/indent_*`), the `#if` grammar (`errors/if_*`), the
 `#pragma syntax` grammars by value, `1#INF`, name escapes, `usr` under `world.mob`
@@ -936,6 +937,66 @@ var/const            // heads a block of constants (the stddef.dm shape)
 Neither of these is hypothetical: /tg/station declares
 `/datum/manipulator_task/cargo/dropoff_base/throw`, writes typed locals of it, and declares
 `var/final = ""` five times.
+
+---
+
+## Compile-only: reaching a proc through a path, and the two spellings that do not mix
+
+A path can name a member as well as a type, and which spelling works depends on **how the
+declaration was written** rather than on what the member is. The two forms are exclusive.
+
+```dm
+/mob/Login()          // a BARE override of a builtin
+	return
+
+/proc/f()
+	return /mob/Login         // compiles
+	return /mob/proc/Login    // error: undefined type path
+```
+
+That pair is the whole rule in miniature, and it is the opposite of what the marker's existence
+suggests: writing `proc/` does not make the marker form available, it makes it *required*.
+
+| Declared on that type as | `/type/Name` | `/type/proc/Name` |
+|---|---|---|
+| `proc/Name()` or `verb/Name()` — with the marker | **error** | compiles |
+| `Name()` — a bare override | compiles | **error** |
+| nothing; inherited from an ancestor | **error** | **error** |
+| nothing; a builtin nobody overrode | **error** | **error** |
+| a **var** of that name | **error** | **error** |
+
+Three things follow that are worth stating separately, because each is a plausible guess that is
+wrong:
+
+- **Inheritance does not carry either spelling down.** With `grab` declared `proc/grab()` on
+  `/obj/small`, neither `/obj/small/trap/grab` nor `/obj/small/trap/proc/grab` resolves — and that
+  holds whether the subtype is empty, declares a var, or overrides `grab` itself.
+- **The marker has to name the right kind.** `/obj/small/verb/grab` is rejected where `grab` was
+  declared `proc/grab()`.
+- **A path may END at the marker**, naming the type's proc container — `typesof(/mob/admin/proc)`,
+  which mlaas writes five times. It resolves only where the type declares a proc of its own, so
+  `/obj/small/proc` fails on a type carrying only vars.
+
+### `nameof()` asks a different question
+
+This is the exception that matters in practice, because `TYPE_PROC_REF(TYPE, X)` expands to
+`nameof(##TYPE.proc/##X)` and SS13 codebases write it constantly:
+
+| Written | Result |
+|---|---|
+| `nameof(/obj/vault/inner.proc/unlock)` — `unlock` declared on the parent, inherited | **compiles** |
+| `/obj/vault/inner.proc/unlock` — the same path, ordinary expression position | error |
+| `nameof(/obj/small/grab)` — the bare spelling | error |
+| `nameof(/obj/small.proc/nope)` — no such member | *"nameof: requires a var, proc reference, or type path"* |
+
+So inside `nameof` the marker form resolves through the inheritance chain, while everywhere else it
+demands the type's own declaration. A tool that applies one rule to both positions disagrees with
+the compiler on one of them: /tg/station writes `TYPE_PROC_REF(/obj/machinery/door/airlock, open)`
+where `open` is declared `proc/open()` on `/obj/machinery/door` and overridden bare on the airlock,
+and reporting that is worth 89 false errors on a single project.
+
+Probed as a 38-case matrix on 516.1687. Fixture `errors/path_member`, whose controls are the four
+legal shapes and whose `total` line pins their silence.
 
 ---
 

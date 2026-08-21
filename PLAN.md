@@ -3,8 +3,8 @@
 > **Live document.** Updated as the project progresses. Milestone status, decisions, and
 > open questions are kept current here. See `ROADMAP.txt` for the short version.
 >
-> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,700 tests ·
-> Last updated: 2026-08-17
+> Status: **M0–M10 complete · M11 at zero invented · ABI 0.31** · 1,706 tests ·
+> Last updated: 2026-08-18
 >
 > No commit count here: it is wrong again the moment anything is committed, which
 > is exactly how the last one went stale.
@@ -484,8 +484,8 @@ The ABI is the riskiest infrastructure. Proven before any compiler code.
   x86 alike. Reference
   integration for the Qt client, and the only thing that proves the published binary links and runs
   from C++ rather than merely that the managed side behaves.
-- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,567 today (1,492
-  core, 46 native, 29 lsp). Handle
+- ✅ `Dm.Core.Tests` + `Dm.Native.Tests` + `Dm.Lsp.Tests`, 38 tests at M0 and 1,706 today (1,628
+  core, 46 native, 32 lsp). Handle
   validation, UTF-8 marshalling, snapshot helper.
 - ✅ Local git repo, MIT license, `.gitattributes`.
 - ✅ CI matrix, `.github/workflows/ci.yml`. The managed tests run once — they are
@@ -2290,6 +2290,7 @@ that the two candidate behaviours produce different compiler output.
 | **A proc REFERENCED without parentheses is "undefined var" even through a WRITTEN type.** | `var/obj/item/x = new /obj/item` then `return x.use` — `use` a real proc on `/obj/item`, the type written down — is still *"x.use: undefined var"*, with `unused_var` beside it. §8 records the search as kind-sensitive for `:` (`x:only_a_proc` in value position); this pins the same for `.`, and pins that **no type declaration fixes it**. That is what stops the "declare the type" action offering there: the guard "the fix has to actually fix it" is load-bearing rather than belt-and-braces, and a test written expecting a fix is what found it. Fixture `errors/proc_reference`, golden captured from 516.1687. |
 | **`parent_type` takes a resolvable path and nothing else, and an UNDEFINED one is not "undefined type path".** | Probed as a matrix on 516.1687, one case per compilation unit and then all of them in one file, since these are semantic errors and dm.exe accumulates those. `X: invalid parent type` for a number, an empty string, `null`, a `list()`, a quoted `"/obj"`, a variable — and for a path no file declares, which is the row that would have been guessed wrong: everywhere else an unresolvable path literal is *"undefined type path"*, so a binder that treats the initialiser as an ordinary expression reports the wrong message on the right line. **A CYCLE is one error however many types it runs through**, reported against the participant declared FIRST in compile order: verified by writing the same two-type cycle in both orders, and again split across two files included both ways. A type parented to its own DESCENDANT closes the same loop by path and reports the same way. Clean, and each a control the check must not fire on: an absolute path, a relative `.sibling`, a FORWARD reference to a type declared later, a builtin parent, and a root-level global that happens to be named `parent_type`. `var/parent_type = 5` inside a type is a different check — *"duplicate definition (conflicts with built-in variable)"*. Shipped as **`DM0406`**; fixture `errors/parent_type` with the total pinning the controls' silence, four runtime checks in `ok/semantics.dm`. |
 | **Five `/world` vars are RANGE-CHECKED at compile time, and the other 37 fail five other ways.** | Found by assigning `-1` to all 42 of `/world`'s vars on 516.1687, one compilation unit each, rather than by guessing which ones look numeric. **`maxx`, `maxy`, `maxz`, `fps` and `tick_lag` answer `X: out of bounds`**; the value must be a number **at or above zero**, fractions included (`tick_lag = 0.5` is how a game runs fast), and **`fps` is the only one with a ceiling — 100 compiles, 101 does not**, bisected, while `maxx` takes a billion and `tick_lag` a million. A string, a `list()`, `null` and a path are all "out of bounds" here rather than the "bad text" the same string gives on `world.name`. **dm.exe folds before it checks**: `maxx = (1 - 5)` is out of bounds and the message names an EMPTY symbol, because no single token holds the value. A non-constant name is *"expected a constant expression"* instead — a different check. The other 37 vars group into: **"bad text"** (`name`, `status`, `executor`, `hub_password`), **"expected 1 or 0"** (`sleep_offline`, `visibility`, `loop_checks`), **"expected 0, 1, or 2"** (`movement_mode`), **"expected TOPDOWN_MAP, …"** (`map_format`), **"bad turf/area/mob"** (`turf`, `area`, `mob`), **"expected newlist"** (`contents`), **"may not be set at compile-time"** (11, including `time`, `cpu`, `log`, `host`) and **"bad variable"** (9 genuinely read-only ones, including `byond_build`, `port`, `url`). Five accept anything: `cache_lifespan`, `hub`, `icon_size`, `version`, `view`. Shipped as **`DM0407`** for the range family and **`DM0408`** for the twenty that cannot be set at compile time at all — those two wordings being one rule, and value-independent, re-probed with sensible values because `-1` on a port proves nothing. The remaining families are mapped and unimplemented. Fixture `errors/world_bounds`, with the legal side in `ok/_harness.dm` where it runs. |
+| **A path's final segment names a MEMBER only when the spelling matches how the site was written, and `nameof()` is a different question entirely.** | Probed as a 38-case matrix on 516.1687, 2026-08-18. The two spellings are exclusive: `/type/proc/Name` reaches a declaration that wrote the `proc`/`verb` marker, `/type/Name` reaches a **bare override**, and neither reaches the other. The row that pins it is a bare `/mob/Login()` override — after it `/mob/Login` resolves and `/mob/proc/Login` does not. The site has to be the owner's OWN: inheritance carries neither spelling down, so `/obj/small/trap/grab` and `/obj/small/trap/proc/grab` both fail where `grab` is declared on `/obj/small`, with or without a var or a bare override on the subtype. A **var never** satisfies either (`/obj/small/hp` fails), a **builtin** satisfies neither until a project overrides it (`/mob/Login` fails alone), and the marker must name the right **kind** (`/obj/small/verb/grab` fails on a `proc/grab()`). A path ENDING at the marker is the type's proc **container** — `typesof(/mob/admin/proc)`, which mlaas writes — and resolves only where the type declares one of its own, so `/obj/small/proc` fails on a type carrying only vars. **`nameof()` is a separate context**: inside it the marker form resolves through INHERITANCE (`nameof(/obj/vault/inner.proc/unlock)` compiles where the same path in expression position does not), a missing member is *"nameof: requires a var, proc reference, or type path"* rather than "undefined type path", and the bare spelling is still rejected. `TYPE_PROC_REF` expands to `nameof(##TYPE.proc/##X)`, which is why /tg/station writes the inherited marker form constantly — checking the strict rule there invented 89 diagnostics on it, so the marker spelling is left resolving through the chain: a miss rather than an invention. The bare spelling and the container are checked strictly. Fixture `errors/path_member`, with the four legal shapes as controls and `total` pinning their silence. |
 | **The legacy `rand(…)` STATEMENT governs the one expression that follows, wherever it sits.** | Undocumented; probed 2026-08-16 on 516.1687. Every statement-position `rand(` is `new_name`'s third message, *"The rand statement is being faded out.  Use pick() instead if possible."* — with an argument or none. Its body is the NEXT EXPRESSION: on the same line (`rand(50) x = 1`), on the next line at the same indent, or indented — and exactly one. A non-expression body is the compiler's error: `return 1` is *": missing expression"*, `if(x)` *": invalid expression"*, a second indented line *": invalid expression"* (on the FIRST body line for a two-line block and the second for three — dm.exe's own inconsistency), and a `rand(50)` closing a proc swallows the next declaration's header and errors on it. `x = rand(50)` and `if(rand(50))` are ordinary calls. Read as an expression statement the indented body was a silent stray block; `RandStatementSyntax` now. Fixture `errors/rand_statement`. |
 
 The second one matters more than it looks. A line such as `//*see the article` inside a block
@@ -4262,3 +4263,34 @@ it.
   to nothing. Three entries named one to make a point and now describe it instead; the
   points were about what a commit CONTAINED, which survives losing its name. Anything that
   needs to identify a change should name the change.
+- **2026-08-18** — **DM0402 was over-lenient on a path's final segment, and the comment
+  explaining why was wrong about its own evidence.** The branch accepting `/type/Name` resolved the
+  tail through INHERITANCE and cited mlaas's `verbs += /obj/small/trap/get` as the reason. A
+  38-case matrix on 516.1687 (§8) says the rule is narrower: the spelling has to match how the
+  declaration SITE was written, and the site has to be the owner's own. mlaas's path is legal
+  because `get` is declared on `/obj/small` and overridden BARE on the subtype — reconstructing it
+  the way the comment described (`verb/get()` on the type itself) does **not** compile, which is
+  what exposed the mistake. The bare spelling and the proc container are now checked strictly,
+  and the two mined probes that were waiting on it agree: ratchet **91 → 93**
+  (`b2_static_call_dot`, `b4_path_call_expr`).
+  **The corpus gate did its whole job twice.** The first tightening invented 12 on mlaas — a path
+  ending AT the marker (`typesof(/mob/admin/guide/proc)`) names the type's proc container, which
+  the old any-segment scan had been skipping silently. The second invented **89 on /tg/station**,
+  and the cause is a finding rather than a slip: **`TYPE_PROC_REF` expands to
+  `nameof(##TYPE.proc/##X)`, and `nameof()` resolves the marker form through inheritance where
+  ordinary expression position does not.** So the marker spelling stays lenient — a miss on the few
+  rows where dm.exe is stricter outside `nameof`, against inventing on every `PROC_REF` in a
+  1.5M-line project. Both readings were settled by opening the site (`door.dm:584` declares
+  `proc/open`, `airlock.dm:1328` overrides it bare) rather than by reasoning from the macro.
+  **A unit test asserted the wrong belief and passed for it**: `A_path_naming_a_proc_through_its_type_is_silent`
+  encoded the same reconstruction the comment did, on a construct dm.exe rejects. It is now two
+  tests, one per spelling, plus the container's both halves.
+  **One defect found and deliberately NOT fixed here**: a verb declared under a bare `verb` BLOCK
+  header is recorded as a **proc**. `BlockContext.Proc` covers `proc` and `verb` blocks alike and
+  cannot tell them apart, so `DeclarationParser` computes `isVerb` with a literal `&& false` for
+  that case. That is why the marker's kind is not checked, and it reaches further than this
+  check — the outline's proc/verb kinds and the `verb/` workspace-symbol filter ride on the same
+  flag, so it is its own change rather than a rider on a diagnostics fix. mlaas declares verbs in
+  blocks throughout, so the blast radius is real.
+  Fixture `errors/path_member` (three rejections, four legal controls, `total` pinning their
+  silence), six binder tests, all four corpora at baseline. 1,700 → 1,706 tests.

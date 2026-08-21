@@ -807,46 +807,138 @@ public sealed class Binder
         if (path.Path.Anchor != PathAnchor.Absolute || path.Path.Segments.Count == 0)
             return;
 
-        foreach (string segment in path.Path.Segments)
+        IReadOnlyList<string> segments = path.Path.Segments;
+        TypePath resolved = TypePath.FromSegments(segments);
+
+        // A path may END at the marker: `typesof(/mob/admin/proc)` names the type's proc container,
+        // and mlaas writes it five times. It is the own-site rule one level up — a type that
+        // declares no proc of its own rejects it, so `/obj/small/proc` on a type carrying only vars
+        // is "undefined type path" (probed 2026-08-18).
+        if (segments[^1] is "proc" or "verb")
         {
-            if (segment is "proc" or "verb")
+            if (!ContainerResolves(segments))
             {
-                // `/type/proc/Name` is a proc REFERENCE — TYPE_PROC_REF's expanded shape — and
-                // worth a hit in the index even though the diagnostics skip it. Only the
-                // unambiguous form: the marker directly before the final segment.
+                _diagnostics.Add(Diagnostic.Error(
+                    "DM0402", path.Span, $"{resolved}: undefined type path"));
+            }
+
+            return;
+        }
+
+        // `/type/proc/Name` is a proc REFERENCE — TYPE_PROC_REF's expanded shape. The marker sits
+        // directly before the name; anywhere else it is an ordinary segment, so this matches
+        // EmitProcReference's own test rather than scanning the whole path.
+        if (segments.Count >= 2 && segments[^2] is "proc" or "verb")
+        {
+            if (MemberSpellingResolves(segments, marked: true))
+            {
                 EmitProcReference(path);
                 return;
             }
-        }
 
-        TypePath resolved = TypePath.FromSegments(path.Path.Segments);
+            _diagnostics.Add(Diagnostic.Error(
+                "DM0402", path.Span, $"{resolved}: undefined type path"));
+
+            return;
+        }
 
         if (_tree.Find(resolved) is { } named)
         {
-            if (SinkWants(path.Path.Segments[^1]))
+            if (SinkWants(segments[^1]))
                 _sink!(new Reference(_file ?? string.Empty, path.Span, named.Path.Text, ReferenceKind.Read, _inside));
 
             return;
         }
 
-        // `/obj/small/trap/get` names the verb `get` on /obj/small/trap with no `verb` marker
-        // segment — mlaas writes `verbs += /obj/small/trap/get` and dm.exe accepts it. Resolved
-        // through inheritance on purpose: leniency here costs a miss, strictness an invention.
-        if (path.Path.Segments.Count >= 2)
-        {
-            List<string> ownerSegments = new(path.Path.Segments.Count - 1);
-            for (int i = 0; i < path.Path.Segments.Count - 1; i++)
-                ownerSegments.Add(path.Path.Segments[i]);
-
-            if (_tree.Find(TypePath.FromSegments(ownerSegments)) is { } type
-                && _tree.ResolveProc(type, path.Path.Segments[^1]) is not null)
-            {
-                return;
-            }
-        }
+        // A member is reachable without a marker only where the owner declared it without one —
+        // a BARE OVERRIDE. mlaas writes `verbs += /obj/small/trap/get`, and `get` is a verb
+        // declared on /obj/small and overridden bare on the subtype, which is what makes that
+        // path legal; the comment here used to credit "a verb with no marker segment" and was
+        // wrong, since /obj/small/get is rejected (probed 2026-08-18, PLAN §8).
+        if (segments.Count >= 2 && MemberSpellingResolves(segments, marked: false))
+            return;
 
         _diagnostics.Add(Diagnostic.Error(
             "DM0402", path.Span, $"{resolved}: undefined type path"));
+    }
+
+    /// <summary>
+    /// Whether a path's final segment names a member of the type in front of it, for the spelling
+    /// written. The two spellings are exclusive and each has to match how the declaration SITE was
+    /// written: <c>/type/proc/Name</c> reaches a declaration that used the marker, <c>/type/Name</c>
+    /// reaches a bare override, and neither reaches the other. Probed as a matrix on 516.1687
+    /// (PLAN §8); the row that pins it is a bare <c>/mob/Login()</c> override, after which
+    /// <c>/mob/Login</c> resolves and <c>/mob/proc/Login</c> does not.
+    /// </summary>
+    /// <remarks>
+    /// The site has to be the owner's OWN, which is why this is <c>FindProc</c> rather than
+    /// <c>ResolveProc</c>: inheritance carries neither spelling down, so a subtype that declares
+    /// nothing rejects both. A builtin has no site at all and therefore rejects both until a
+    /// project overrides it. A var never satisfies either.
+    /// </remarks>
+    private bool MemberSpellingResolves(IReadOnlyList<string> segments, bool marked)
+    {
+        int ownerCount = marked ? segments.Count - 2 : segments.Count - 1;
+        List<string> ownerSegments = new(ownerCount);
+
+        for (int i = 0; i < ownerCount; i++)
+            ownerSegments.Add(segments[i]);
+
+        TypeSymbol? owner = ownerSegments.Count == 0
+            ? _tree.Root
+            : _tree.Find(TypePath.FromSegments(ownerSegments));
+
+        if (owner is null)
+            return false;
+
+        // The BARE spelling is strict: the owner must hold a site of its own written without a
+        // marker. Inheritance does not carry it, which is what makes `/obj/small/trap/grab`
+        // "undefined type path" where `grab` is declared on `/obj/small`.
+        if (!marked)
+        {
+            return owner.FindProc(segments[^1]) is { } own
+                   && own.Sites.Count > own.DeclaringSites.Count;
+        }
+
+        // The MARKER spelling is deliberately lenient, and `nameof()` is the reason. `TYPE_PROC_REF`
+        // expands to `nameof(##TYPE.proc/##X)`, and inside `nameof` the marker form resolves through
+        // INHERITANCE — `nameof(/obj/small/trap.proc/grab)` compiles where the same path in ordinary
+        // expression position does not (probed 2026-08-18, PLAN §8). tgstation writes that against a
+        // subtype constantly, so checking the strict rule here invented 89 diagnostics on it.
+        // Resolving through the chain costs the handful of rows where dm.exe is stricter outside
+        // `nameof` — a miss rather than an invention, which is the side to be on. The KIND is not
+        // checked either: a verb declared under a bare `verb` BLOCK is recorded as a proc, since
+        // `BlockContext.Proc` cannot tell a `proc` block from a `verb` one.
+        return _tree.ResolveProc(owner, segments[^1]) is not null;
+    }
+
+    /// <summary>
+    /// Whether a path ENDING at a <c>proc</c> or <c>verb</c> marker names a real container — the
+    /// <c>typesof(/mob/admin/proc)</c> idiom. True only when the owner declares at least one of its
+    /// own, which is what makes <c>/obj/small/proc</c> "undefined type path" on a type holding only
+    /// vars.
+    /// </summary>
+    private bool ContainerResolves(IReadOnlyList<string> segments)
+    {
+        List<string> ownerSegments = new(segments.Count - 1);
+
+        for (int i = 0; i < segments.Count - 1; i++)
+            ownerSegments.Add(segments[i]);
+
+        TypeSymbol? owner = ownerSegments.Count == 0
+            ? _tree.Root
+            : _tree.Find(TypePath.FromSegments(ownerSegments));
+
+        if (owner is null)
+            return false;
+
+        foreach (ProcSymbol proc in owner.Procs)
+        {
+            if (proc.DeclaringSites.Count > 0)
+                return true;
+        }
+
+        return false;
     }
 
     private void BindStatement(StatementSyntax? statement, Scope scope)

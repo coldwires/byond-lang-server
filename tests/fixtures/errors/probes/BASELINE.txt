@@ -17,7 +17,7 @@
 # is malformed on every keystroke. So extra diagnostics on a must-fail file are
 # not spurious, and the zero-invented rule applies to code that COMPILES CLEAN.
 #
-agreed 91
+agreed 93
 total 255
 probe b1_addr_of_proc
 probe b1_backtick
@@ -66,6 +66,7 @@ probe b2_name_mob
 probe b2_parent_type_bad
 probe b2_parent_type_num
 probe b2_set_unknown
+probe b2_static_call_dot
 probe b2_step_in_list
 probe b2_switch_needs_if
 probe b2_switch_no_body
@@ -93,6 +94,7 @@ probe b4_if_empty_parens
 probe b4_if_path
 probe b4_op_index_three
 probe b4_parent_cycle
+probe b4_path_call_expr
 probe b4_set_bogus_in
 probe b4_vardecl_in_call
 probe e_bad_indentation
