@@ -312,14 +312,29 @@ internal static class Bench
     }
 
     /// <summary>The first real source file in compile order, as a stand-in for a file the user has open.</summary>
+    /// <summary>
+    /// A file to edit between rounds: the first real source file, never the <c>.dme</c>.
+    /// </summary>
+    /// <remarks>
+    /// Both sides are canonicalised before the comparison, and that is the whole point of this
+    /// method rather than a detail. The walk reports full Windows paths; an argument spelled any
+    /// other way — <c>/c/Users/...</c> out of a POSIX shell — failed to match, so the exclusion
+    /// missed and the <c>.dme</c> itself became the edit target. Editing it is the least
+    /// representative keystroke in the project: on /tg/station the <c>.dme</c> carries ~7,000
+    /// include directives, and re-walking it cost 330 ms against 0 for an ordinary file, which
+    /// showed up as the preprocessor dominating a keystroke when it does not. Same class as the
+    /// buffer that was keyed <c>C:/...</c> against a walk handing out <c>C:\...</c> and measured a
+    /// rebuild of nothing.
+    /// </remarks>
     private static string? FirstSourceFile(string dmePath, IReadOnlyList<string>? defines)
     {
         IncludeGraph graph = IncludeGraph.Build(dmePath, new IncludeOptions { Defines = defines });
+        string dme = Path.GetFullPath(dmePath);
 
         foreach (IncludedFile file in graph.Files)
         {
             if (file.Kind == IncludeKind.DmSource
-                && !string.Equals(file.Path, dmePath, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Path.GetFullPath(file.Path), dme, StringComparison.OrdinalIgnoreCase)
                 && File.Exists(file.Path))
             {
                 return file.Path;
