@@ -2,7 +2,7 @@
  BYOND DM LANGUAGE TOOLING - ROADMAP
  Live doc. The SHORT version: status, what is next, and where the detail is.
  Full detail in PLAN.md. Integration detail in INTEGRATION.txt.
- Last updated: 2026-08-17
+ Last updated: 2026-08-18
 ================================================================================
 
  This file went to 1,010 lines by restating PLAN.md in different words, and the
@@ -18,7 +18,7 @@ WHERE WE ARE
 
     dm_core.dll     2.35 MB, ABI 0.31, 40 exports, cdecl on every platform
     six RIDs        win-x64 win-x86 linux-x64 linux-arm64 osx-x64 osx-arm64
-    tests           1,700 green (1,622 core, 46 native, 32 lsp)
+    tests           1,706 green (1,628 core, 46 native, 32 lsp)
     BYOND 516.1687  the goldens are STAMPED to it and CI runs against it.
                     516.1687 is the newest build, and the canary is what
                     found it: every golden held, so the pin moved 1686 ->
@@ -51,9 +51,11 @@ WHERE WE ARE
                     tgstation 0 from 1,392: dm.exe says nothing on 1.5M
                     lines and now so do we
     fixture suite   dotnet test + pwsh tests/fixtures/run.ps1, 255-probe ratchet
-                    at 89/255 agreed, up from 79 on 2026-08-17 - DM0406 took
-                    the three parent_type probes, DM0407 the five
-                    out-of-bounds ones and DM0408 two more. Before that it
+                    at 93/255 agreed, up from 79 at the start of 2026-08-17 -
+                    DM0406 took the three parent_type probes, DM0407 the five
+                    out-of-bounds ones, DM0408 two more, DM0203's span fix two,
+                    and DM0402's path-member rule two on 2026-08-18. Before
+                    that it
                     moved 76 -> 79 with no
                     check written for it: surfacing the LEXER's diagnostics
                     through the parse and the walk answered three probes at
@@ -96,20 +98,27 @@ WHAT'S NEXT
   THE QUEUE, as of 2026-08-16, cheapest first. Detail for each is in PLAN's
   changelog and in the section it belongs to; this is the order.
 
-    1. The ratchet's remaining classes. 91 of 255 agreed, up from 79 at the
+    1. The ratchet's remaining classes. 93 of 255 agreed, up from 79 at the
        start of 2026-08-17: DM0406 invalid parent type, DM0407 out of bounds,
-       DM0408 the twenty /world vars that cannot be set at compile time, and
-       DM0203 moved to the line dm.exe reports it on (it had been INVENTING).
+       DM0408 the twenty /world vars that cannot be set at compile time,
+       DM0203 moved to the line dm.exe reports it on (it had been INVENTING),
+       and DM0402's path-member rule on 2026-08-18 (it had been MISSING).
        WHAT IS LEFT IS A LONG TAIL - no class above three probes remains, and
        the /world families are closed. The next ones by size:
        "statement has no effect" (3: `~x`, `while(x)` alone, `a == b` as a
        statement), "re-initialization of global var" (3), "bad statement" (3),
        "instruction not allowed here" (3), and the not-an-lvalue half of
        "bad variable": initial(5), (a+b)++.
-       READ THE ONES WE ALREADY IMPLEMENT FIRST. The empty-switch class cost
-       one edit and bought two probes, because a disagreement on a shipped
-       check is a defect rather than missing work - and that one was inventing
-       a diagnostic on every empty switch.
+       STILL UNMOVED IN A CLASS WE SHIP: b3_bad_proc_ref, `.proc/nope` - the
+       RELATIVE spelling of the path-member rule. BindPath returns early on
+       any non-absolute anchor, so no leading-`.` path is checked at all.
+       That is the other half of the 2026-08-18 change and its own piece of
+       work, since the leading-`.` search backtracks (PLAN 4a).
+       READ THE ONES WE ALREADY IMPLEMENT FIRST. It has now paid twice: the
+       empty-switch class cost one edit and bought two probes, and the
+       path-member rule bought two more - a disagreement on a shipped check
+       is a defect rather than missing work. The first was inventing on every
+       empty switch; the second was silently accepting paths dm.exe rejects.
        THE METHOD IS THE FINDING: probe the whole family, not the probes.
        Assigning -1 to all 42 of /world's vars answered three classes at once
        and left two tables in PLAN 8 that needed no further investigation.

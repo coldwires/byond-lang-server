@@ -839,16 +839,58 @@ public class BinderTests
     }
 
     /// <summary>
-    /// `/obj/trap/get` names the verb `get` on /obj/trap with no `verb` marker segment — mlaas
-    /// writes `verbs += /obj/small/trap/get`. Would fail by inventing.
+    /// mlaas writes `verbs += /obj/small/trap/get`, and this is the shape that makes it legal:
+    /// `get` is declared on the PARENT and overridden BARE on the subtype, so the subtype holds a
+    /// site written without a marker. Would fail by inventing.
     /// </summary>
     [Fact]
-    public void A_path_naming_a_proc_through_its_type_is_silent()
+    public void A_bare_override_is_reachable_as_a_path_without_a_marker()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/obj/small\n\tverb\n\t\tget()\n\t\t\treturn\n\n/obj/small/trap\n\tget()\n\t\treturn\n"
+            + "\n/proc/f()\n\treturn /obj/small/trap/get\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
+    /// The other half, and the one this test used to assert backwards: a declaration written WITH
+    /// the marker is reachable only through it, so `/obj/trap/get` is "undefined type path" where
+    /// `get` was declared `verb/get()` on that same type. Probed on 516.1687 — PLAN.md §8.
+    /// </summary>
+    [Fact]
+    public void A_marker_declaration_is_not_reachable_without_the_marker()
     {
         IReadOnlyList<Diagnostic> found = Bind(
             "/obj/trap\n\tverb/get()\n\t\treturn\n\n/proc/f()\n\treturn /obj/trap/get\n");
 
+        Assert.Equal(new[] { "DM0402" }, Ids(found));
+    }
+
+    /// <summary>
+    /// A path ENDING at the marker names the type's proc container — mlaas writes
+    /// `typesof(/mob/admin/guide/proc)`. It resolves only where the type declares one of its own.
+    /// </summary>
+    [Fact]
+    public void A_path_ending_at_the_marker_names_the_container()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob/admin\n\tproc\n\t\thelp()\n\t\t\treturn\n\n/proc/f()\n\treturn /mob/admin/proc\n");
+
         Assert.Empty(found);
+    }
+
+    /// <summary>
+    /// And rejects it where the type declares no proc at all, which is what stops the container
+    /// reading as "any path ending in proc is fine".
+    /// </summary>
+    [Fact]
+    public void A_container_path_on_a_type_with_no_procs_is_reported()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/mob/admin\n\tvar/hp = 1\n\n/proc/f()\n\treturn /mob/admin/proc\n");
+
+        Assert.Equal(new[] { "DM0402" }, Ids(found));
     }
 
     /// <summary>
