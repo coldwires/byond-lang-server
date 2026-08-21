@@ -894,6 +894,48 @@ public class BinderTests
     }
 
     /// <summary>
+    /// A leading `.` searches the enclosing type's PATH ancestors (§4a). `PROC_REF(X)` expands to
+    /// `nameof(.proc/##X)`, so this is the commonest shape in SS13 code. Would fail by inventing.
+    /// </summary>
+    [Fact]
+    public void A_relative_marker_path_reaching_an_ancestor_is_silent()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/p()\n\t\treturn 1\n\n/datum/thing/sub\n\tproc/f()\n\t\treturn .proc/p\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
+    /// And reports when no anchor up that walk declares the name, which is the mined probe
+    /// `b3_bad_proc_ref`. Before this the binder returned on every non-absolute anchor, so no
+    /// leading-`.` path was checked at all.
+    /// </summary>
+    [Fact]
+    public void A_relative_marker_path_naming_nothing_is_reported()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/p()\n\t\treturn 1\n\n\tproc/f()\n\t\treturn .proc/nope_xyz\n");
+
+        Assert.Equal(new[] { "DM0402" }, Ids(found));
+    }
+
+    /// <summary>
+    /// The BARE relative form is deliberately unchecked: it reads the enclosing type's own members
+    /// rather than searching, so `.p` compiles inside the type declaring `proc/p()` and fails from
+    /// a subtype — the opposite of the marker form on both counts. Silence here is a miss, not
+    /// agreement.
+    /// </summary>
+    [Fact]
+    public void The_bare_relative_form_is_not_checked()
+    {
+        IReadOnlyList<Diagnostic> found = Bind(
+            "/datum/thing\n\tproc/p()\n\t\treturn 1\n\n/datum/thing/sub\n\tproc/f()\n\t\treturn .p\n");
+
+        Assert.Empty(found);
+    }
+
+    /// <summary>
     /// `.` checks the declared type and nothing beneath it, so reaching a subtype's member through
     /// it is an error even though the member plainly exists. PLAN.md §4a.
     /// </summary>

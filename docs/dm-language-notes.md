@@ -995,7 +995,41 @@ the compiler on one of them: /tg/station writes `TYPE_PROC_REF(/obj/machinery/do
 where `open` is declared `proc/open()` on `/obj/machinery/door` and overridden bare on the airlock,
 and reporting that is worth 89 false errors on a single project.
 
-Probed as a 38-case matrix on 516.1687. Fixture `errors/path_member`, whose controls are the four
+### The relative spelling searches, and the bare relative form is a third thing again
+
+A leading `.` is a search up the enclosing type's **path** ancestors, ignoring `parent_type` — the
+rule [above](#compile-only-what-a-leading--actually-searches) — and the marker form obeys it:
+
+| Written inside | Result |
+|---|---|
+| `.proc/p`, in the type declaring `proc/p()` | compiles |
+| `.proc/p`, in a **subtype** of it | compiles — the search walks to the ancestor |
+| `.proc/p`, where only `parent_type` connects them | **error** |
+| `.proc/p`, in a **global** proc | **error** — a global proc anchors at root |
+| `.proc/Login`, against a bare `Login()` override | **error** — the same exclusivity as the absolute form |
+
+The **bare** relative form is neither of those. It reads the enclosing type's own members rather
+than searching, which makes it the exact inverse of the marker form:
+
+```dm
+/datum/thing
+	proc/p()
+		return 1
+
+	proc/f()
+		return .p          // compiles
+
+/datum/thing/sub
+	proc/g()
+		return .p          // error: .p: undefined type path
+```
+
+So `.p` works precisely where `/datum/thing/p` does not, and fails from the subtype where
+`.proc/p` succeeds. A var satisfies neither (`.hp` is an error), and `.nope` is *"undefined type
+path"* rather than member access on the return-value variable — which is worth knowing, because
+`.` on its own is that variable and the two readings look identical.
+
+Probed as a 50-case matrix on 516.1687. Fixture `errors/path_member`, whose controls are the six
 legal shapes and whose `total` line pins their silence.
 
 ---

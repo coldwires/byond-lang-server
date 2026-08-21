@@ -1,7 +1,7 @@
 // A path expression's final segment names a MEMBER only when the spelling matches how the
 // declaration site was written, and the site has to belong to the type in front of it.
 //
-// Probed as a 38-case matrix on 516.1687 (PLAN.md §8). The row that pins it is a bare
+// Probed as a 50-case matrix on 516.1687 (PLAN.md §8). The row that pins it is a bare
 // `/mob/Login()` override, after which `/mob/Login` resolves and `/mob/proc/Login` does not —
 // so the two spellings are exclusive rather than one being a shorthand for the other.
 //
@@ -74,3 +74,25 @@ obj/crate
 // The container resolves only where the type declares a proc of its own.
 /proc/container_on_a_type_with_no_procs()
 	return /obj/crate/proc
+
+// ---- the relative spelling ----------------------------------------------------
+//
+// A leading `.` is a SEARCH up the enclosing type's PATH ancestors, ignoring parent_type
+// (§4a). `PROC_REF(X)` expands to `nameof(.proc/##X)`, so this is the commonest shape in
+// SS13 code and the reason resolution here goes through the inheritance chain.
+
+datum/relative
+	proc/helper()
+		return 1
+
+	proc/control_reaches_its_own()
+		return nameof(.proc/helper)
+
+datum/relative/child
+	// The search walks to the path ancestor that declares it.
+	proc/control_reaches_an_ancestors()
+		return nameof(.proc/helper)
+
+	// Nothing the search can reach declares this name.
+	proc/relative_names_nothing()
+		return .proc/nope_xyz
