@@ -5,13 +5,18 @@
 #   /obj/crate/hp    a var, which never satisfies a path's final segment
 #   /obj/crate/proc  the container, on a type that declares no proc of its own
 #
+#   .proc/nope_xyz   the RELATIVE spelling, with no anchor up the enclosing type's path
+#                    ancestors declaring it
+#
 # `total` pins the controls' silence, which is the half that matters here: a bare override
 # reachable without a marker, the marker form itself, a container on a type that has procs,
-# and the nameof() form that resolves through inheritance where the plain expression does not.
+# the nameof() form that resolves through inheritance where the plain expression does not,
+# and the two relative forms that reach the enclosing type and a path ancestor.
 #
 # "return/obj/lever/pull" is the source's "return /obj/lever/pull" — dm.exe strips whitespace
 # when it echoes the offending text, so these rows match on a substring.
 65 error /obj/lever/pull: undefined type path
 72 error /obj/crate/hp: undefined type path
 76 error /obj/crate/proc: undefined type path
-total 3 errors, 0 warnings
+98 error .proc/nope_xyz: undefined type path
+total 4 errors, 0 warnings

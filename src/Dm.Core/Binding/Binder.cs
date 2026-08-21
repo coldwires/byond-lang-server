@@ -802,9 +802,18 @@ public sealed class Binder
         return true;
     }
 
-    private void BindPath(PathExpressionSyntax path)
+    private void BindPath(PathExpressionSyntax path, Scope scope)
     {
-        if (path.Path.Anchor != PathAnchor.Absolute || path.Path.Segments.Count == 0)
+        if (path.Path.Segments.Count == 0)
+            return;
+
+        if (path.Path.Anchor == PathAnchor.UpwardSearch)
+        {
+            BindRelativePath(path, scope);
+            return;
+        }
+
+        if (path.Path.Anchor != PathAnchor.Absolute)
             return;
 
         IReadOnlyList<string> segments = path.Path.Segments;
@@ -910,6 +919,48 @@ public sealed class Binder
         // checked either: a verb declared under a bare `verb` BLOCK is recorded as a proc, since
         // `BlockContext.Proc` cannot tell a `proc` block from a `verb` one.
         return _tree.ResolveProc(owner, segments[^1]) is not null;
+    }
+
+    /// <summary>
+    /// A leading-<c>.</c> path, which is a SEARCH rather than a traversal (PLAN.md §4a): it walks
+    /// the enclosing type's PATH ancestors nearest-first, including root, and ignores
+    /// <c>parent_type</c>.
+    /// </summary>
+    /// <remarks>
+    /// Only the MARKER spelling is checked. The bare relative form answers a different question and
+    /// does not share this walk: probed 2026-08-18, <c>.p</c> compiles inside the type that declares
+    /// <c>proc/p()</c> and FAILS from a subtype, where <c>.proc/p</c> resolves from both — so it
+    /// reads the enclosing type's own members rather than searching, and a var satisfies neither.
+    /// Left unchecked until it has a matrix of its own, which is a miss rather than an invention.
+    /// </remarks>
+    private void BindRelativePath(PathExpressionSyntax path, Scope scope)
+    {
+        IReadOnlyList<string> segments = path.Path.Segments;
+
+        if (segments.Count < 2 || segments[^2] is not ("proc" or "verb"))
+            return;
+
+        string name = segments[^1];
+
+        // Resolution at each anchor goes through the inheritance chain, for the same reason the
+        // absolute marker form does: `PROC_REF(X)` expands to `nameof(.proc/##X)`, and inside
+        // `nameof` dm.exe resolves it that way. Reporting only when NO anchor holds the name keeps
+        // this to the case the mined probe covers — a name that exists nowhere.
+        TypePath anchor = scope.EnclosingType;
+
+        while (true)
+        {
+            if (_tree.Find(anchor) is { } type && _tree.ResolveProc(type, name) is not null)
+                return;
+
+            if (anchor.IsRoot)
+                break;
+
+            anchor = anchor.Parent;
+        }
+
+        _diagnostics.Add(Diagnostic.Error(
+            "DM0402", path.Span, $".{string.Join("/", segments)}: undefined type path"));
     }
 
     /// <summary>
@@ -1160,7 +1211,7 @@ public sealed class Binder
                 break;
 
             case PathExpressionSyntax path:
-                BindPath(path);
+                BindPath(path, scope);
                 break;
 
             case InvocationExpressionSyntax invocation:
