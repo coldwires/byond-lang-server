@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Dm.Core;
 using Dm.Core.Includes;
 using Dm.Core.Preprocessing;
@@ -62,10 +63,18 @@ internal static class Bench
         FileEffectCache effects = new();
         Dictionary<string, SourceText> buffers = new(StringComparer.OrdinalIgnoreCase);
 
+        // The contribution cache belongs in that list and was missing from it until 2026-08-18,
+        // which made the tree phase measure a DIFFERENT PATH from the product: `AddFile` contributes
+        // and applies in one call, so every round re-walked all 7,160 ASTs, while a Workspace holds
+        // a ConditionalWeakTable keyed by ParseResult and re-walks only what was re-parsed. The
+        // phase read ~1,160 ms on /tg/station that way and is the number the roadmap quoted as the
+        // merge's cost. Keyed the same way here, so the rounds measure what an editor pays.
+        ConditionalWeakTable<ParseResult, TreeContribution> contributions = new();
+
         Console.Out.WriteLine($"bench {Path.GetFileName(dmePath)}");
         Console.Out.WriteLine();
 
-        Phases cold = Build(dmePath, defines, sources, runs, effects, buffers);
+        Phases cold = Build(dmePath, defines, sources, runs, effects, buffers, contributions);
 
         Console.Out.WriteLine($"  files                {cold.Files}");
         Console.Out.WriteLine($"  types                {cold.Types}");
@@ -94,7 +103,7 @@ internal static class Bench
             // machinery rather than an edit.
             buffers[target] = SourceText.From(original + $"\n/obj/bench_marker_{i}\n", target);
 
-            Phases warm = Build(dmePath, defines, sources, runs, effects, buffers);
+            Phases warm = Build(dmePath, defines, sources, runs, effects, buffers, contributions);
 
             if (warm.Total < bestTotal)
             {
@@ -151,7 +160,8 @@ internal static class Bench
         SourceCache sources,
         ExpandedRunCache runs,
         FileEffectCache effects,
-        Dictionary<string, SourceText> buffers)
+        Dictionary<string, SourceText> buffers,
+        ConditionalWeakTable<ParseResult, TreeContribution> contributions)
     {
         sources.ResetStatistics();
         runs.ResetStatistics();
@@ -180,8 +190,21 @@ internal static class Bench
         phase.Restart();
         ObjectTree tree = new();
         Builtins.Seed(tree);
+
         foreach ((string file, TokenSource _, ParseResult parse) in parsed)
-            TypeTreeBuilder.AddFile(tree, file, parse);
+        {
+            // A contribution is a pure function of (file, parse), so an unchanged file replays its
+            // recorded mutations instead of re-walking its AST. `AddFile` does both in one call and
+            // is what this loop used to call, which measured a walk the product does not perform.
+            if (!contributions.TryGetValue(parse, out TreeContribution? contribution))
+            {
+                contribution = TypeTreeBuilder.Contribute(file, parse);
+                contributions.Add(parse, contribution);
+            }
+
+            contribution.Apply(tree);
+        }
+
         long treeMs = phase.ElapsedMilliseconds;
 
         return new Phases(

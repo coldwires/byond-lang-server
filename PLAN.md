@@ -1109,6 +1109,20 @@ with 1 of 7,161 files re-walked and 1 re-parsed.
 project from scratch — the "cache the object tree per-file" bullet, which the first measurement
 called 6% of a build that no longer exists. That is where the next order of magnitude is.
 
+**That sentence stopped being true on 2026-08-06 and nothing noticed until 2026-08-18**, because
+the instrument stopped matching the product on the same day the contribution cache landed.
+`dmc bench` built its tree with `TypeTreeBuilder.AddFile`, which contributes AND applies, so every
+round re-walked all 7,160 ASTs; a `Workspace` keys a `ConditionalWeakTable` by `ParseResult` and
+re-walks only what was re-parsed. The bench shared its source, run and effect caches across rounds
+"exactly as a Workspace shares it across rebuilds" and simply did not share that one. Corrected,
+one keystroke on /tg/station is **720–930 ms**: preprocess 320–530, split + parse 170–190, and the
+**merge 215–240** — so the merge is about 30% of a keystroke and **preprocess is the largest
+phase**. mlaas reads **10 ms** with the merge at 1, which is exactly what M9 recorded, so the
+"about 15% is machine state and the rest is product growth" reading of 2026-08-15 was mostly the
+instrument: that comparison ran the same bench at three commits and was internally consistent, and
+its absolute numbers were not. Three readings, because one bench on a 7,161-file project has
+misled here before.
+
 One thing the zero-copy work exposed, worth knowing before the next change here: adopting an
 **empty** run created a file entry that a build without the cache never produced, so `Runs` gained a
 phantom file — a header of nothing but directives is the ordinary case. Appending already skipped
@@ -4334,3 +4348,27 @@ it.
   `proc/grab()`, since the resolved symbol's kind is finally trustworthy. All four corpora hold with
   it live and the ratchet is unmoved at 94 — no mined probe covers that row, so the fixture carries
   it instead.
+- **2026-08-18** — **`dmc bench` was measuring a path the product does not run, and the tree merge
+  is not the largest phase.** Picking up the merge item started, as M9 doctrine demands, with a
+  measurement: 1,158 ms of a 1,729 ms keystroke on /tg/station, 67%. Three ideas for where that
+  went, and the third was mine — `TypeSymbol` eagerly allocates five collections and a rebuild
+  constructs 45,423 of them, so lazy allocation should have paid. **It measured at zero** (216 ms
+  eager against 215 lazy, A/B'd on the corrected bench), which is three levers at zero on this
+  phase after contribution replay and the `TypePath` hash. Reverted rather than shipped: unlike
+  those two it buys no groundwork, and a change that measures nothing is null checks for nothing.
+  **The fourth idea was to stop trusting the number.** 3.5 µs per op is far too slow for a
+  dictionary insert and a list append, and the answer was in the bench: its tree phase called
+  `TypeTreeBuilder.AddFile`, which *contributes and applies*, so every round re-walked all 7,160
+  ASTs. `Workspace.GetObjectTree` keys a `ConditionalWeakTable` by `ParseResult` and re-walks only
+  what was re-parsed — the cache landed 2026-08-06 and the bench never got it, while its own
+  comment claimed to mirror the workspace and its other three caches were shared "exactly as a
+  Workspace shares it across rebuilds".
+  **Corrected, one keystroke is 720–930 ms on /tg/station and 10 ms on mlaas** — the merge 215–240
+  and preprocess 320–530, so the preprocessor is the largest phase and the merge is about 30%.
+  mlaas matching M9's original 10 ms exactly is what retires the 2026-08-15 "29% growth, 15%
+  machine state" reading: that comparison ran the same bench at three commits, so it was internally
+  consistent and its absolute numbers were not. Twelfth entry for the blind-instrument list, and
+  the first where the instrument was measuring *more* work than the product rather than less.
+  The roadmap's item was re-pointed at what the measurement says. `--verify` still holds (3,817
+  declarations identical on mlaas), and no library code changed, so the corrected figures are a doc
+  fix rather than a speedup: `INTEGRATION.txt` §10 says so where a client reads it.
