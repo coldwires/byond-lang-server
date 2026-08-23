@@ -423,7 +423,7 @@ byond-lang-server/
     lsp.md                 the LSP server, for clients that are not VS Code
     api.md                 the in-process C# surface, for hosts referencing Dm.Core
     capability-matrix.md   in-process vs ABI vs LSP parity
-    internal/              working notes, gitignored
+    internal/              not published
 ```
 
 **Three planned entries were dropped rather than built, and saying which is the point of this
