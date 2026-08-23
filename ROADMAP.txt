@@ -604,6 +604,7 @@ WHERE THE DETAIL LIVES
       (131 -> 87 -> 41 -> 21 -> 14 -> 10 ms), the phase
       breakdown, and what each cache bought            PLAN.md 6, M9
     recall tables, the oracles, the -o blind spot      PLAN.md 9
+    per-lever write-ups, traps, what is left           (not published)
     open questions                                    PLAN.md 10
 
     how to CALL any of it, ownership, encodings,
@@ -623,6 +624,7 @@ WHERE THE DETAIL LIVES
       - and what to do when BYOND updates             tests/fixtures/README.md
     the compiler's own diagnostic catalogue,
       30 warning ids with their pragma names          PLAN.md 8a
+    working notes, verified commands, dead ends       (not published)
 
   THE RULE THAT KEEPS THIS TRUE: the doc edit belongs in the commit that makes
   the old text wrong, not in a later cleanup pass. Three cleanup passes have now

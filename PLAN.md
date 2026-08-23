@@ -2013,7 +2013,7 @@ Recorded 2026-08-02 on the primary dev machine.
 - BYOND installed at `C:\Program Files (x86)\BYOND`. No `stddef.dm` ships in the install directory.
 - **`stddef.dm` is generated on demand.** Creating a file named `stddef.dm` in a project and
   compiling causes Dream Maker to emit the code it auto-compiles at the start of every project.
-  A generated copy is at `C:\Users\Anonymous\Desktop\world\stddef.dm` (529 lines, version 516.1666).
+A generated copy is kept locally (529 lines, version 516.1666).
 - **`stddef.dm` covers only part of the standard library** — constants and wrapper datums, not
   `/datum`, `/atom`, `/mob`, `/obj`, `/turf`, `/area`, `/client`, `/world`, `/list`, or the global
   procs. Those are compiled into `byondcore.dll`.
@@ -2396,7 +2396,7 @@ listed twice in the precedence table, and `A -= B` is mapped to `operator--(B)` 
 
 ### Path semantics source
 
-`C:\Users\Anonymous\Desktop\world\dot-and-slash.md` — a work-in-progress writeup by the project
+A local work-in-progress writeup by the project
 author, testing `/` and `.` behaviour against BYOND 516.1666 by compiling cases rather than
 reasoning about them. Every claim in §4a comes from it.
 
