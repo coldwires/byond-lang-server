@@ -3484,8 +3484,8 @@ it.
   practice and would fail silently, on non-ASCII lines only, for one offering just UTF-8. Recorded
   for the first time in the same pass: `workspace/didChangeConfiguration` is accepted and
   **ignored**, so neither option can change without a restart.
-  Registered where a live doc has to be to stay true —
-  `ROADMAP.txt`'s detail table, `INTEGRATION.txt` §13 and the VS Code README — because it is the
+  Registered where a live doc has to be to stay true — `ROADMAP.txt`'s detail table,
+  `INTEGRATION.txt` §13 and the VS Code README — because it is the
   one client-facing surface with no smoke test behind it. The Neovim and Helix snippets say plainly
   that nobody has run them.
   The same pass fixed drift a triage turned up. **`tgstation` was missing from
