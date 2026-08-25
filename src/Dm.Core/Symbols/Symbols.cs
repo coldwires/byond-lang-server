@@ -313,6 +313,22 @@ public sealed class TypeSymbol
 
     internal ProcSymbol? FindProc(string name) => _procs.GetValueOrDefault(name);
 
+    /// <summary>Whether this type itself declares a proc by this name. No ancestor walk.</summary>
+    /// <remarks>
+    /// The public counterpart to <see cref="FindProc"/>, which cannot be exposed because
+    /// <c>ProcSymbol</c> is internal. Returning a bool answers the one question an outside
+    /// caller has without widening the surface to the symbol.
+    ///
+    /// <see cref="ObjectTree.FindOverriddenProc"/> reports ancestors, so on its own it
+    /// cannot separate "nothing declares this" from "this type declares it". A caller
+    /// deciding whether an <c>override</c> replaces anything needs both.
+    /// </remarks>
+    public bool DeclaresProc(string name) => _procs.ContainsKey(name);
+
+    /// <summary>Whether this type itself declares a var by this name. No ancestor walk.</summary>
+    /// <remarks>The var counterpart to <see cref="DeclaresProc"/>.</remarks>
+    public bool DeclaresVar(string name) => _vars.ContainsKey(name);
+
     /// <summary>The path text, such as <c>/obj/item</c>.</summary>
     public override string ToString() => Path.Text;
 }
