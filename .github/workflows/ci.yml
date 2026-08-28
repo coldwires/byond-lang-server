@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Build
         run: dotnet build -c Release
@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       # The standalone zip needs no installer, no licence prompt and no registry: it expands to a
       # byond/bin holding dm.exe and dreamdaemon.exe, which is all the suite wants. Cached because
@@ -225,7 +225,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       # NativeAOT links with clang and needs zlib's headers. The SDK does not bring either.
       - name: Install the AOT toolchain (Linux)
@@ -254,7 +254,7 @@ jobs:
       - name: Check the binary survived
         shell: bash
         run: |
-          publish="src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish"
+          publish="src/Dm.Native/bin/Release/net10.0/${{ matrix.rid }}/publish"
           ls -l "$publish"
 
           # Windows Defender has quarantined a freshly published dm_core.dll locally, and the
@@ -303,7 +303,7 @@ jobs:
           # run from depending on that step: it has been seen to fail on a machine without pwsh,
           # and the failure looks like a linker problem rather than a missing file.
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.dll" \
+            cp "src/Dm.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/dm_core.dll" \
                build/abi-smoke/Release/ 2>/dev/null || true
           fi
 
@@ -319,10 +319,10 @@ jobs:
         with:
           name: dm_core-${{ matrix.rid }}
           path: |
-            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.dll
-            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.so
-            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/publish/dm_core.dylib
-            src/Dm.Native/bin/Release/net9.0/${{ matrix.rid }}/native/dm_core.lib
+            src/Dm.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/dm_core.dll
+            src/Dm.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/dm_core.so
+            src/Dm.Native/bin/Release/net10.0/${{ matrix.rid }}/publish/dm_core.dylib
+            src/Dm.Native/bin/Release/net10.0/${{ matrix.rid }}/native/dm_core.lib
           if-no-files-found: error
 
   # The CANARY: the compiler-backed suite against the NEWEST 516 build, whatever it is today.
@@ -341,7 +341,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       # The build directory is a plain listing, behind the same Cloudflare posture as the zip -
       # see the fetch step in byond-fixtures for why the UA and the non-fatality.

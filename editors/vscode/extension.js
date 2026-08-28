@@ -17,7 +17,7 @@ function serverOptions() {
 
     // Development default: the debug build two directories up, so F5 in this folder works
     // against a plain `dotnet build` of the repo.
-    const dll = path.join(__dirname, "..", "..", "src", "Dm.Lsp", "bin", "Debug", "net9.0", "dm-lsp.dll");
+    const dll = path.join(__dirname, "..", "..", "src", "Dm.Lsp", "bin", "Debug", "net10.0", "dm-lsp.dll");
     return { command: "dotnet", args: [dll], transport: TransportKind.stdio };
 }
 

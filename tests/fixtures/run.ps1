@@ -302,7 +302,7 @@ if ($Probes) {
     } else {
         Push-Location $repo
         & dotnet build -c Release src\Dm.Cli\Dm.Cli.csproj | Out-Null
-        $dll = Join-Path $repo 'src\Dm.Cli\bin\Release\net9.0\dmc.dll'
+        $dll = Join-Path $repo 'src\Dm.Cli\bin\Release\net10.0\dmc.dll'
 
         $agreeing = @()
 

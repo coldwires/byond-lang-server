@@ -135,7 +135,7 @@ WHAT YOU GET TODAY
 --------------------------------------------------------------------------------
  0. BUILD IT
 --------------------------------------------------------------------------------
-  You need the .NET 9 SDK, and on Windows the MSVC C++ build tools.
+  You need the .NET 10 SDK, and on Windows the MSVC C++ build tools.
 
     dotnet publish src/Dm.Native/Dm.Native.csproj -c Release -r win-x64
 
@@ -161,8 +161,8 @@ WHAT YOU GET TODAY
     $env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\Installer;$env:PATH"
 
   Output lands in:
-    src/Dm.Native/bin/Release/net9.0/<rid>/publish/   <- the .dll / .so
-    src/Dm.Native/bin/Release/net9.0/<rid>/native/    <- the .lib (Windows)
+    src/Dm.Native/bin/Release/net10.0/<rid>/publish/   <- the .dll / .so
+    src/Dm.Native/bin/Release/net10.0/<rid>/native/    <- the .lib (Windows)
 
 
 --------------------------------------------------------------------------------
@@ -222,11 +222,11 @@ WHAT YOU GET TODAY
 
   ** macOS NEEDS ONE MORE STEP, BEFORE YOU LINK **
   NativeAOT bakes a RELATIVE install name into dm_core.dylib, something like
-  bin/Release/net9.0/osx-arm64/native/dm_core.dylib. macOS copies that string
+  bin/Release/net10.0/osx-arm64/native/dm_core.dylib. macOS copies that string
   into your executable AT LINK TIME as the dependency to load, so your program
   builds and then dies at startup:
 
-    dyld: Library not loaded: bin/Release/net9.0/osx-arm64/native/dm_core.dylib
+    dyld: Library not loaded: bin/Release/net10.0/osx-arm64/native/dm_core.dylib
 
   An rpath does not rescue it, because the recorded name is not @rpath/... .
   Rewrite the install name first, then link:

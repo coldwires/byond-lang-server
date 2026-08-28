@@ -23,7 +23,7 @@ endif()
 set(DM_RID "${DM_RID_DEFAULT}" CACHE STRING "Runtime identifier of the dm_core build to link")
 
 set(DM_CORE_BUILD_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../src/Dm.Native/bin/Release/net9.0/${DM_RID}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../src/Dm.Native/bin/Release/net10.0/${DM_RID}"
     CACHE PATH "Directory containing native/ and publish/ from the dm_core AOT publish")
 
 set(DM_ABI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../abi")
@@ -52,7 +52,7 @@ else()
     set(DM_CORE_LIB "${DM_CORE_BUILD_DIR}/publish/dm_core.dylib")
 
     # macOS records the DEPENDENCY by the dylib's own install name, at link time. NativeAOT bakes
-    # a RELATIVE one - "bin/Release/net9.0/<rid>/native/dm_core.dylib" - so the executable asks
+    # a RELATIVE one - "bin/Release/net10.0/<rid>/native/dm_core.dylib" - so the executable asks
     # dyld for that literal relative path and the load fails wherever the working directory is not
     # the publish root. An rpath cannot rescue it, because the recorded name is not @rpath/...
     #

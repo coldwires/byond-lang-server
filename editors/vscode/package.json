@@ -107,7 +107,7 @@
         "dm.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Path to dm-lsp.dll (or a self-contained dm-lsp executable). Empty runs `dotnet <repo>/src/Dm.Lsp/bin/Debug/net9.0/dm-lsp.dll` relative to this extension."
+          "description": "Path to dm-lsp.dll (or a self-contained dm-lsp executable). Empty runs `dotnet <repo>/src/Dm.Lsp/bin/Debug/net10.0/dm-lsp.dll` relative to this extension."
         },
         "dm.environmentFile": {
           "type": "string",
