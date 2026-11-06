@@ -496,6 +496,18 @@ WHAT YOU GET TODAY
       prints a #warn showed nothing here. No ABI change: the array is the
       same shape and just has more in it.
 
+      ** MACROS ARE EXPANDED BEFORE BINDING, SINCE 2026-11-06 **
+      Until then this call bound each file's own text, where a macro is still
+      its bare name, so every use of a #define read as "X: undefined var"
+      (DM0400) - on mlaas, 1,121 of them where dm.exe reports none. diagdiff
+      read the expanded stream all along, which is why its zero-invented
+      figure never showed it. A file the walk reaches is now bound from its
+      slice of that stream, the same parse the object tree is built from,
+      and Workspace.GetDiagnostics assembles the set once for this call, the
+      LSP's publishDiagnostics and the walk. Spans still index the file as
+      typed. A file the walk does not reach, and the .dme itself, are read
+      on their own as before. No ABI change: fewer elements, same shape.
+
       Each ELEMENT is byte-identical to dm_document_symbols' diagnostics -
       one writer produces both - so a parser written for either reads the
       other: id, severity (a WORD - "error", "warning"), message, and a

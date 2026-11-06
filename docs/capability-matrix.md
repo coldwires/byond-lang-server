@@ -11,7 +11,7 @@ work list.
 | Buffers (unsaved text is authoritative) | `Workspace.SetBuffer` | `dm_set_buffer` / `dm_close_buffer` | `didOpen`/`didChange`/`didClose`, full sync |
 | Injected defines | `Workspace.SetDefines` | `dm_set_defines` (0.5) | `initializationOptions.defines` |
 | Outline + syntax diagnostics | `DocumentSymbolService`, `ParseResult.Diagnostics` | `dm_document_symbols` (0.3, 0.10 severity) | `documentSymbol` + `publishDiagnostics` |
-| Semantic diagnostics (binder) | `Binder.Bind` | `dm_diagnostics` (0.13) | `publishDiagnostics` carries them |
+| Semantic diagnostics (binder) | `Binder.Bind` over the expanded stream, assembled by `Workspace.GetDiagnostics` | `dm_diagnostics` (0.13) | `publishDiagnostics` carries them |
 | Walk-time diagnostics (`#warn` echo, unterminated `#if`, missing `#include`, unknown pragma) | `Workspace.GetWalkDiagnostics` | `dm_diagnostics` | `publishDiagnostics` carries them |
 | Completion | `CompletionService` | `dm_complete_at` (0.4) | `completion` |
 | Definition | `DefinitionService` | `dm_definition_at` (0.6) | `definition` |

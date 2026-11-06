@@ -153,6 +153,115 @@ public unsafe class DiagnosticsExportTests
         }
     }
 
+    /// <summary>Opens a workspace over a temp .dme including each file in order.</summary>
+    private static IntPtr OpenWithFiles(out string tempDirectory, params (string File, string Source)[] files)
+    {
+        tempDirectory = Path.Combine(Path.GetTempPath(), "dm_diagnostics_" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(tempDirectory);
+
+        StringBuilder dmeText = new();
+        foreach ((string file, string source) in files)
+        {
+            dmeText.Append($"#include \"{file}\"\n");
+            File.WriteAllText(Path.Combine(tempDirectory, file), source);
+        }
+
+        string dme = Path.Combine(tempDirectory, "test.dme");
+        File.WriteAllText(dme, dmeText.ToString());
+
+        IntPtr workspace;
+        byte* dmePath = Utf8(dme);
+
+        try
+        {
+            Assert.Equal(Ok, Open(dmePath, &workspace));
+        }
+        finally
+        {
+            NativeMemory.Free(dmePath);
+        }
+
+        return workspace;
+    }
+
+    private static string DiagnosticsOf(IntPtr ws, string file)
+    {
+        byte* filePath = Utf8(file);
+        byte* json;
+
+        Assert.Equal(Ok, Diagnostics(ws, filePath, Utf16, &json));
+        NativeMemory.Free(filePath);
+
+        return ReadAndFree(json);
+    }
+
+    /// <summary>
+    /// A macro is not an undefined var. dm.exe compiles all three of these clean. The export bound
+    /// each file's own text, where a macro is still its bare name, while the tree and
+    /// <c>dmc diagdiff</c> read the expanded stream, so every macro use crossed as DM0400 and the
+    /// zero-invented figure, measured through diagdiff, could not see it (found 2026-11-06 by an
+    /// IDE pushing a project whose <c>#define MAX_HP</c> sat in an earlier include).
+    /// </summary>
+    [Fact]
+    public void A_macro_in_the_same_file_is_not_an_undefined_var()
+    {
+        IntPtr ws = OpenWith("diag.dm", "#define X 1\n/mob/guy\n\tvar/health = X\n", out string dir);
+
+        try
+        {
+            Assert.Equal("{\"diagnostics\":[]}", DiagnosticsOf(ws, "diag.dm"));
+        }
+        finally
+        {
+            Close(ws);
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public void A_macro_from_an_earlier_include_is_not_an_undefined_var()
+    {
+        IntPtr ws = OpenWithFiles(out string dir,
+            ("defs.dm", "#define MAX_HP 100\n"),
+            ("mob.dm", "/mob/player\n\tvar/hp = MAX_HP\n/mob/proc/f()\n\treturn MAX_HP\n"));
+
+        try
+        {
+            Assert.Equal("{\"diagnostics\":[]}", DiagnosticsOf(ws, "mob.dm"));
+        }
+        finally
+        {
+            Close(ws);
+            Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>
+    /// Binding the expanded stream must still report against the file as typed: the real error
+    /// after a macro on the same line keeps its own column.
+    /// </summary>
+    [Fact]
+    public void A_real_error_after_a_macro_keeps_its_column()
+    {
+        IntPtr ws = OpenWith("diag.dm", "#define X 1\n/proc/f()\n\treturn X + nowhere\n", out string dir);
+
+        try
+        {
+            string document = DiagnosticsOf(ws, "diag.dm");
+
+            Assert.Contains("\"id\":\"DM0400\"", document);
+            Assert.Contains("nowhere: undefined var", document);
+            Assert.DoesNotContain("X: undefined var", document);
+            // "\treturn X + " is 12 characters, so "nowhere" spans 12..19 on line 2.
+            Assert.Contains("\"startLine\":2,\"startChar\":12,\"endLine\":2,\"endChar\":19", document);
+        }
+        finally
+        {
+            Close(ws);
+            Directory.Delete(dir, true);
+        }
+    }
+
     [Fact]
     public void Rejects_an_unknown_encoding_and_clears_the_out_param()
     {

@@ -848,15 +848,10 @@ internal static unsafe class Exports
                 return Fail(DmStatus.InvalidArgument, "file is null or empty");
 
             Document document = ws.GetDocument(path);
-            ParseResult parse = document.Parse;
 
-            List<Diagnostic> all = new(parse.Diagnostics);
-            all.AddRange(Binder.Bind(ws.GetTreeFor(path), parse.Root, document.Path));
-
-            // The walk's own — a #warn echo, an unterminated #if, a missing #include, an unknown
-            // pragma name. No parse holds them, so this is the only call that can carry them; the
-            // outline deliberately does not, because it needs no tree and these do.
-            all.AddRange(ws.GetWalkDiagnostics(document.Path));
+            // Assembled by the workspace, so this, the LSP and dmc diagdiff report one set. The
+            // outline deliberately carries only syntax: it needs no tree, and these do.
+            IReadOnlyList<Diagnostic> all = ws.GetDiagnostics(path);
 
             StringBuilder json = new();
             json.Append("{\"diagnostics\":");

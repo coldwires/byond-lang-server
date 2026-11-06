@@ -425,6 +425,75 @@ public sealed class Workspace : IDisposable
             ?? System.Array.Empty<Diagnostics.Diagnostic>();
     }
 
+    /// <summary>
+    /// Every diagnostic for one file: syntax, the binder's semantic checks, the lexer's, and the
+    /// include walk's own. The set <c>dm_diagnostics</c> returns and the LSP publishes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A file the walk reaches is read from its slice of the preprocessed stream, the same parse
+    /// the object tree was built from, so a macro is what it expands to rather than its bare name.
+    /// Bound from the file's own text instead, every macro use is an undefined var. Both shells
+    /// did that until 2026-11-06, each assembling its own list, while <c>dmc diagdiff</c> read the
+    /// expanded stream, so the zero-invented figure measured a set no editor showed.
+    /// </para>
+    /// <para>
+    /// The expanded parse's spans index the file's own text, so positions convert against the
+    /// document as before. It carries no lexer diagnostics (the walk forwards those, and
+    /// <see cref="GetWalkDiagnostics"/> drops the ones the file's own parse holds), so they come
+    /// from the file's lex. A file included twice contributes each run, and an exact repeat is
+    /// dropped. A file the walk does not reach, the <c>.dme</c> included, is read on its own.
+    /// </para>
+    /// <para>Builds the tree if it has not been built.</para>
+    /// </remarks>
+    public IReadOnlyList<Diagnostics.Diagnostic> GetDiagnostics(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        Document document = GetDocument(path);
+        List<Diagnostics.Diagnostic> all = new();
+        bool expanded = false;
+
+        if (IsFileInProject(document.Path, cancellationToken))
+        {
+            ObjectTree tree = GetObjectTree(cancellationToken);
+
+            foreach ((string file, ParseResult parse) in GetProjectParses(cancellationToken))
+            {
+                if (!PathComparer.Equals(file, document.Path))
+                    continue;
+
+                expanded = true;
+                all.AddRange(parse.Diagnostics);
+                all.AddRange(Binding.Binder.Bind(tree, parse.Root, document.Path));
+            }
+        }
+
+        if (expanded)
+        {
+            all.AddRange(document.Lex.Diagnostics);
+        }
+        else
+        {
+            ParseResult own = document.Parse;
+            all.AddRange(own.Diagnostics);
+            all.AddRange(Binding.Binder.Bind(GetTreeFor(document.Path, cancellationToken), own.Root, document.Path));
+        }
+
+        all.AddRange(GetWalkDiagnostics(document.Path, cancellationToken));
+
+        HashSet<(string, int, int, string)> seen = new();
+        List<Diagnostics.Diagnostic> unique = new(all.Count);
+
+        foreach (Diagnostics.Diagnostic diagnostic in all)
+        {
+            if (seen.Add((diagnostic.Id, diagnostic.Span.Start, diagnostic.Span.Length, diagnostic.Message)))
+                unique.Add(diagnostic);
+        }
+
+        return unique;
+    }
+
     // -- the .dme's tickmarks ----------------------------------------------
 
     /// <summary>

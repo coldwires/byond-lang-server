@@ -888,15 +888,11 @@ internal sealed class LspServer
             return;
 
         Document document = ws.GetDocument(path);
-        ParseResult parse = document.Parse;
 
-        List<Diagnostic> all = new(parse.Diagnostics);
-        all.AddRange(Binder.Bind(TreeAnnouncingBuild(ws), parse.Root, document.Path));
-
-        // The walk's own — a #warn echo, an unterminated #if, a missing #include, an unknown pragma
-        // name. They belong to the include walk rather than to this file's syntax, so no parse
-        // carries them and this report was silent about them until 2026-08-16.
-        all.AddRange(ws.GetWalkDiagnostics(document.Path));
+        // The tree first through the announcing build, so the client sees indexing progress, then
+        // the workspace's own assembly: the set dm_diagnostics and dmc diagdiff report too.
+        TreeAnnouncingBuild(ws);
+        IReadOnlyList<Diagnostic> all = ws.GetDiagnostics(path);
 
         Rpc.Notify(_output, "textDocument/publishDiagnostics", json =>
         {
